@@ -50,7 +50,44 @@ MIGRATIONS: list[str] = [
     ALTER TABLE paper_trades ADD COLUMN last_quote_at TEXT;
     ALTER TABLE paper_trades ADD COLUMN last_price_source TEXT;
     """,
+    """
+    CREATE TABLE live_trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, signal_key TEXT NOT NULL UNIQUE, tag TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, day TEXT NOT NULL, symbol TEXT NOT NULL,
+        exchange TEXT NOT NULL, tradingsymbol TEXT NOT NULL, option_type TEXT NOT NULL,
+        account_id TEXT NOT NULL, quantity INTEGER NOT NULL, lot_size INTEGER NOT NULL, lots INTEGER NOT NULL,
+        entry REAL NOT NULL, stop_loss REAL NOT NULL, trailing_sl REAL NOT NULL, target1 REAL NOT NULL,
+        target2 REAL NOT NULL, risk REAL NOT NULL, risk_rupees REAL NOT NULL, status TEXT NOT NULL,
+        entry_order_id TEXT, protection_order_id TEXT, entry_filled INTEGER NOT NULL DEFAULT 0,
+        exit_filled INTEGER NOT NULL DEFAULT 0, entry_price REAL, last_price REAL, exit_price REAL,
+        pnl REAL, exit_reason TEXT, opened_at TEXT, closed_at TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0,
+        modifications INTEGER NOT NULL DEFAULT 0, expected_order_type TEXT, expected_price REAL,
+        expected_trigger REAL, error TEXT);
+    CREATE INDEX live_trades_status ON live_trades(status);
+    CREATE INDEX live_trades_day ON live_trades(day);
+    """,
+    """
+    ALTER TABLE live_trades ADD COLUMN exit_order_id TEXT;
+    ALTER TABLE live_trades ADD COLUMN highest_bid REAL;
+    ALTER TABLE live_trades ADD COLUMN last_quote_at TEXT;
+    ALTER TABLE live_trades ADD COLUMN fees REAL NOT NULL DEFAULT 0;
+    ALTER TABLE live_trades ADD COLUMN close_requested TEXT;
+    ALTER TABLE live_trades ADD COLUMN last_broker_sync TEXT;
+    ALTER TABLE live_trades ADD COLUMN protection_attempt INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE live_trades ADD COLUMN exit_order_filled INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE live_trades ADD COLUMN exit_order_value REAL NOT NULL DEFAULT 0;
+    ALTER TABLE live_trades ADD COLUMN exit_attempt INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
+
+LIVE_TRADE_FIELDS = {
+    "updated_at", "status", "entry_order_id", "protection_order_id", "entry_filled", "exit_filled",
+    "entry_price", "last_price", "exit_price", "pnl", "exit_reason", "opened_at", "closed_at",
+    "cancel_requested", "modifications", "expected_order_type", "expected_price", "expected_trigger", "error",
+    "exit_order_id", "highest_bid", "last_quote_at", "fees", "close_requested", "last_broker_sync",
+    "trailing_sl", "protection_attempt", "exit_order_filled", "exit_order_value",
+    "exit_attempt",
+}
 
 
 class Store:
@@ -229,6 +266,54 @@ class Store:
                         "WHERE status='CLOSED'")[0]
         row["win_rate"] = round(row["wins"] * 100 / row["trades"], 1) if row["trades"] else None
         row["pnl"] = round(row["pnl"], 2)
+        return row
+
+    # ── tagged live trades ───────────────────────────────────────────
+    def create_live_trade(self, trade: dict) -> int | None:
+        try:
+            return self._exec(
+                "INSERT INTO live_trades(signal_key, tag, created_at, updated_at, day, symbol, exchange, "
+                "tradingsymbol, option_type, account_id, quantity, lot_size, lots, entry, stop_loss, "
+                "trailing_sl, target1, target2, risk, risk_rupees, status, last_price) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (trade["signal_key"], trade["tag"], _now(), _now(), trade["day"], trade["symbol"],
+                 trade["exchange"], trade["tradingsymbol"], trade["option_type"], trade["account_id"],
+                 trade["quantity"], trade["lot_size"], trade["lots"], trade["entry"], trade["stop_loss"],
+                 trade["trailing_sl"], trade["target1"], trade["target2"], trade["risk"], trade["risk_rupees"],
+                 "ENTRY_SUBMITTING", trade["entry"])).lastrowid
+        except sqlite3.IntegrityError:
+            return None
+
+    def update_live_trade(self, trade_id: int, **fields: Any) -> None:
+        if not fields:
+            return
+        unknown = set(fields) - LIVE_TRADE_FIELDS
+        if unknown:
+            raise ValueError(f"Unsupported live trade fields: {', '.join(sorted(unknown))}")
+        fields["updated_at"] = _now()
+        columns = ", ".join(f"{name} = ?" for name in fields)
+        self._exec(f"UPDATE live_trades SET {columns} WHERE id = ?", (*fields.values(), trade_id))
+
+    def live_trade(self, trade_id: int) -> dict | None:
+        rows = self._all("SELECT * FROM live_trades WHERE id = ?", (trade_id,))
+        return rows[0] if rows else None
+
+    def live_trades(self, limit: int = 50) -> list[dict]:
+        return self._all("SELECT * FROM live_trades ORDER BY id DESC LIMIT ?", (limit,))
+
+    def open_live_trades(self, limit: int = 100) -> list[dict]:
+        return self._all(
+            "SELECT * FROM live_trades WHERE status NOT IN ('CLOSED','UNFILLED','REJECTED') "
+            "ORDER BY id LIMIT ?", (limit,))
+
+    def live_day_stats(self, day: str) -> dict:
+        row = self._all(
+            "SELECT COALESCE(SUM(entry_filled > 0),0) trades, "
+            "COALESCE(SUM(CASE WHEN status='CLOSED' THEN pnl ELSE 0 END),0) realized, "
+            "COALESCE(SUM(status='CLOSED' AND pnl > 0),0) wins, "
+            "COALESCE(SUM(status='CLOSED' AND pnl <= 0),0) losses FROM live_trades "
+            "WHERE day=? AND status NOT IN ('UNFILLED','REJECTED')", (day,))[0]
+        row["realized"] = round(row["realized"], 2)
         return row
 
 

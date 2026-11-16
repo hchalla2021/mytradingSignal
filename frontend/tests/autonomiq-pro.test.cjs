@@ -13,13 +13,16 @@ function snapshot() {
   return {
     generated_at: at(0),
     config: { enabled: true, max_data_age_seconds: 10, max_option_quote_age_seconds: 60 },
-    runtime: { engine_enabled: true, auto_paper_trading: false, kill_switch: false },
-    session: { phase: 'ACTIVE', market_open: true },
-    health: { healthy: true, ai_state: 'ACTIVE', next_run_at: null },
+    runtime: { engine_enabled: true, auto_paper_trading: false, kill_switch: false,
+      live_execution_allowed: false, live_trading_enabled: false },
+    session: { phase: 'ACTIVE', reason: '', market_open: true, trading_day: true },
+    health: { healthy: true, ai_state: 'ACTIVE', ai_last_error: null, last_cycle_at: null, next_run_at: null,
+      cycle_running: false, last_error: null },
     spots: { NIFTY: spot, BANKNIFTY: spot, SENSEX: spot },
-    cycle: null, alerts: [], decisions: [], trades: [], open_trades: [],
+    cycle: null, alerts: [], decisions: [], trades: [], open_trades: [], live_trades: [],
     performance: { trades: 0, pnl: 0, wins: 0, win_rate: null, best: 0, worst: 0,
       today: { trades: 0, realized: 0, wins: 0, losses: 0 } },
+    live_performance: { trades: 0, pnl: 0, wins: 0, today: { trades: 0, realized: 0, wins: 0, losses: 0 } },
     ai_usage: { today: { calls: 0, cost_usd: 0 }, month: { cost_usd: 0 } },
   };
 }
@@ -31,7 +34,8 @@ function cycle(signal) {
     options: null, futures: null,
   };
   return {
-    at: at(0), trigger: 'SCHEDULED', summary: '', market_alert: { tone: 'NEUTRAL', title: '', detail: '' },
+    at: at(0), trigger: 'SCHEDULED', ai_state: 'ACTIVE', summary: '',
+    market_alert: { tone: 'NEUTRAL', title: '', detail: '' },
     indices: { NIFTY: index, BANKNIFTY: index, SENSEX: index },
   };
 }
@@ -68,6 +72,8 @@ function render(snap, options = {}) {
   const context = {
     exports: {},
     Date: class extends Date { static now() { return NOW; } },
+    window: options.window ?? { confirm: () => false },
+    fetch: options.fetch ?? (() => { throw new Error('Unexpected fetch'); }),
     require: id => {
       if (id === 'react') return react;
       if (id === 'react/jsx-runtime') return require(id);
@@ -100,17 +106,19 @@ function card(tree, symbol = 'NIFTY') {
   return text(result).replace(/\s+/g, ' ');
 }
 
-test('header retains the execution warning and no-AI refresh without a duplicate market badge', () => {
+test('header labels the production-only feature LIVE ORDERS and retains the no-AI refresh', () => {
   for (const marketOpen of [true, false]) {
     const snap = snapshot();
     snap.session.market_open = marketOpen;
     const header = nodes(render(snap)).find(node => node.type === 'header');
     const body = text(header).replace(/\s+/g, ' ');
     assert.match(body, /AUTONOMIQ PRO/);
-    assert.match(body, /LIVE EXECUTION UNAVAILABLE/);
+    assert.match(body, /LIVE ORDERS/);
+    assert.match(text(render(snap)), /AI Analysis ON/);
     const warning = nodes(header).find(node => node.props?.role === 'status');
-    assert.equal(warning.props['aria-label'], 'Live order execution unavailable');
-    assert.match(text(warning), /LIVE UNAVAILABLE/);
+    assert.equal(warning.props['aria-label'], 'Live orders production only');
+    assert.match(text(warning), /LIVE ORDERS/);
+    assert.match(warning.props.className, /border-emerald-500/);
     assert.doesNotMatch(body, /MARKET (OPEN|CLOSED)/);
     const refresh = nodes(header).find(node => node.type === 'button' && text(node).includes('Refresh now'));
     assert.ok(refresh);
@@ -118,6 +126,45 @@ test('header retains the execution warning and no-AI refresh without a duplicate
     assert.equal(refresh.props['aria-label'], 'Refresh now, no AI');
     assert.match(text(refresh), /Refresh · no AI/);
     assert.match(refresh.props.title, /never uses AI tokens/);
+  }
+});
+
+test('market alert appears above the AUTONOMIQ tab navigation', () => {
+  const tree = render(snapshot());
+  const children = tree.props.children.flat(Infinity);
+  const alert = children.find(node => node?.props?.['aria-label'] === 'AUTONOMIQ market alert');
+  const tabs = children.find(node => node?.type === 'nav' && node.props['aria-label'] === 'AUTONOMIQ PRO tabs');
+  assert.ok(alert);
+  assert.ok(tabs);
+  assert.ok(children.indexOf(alert) < children.indexOf(tabs));
+  assert.match(text(alert), /AUTONOMIQ · MARKET ALERT/);
+  assert.match(text(alert), /Awaiting analysis/);
+});
+
+test('market alert stays on one line and changes color with its direction', () => {
+  for (const [tone, borderClass] of [
+    ['BULLISH', 'border-emerald-500/40'],
+    ['BEARISH', 'border-rose-500/40'],
+    ['CAUTION', 'border-amber-500/30'],
+  ]) {
+    const snap = snapshot();
+    snap.cycle = cycle({
+      action: 'WAIT', strength: 'Low', timestamp: at(0), source: 'ai+quant',
+    });
+    snap.cycle.market_alert = { tone, title: 'Trend update', detail: 'Momentum changed across the monitored indices.' };
+    const alert = nodes(render(snap)).find(node => node.props?.['aria-label'] === 'AUTONOMIQ market alert');
+    assert.ok(alert);
+    assert.ok(alert.props.className.includes(borderClass));
+    const textRow = nodes(alert).find(node => node.props?.className?.includes('overflow-x-auto'));
+    assert.ok(textRow);
+    assert.match(textRow.props.className, /whitespace-nowrap/);
+    assert.match(textRow.props.className, /touch-pan-x/);
+    assert.match(textRow.props.className, /no-scrollbar/);
+    const mobileLabel = nodes(alert).find(node => node.props?.className?.includes('sm:hidden'));
+    const desktopLabel = nodes(alert).find(node => node.props?.className?.includes('hidden sm:inline'));
+    assert.equal(text(mobileLabel), 'ALERT');
+    assert.equal(text(desktopLabel), 'AUTONOMIQ · MARKET ALERT');
+    assert.match(text(alert), /Trend update — Momentum changed across the monitored indices/);
   }
 });
 
@@ -147,13 +194,13 @@ test('a fresh proposal is indicative only and expires with its quote', () => {
   });
   let body = card(render(snap));
   assert.match(body, /BUY CE/);
-  assert.match(body, /INDICATIVE SETUP · NO LIVE ORDER/);
+  assert.match(body, /ANALYSIS ONLY · NO LIVE ORDER/);
   assert.match(body, /Entry \(Premium\) ₹100\.00/);
   assert.match(body, /Stop Loss ₹85\.00/);
   assert.match(body, /Trailing SL —/);
   assert.doesNotMatch(body, /₹92\.50/);
   assert.match(body, /Live P&L \(pts \/ %\) —/);
-  assert.match(body, /no order has been placed/i);
+  assert.match(body, /no live order has been placed/i);
 
   plan.quote.trade_age_s = 61;
   body = card(render(snap));
@@ -185,18 +232,71 @@ test('legacy simulated positions and results are never displayed as live across 
     const body = text(render(snap, { tab })).replace(/\s+/g, ' ');
     assert.doesNotMatch(body, /\bpaper\b/i, `${tab} exposes simulated trading`);
     assert.doesNotMatch(body, /NIFTYTESTCE|₹-325|₹780/, `${tab} exposes simulated results`);
-    assert.match(body, /LIVE EXECUTION UNAVAILABLE/);
+    assert.match(body, /PRODUCTION ONLY/);
   }
-  assert.match(text(render(snap, { tab: 'trades' })), /Live trade history is unavailable/);
-  assert.match(text(render(snap, { tab: 'performance' })), /Live trading performance is unavailable/);
+  assert.match(text(render(snap, { tab: 'trades' })), /Live execution history is available only in the production deployment/);
+  assert.match(text(render(snap, { tab: 'performance' })), /Real trading performance is available only from the production executor/);
   assert.match(text(render(snap, { tab: 'alerts' })), /KILL SWITCH engaged — entries blocked/);
-  assert.match(text(render(snap, { tab: 'settings' })), /Live trading.*Locked/);
+  assert.match(text(render(snap, { tab: 'settings' })), /Real orders are hard-disabled in local\/dev/);
 });
 
-test('an old backend with simulated entries enabled displays a restart warning', () => {
+test('legacy simulated-trading state is never surfaced as an active trading control', () => {
   const snap = snapshot();
   snap.runtime.auto_paper_trading = true;
-  assert.match(text(render(snap)), /simulated entries may still be active.*Restart the backend/i);
+  const body = text(render(snap));
+  assert.doesNotMatch(body, /\bpaper\b/i);
+  assert.match(body, /PRODUCTION ONLY/);
+});
+
+test('production live trading toggles ON with one confirmation and OFF directly', async () => {
+  const localTree = render(snapshot(), { tab: 'settings' });
+  const localToggle = nodes(localTree).find(node => node.props?.role === 'switch' && node.props['aria-label'] === 'Live trading');
+  assert.ok(localToggle);
+  assert.equal(localToggle.props.disabled, true);
+
+  const requests = [];
+  const confirmations = [];
+  const fetch = async (url, init) => {
+    requests.push({ url, init });
+    return { ok: true, status: 200, json: async () => snapshot() };
+  };
+  const production = snapshot();
+  production.runtime.live_execution_allowed = true;
+  const onTree = render(production, {
+    tab: 'settings',
+    window: { confirm: message => { confirmations.push(message); return true; } },
+    fetch,
+  });
+  const onToggle = nodes(onTree).find(node => node.props?.role === 'switch' && node.props['aria-label'] === 'Live trading');
+  assert.ok(onToggle);
+  assert.equal(onToggle.props.disabled, false);
+  onToggle.props.onClick();
+  await new Promise(resolve => setImmediate(resolve));
+
+  const onRequest = requests.find(request => request.init?.method === 'POST');
+  assert.ok(onRequest);
+  assert.deepEqual(JSON.parse(onRequest.init.body), {
+    live_trading_enabled: true, confirm_live: 'ENABLE_AUTONOMIQ_LIVE_TRADING',
+  });
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0], /REAL Zerodha orders/);
+
+  requests.length = 0;
+  const alreadyOn = snapshot();
+  alreadyOn.runtime.live_execution_allowed = true;
+  alreadyOn.runtime.live_trading_enabled = true;
+  const offTree = render(alreadyOn, {
+    tab: 'settings',
+    window: { confirm: () => assert.fail('Turning OFF should not require confirmation') },
+    fetch,
+  });
+  const offToggle = nodes(offTree).find(node => node.props?.role === 'switch' && node.props['aria-label'] === 'Live trading');
+  assert.ok(offToggle);
+  offToggle.props.onClick();
+  await new Promise(resolve => setImmediate(resolve));
+  const offRequest = requests.find(request => request.init?.method === 'POST');
+  assert.ok(offRequest);
+  assert.deepEqual(JSON.parse(offRequest.init.body), { live_trading_enabled: false });
 });
 
 test('recent decisions and live alerts show five and can expand independently', () => {

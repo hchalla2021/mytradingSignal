@@ -54,12 +54,12 @@ def build_plan(symbol: str, action: str, chain: dict, atr_5m: float | None, cfg:
         return {
             "symbol": symbol, "action": action, "option_type": kind, "exchange": chain["exchange"],
             "tradingsymbol": leg["tradingsymbol"], "strike": strikes[index]["strike"], "expiry": chain["expiry"],
-            "lot_size": leg["lot_size"], "lots": cfg.paper_lots,
+            "lot_size": leg["lot_size"], "lots": 1,
             "entry": entry, "stop_loss": tick(entry - risk), "trailing_sl": tick(entry - risk * 0.5),
             "trail_activation": tick(entry + risk * 0.5),
             "target1": tick(entry + risk), "target2": tick(entry + risk * 2), "risk": risk,
             "risk_reward": round((risk * 2) / risk, 2),
-            "risk_rupees": round(risk * leg["lot_size"] * cfg.paper_lots, 2),
+            "risk_rupees": round(risk * leg["lot_size"], 2),
             "quote": {k: leg.get(k) for k in ("ltp", "bid", "ask", "spread_pct", "trade_age_s", "iv",
                                               "delta", "gamma", "theta", "vega", "oi", "volume")},
         }

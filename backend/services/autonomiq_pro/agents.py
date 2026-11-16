@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from . import indicators as ind
 
-ACTIONS = ("BUY_CE", "BUY_PE", "WAIT", "NO_TRADE")
+ACTIONS = ("BUY_CE", "BUY_PE", "HOLD", "EXIT", "WAIT", "NO_TRADE")
 
 
 def _trend(candles: list[dict], fast: int, slow: int) -> dict | None:
@@ -131,8 +131,10 @@ STRATEGY_SYSTEM = """You are the Strategy Agent of AUTONOMIQ PRO, an intraday In
 option-chain metrics and a deterministic quant score for each index.
 
 Rules:
-- Decide one action for each index present in the input (only those): BUY_CE, BUY_PE, WAIT or NO_TRADE.
+- Decide one action for each index present in the input (only those): BUY_CE, BUY_PE, HOLD, EXIT, WAIT or NO_TRADE.
   Long options only.
+- If an AUTONOMIQ live position is listed for an index, choose HOLD or EXIT for that position; do not propose
+  another entry for that index. Broker-side protective stops and the Python risk manager remain authoritative.
 - Prefer WAIT when signals conflict, price is extended, or edge is unclear. NO_TRADE when data quality is poor.
 - Do NOT output prices, strikes, stop-losses or targets; the execution layer derives them from live quotes.
 - Never invent data that is not in the input.
@@ -141,8 +143,8 @@ Rules:
  "summary":"<= 45 words of market analysis",
  "indices":{"<INDEX>":{"action":"...","conviction":0-100,"reasoning":"<= 20 words","risks":["<= 8 words"]}}}"""
 
-def strategy_payload(contexts: dict[str, dict], session: dict) -> dict:
-    return {"session": session, "indices": {
+def strategy_payload(contexts: dict[str, dict], session: dict, live_positions: list[dict] | None = None) -> dict:
+    return {"session": session, "autonomiq_live_positions": live_positions or [], "indices": {
         symbol: {
             "spot": ctx["spot"], "analysis": {k: v for k, v in ctx["analysis"].items() if k != "sparkline"},
             "quant": {k: ctx["quant"][k] for k in ("score", "bias", "flags", "pcr", "atm_iv")},
@@ -206,9 +208,18 @@ class SignalValidationAgent:
     name = "signal-validation"
 
     def run(self, symbol: str, ctx: dict, ai: dict | None, min_score: float, require_ai: bool,
-            ai_state: str) -> dict:
+            ai_state: str, has_open_position: bool = False) -> dict:
         quant = ctx["quant"]
         problems = data_problems(ctx)
+        if has_open_position:
+            if not problems and ai and ai["action"] == "EXIT":
+                return {"action": "EXIT", "score": quant["score"], "strength": _strength(ai["conviction"]),
+                        "reasoning": ai["reasoning"] or "AI recommends exiting the AUTONOMIQ position",
+                        "source": "ai+quant", "conviction": ai["conviction"]}
+            return {"action": "HOLD", "score": quant["score"], "strength": "Low",
+                    "reasoning": ("; ".join(problems) + "; " if problems else "")
+                    + "Existing AUTONOMIQ position remains under broker-stop and Python risk management.",
+                    "source": "risk-management", "conviction": 0}
         if problems:
             return {"action": "NO_TRADE", "score": quant["score"], "strength": "Low",
                     "reasoning": "; ".join(problems), "source": "validation", "conviction": 0}
@@ -225,6 +236,10 @@ class SignalValidationAgent:
 
         ai_action = ai["action"]
         conviction = round((abs(score) + ai["conviction"]) / 2, 1)
+        if ai_action in ("HOLD", "EXIT"):
+            return {"action": "WAIT", "score": score, "strength": _strength(conviction),
+                    "conviction": conviction, "reasoning": "No AUTONOMIQ live position is open; no exit action applies.",
+                    "source": "ai+quant"}
         if ai_action in ("WAIT", "NO_TRADE"):
             action, reason = ai_action, ai["reasoning"] or quant_note
         elif ai_action == quant_action_:

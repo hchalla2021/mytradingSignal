@@ -11,6 +11,9 @@ from dotenv import dotenv_values
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 PREFIX = "AUTONOMIQ_PRO_"
+ANALYSIS_START = time(9, 0)
+ANALYSIS_END = time(15, 20)
+ANALYSIS_INTERVAL_MINUTES = 5
 
 # USD per million tokens (input, output) — Anthropic published list prices.
 MODEL_PRICES = {
@@ -54,12 +57,14 @@ def _clock(value: str | None, default: time) -> time:
 class AutonomiqConfig:
     enabled: bool = True
     ai_enabled: bool = False
-    live_trading: bool = False
-    analysis_interval_minutes: float = 5
+    deployment_mode: str = "local"
+    live_execution_allowed: bool = False
+    analysis_start: time = ANALYSIS_START
+    analysis_interval_minutes: float = ANALYSIS_INTERVAL_MINUTES
     api_key: str = field(default="", repr=False)
-    primary_model: str = "claude-sonnet-5-5"
+    primary_model: str = "claude-fable-5-2"
     advanced_model: str = "claude-fable-5-2"
-    fable_event_only: bool = True
+    fable_event_only: bool = False
     reasoning_effort: str = "low"
     api_version: str = "2023-06-01"
     max_output_tokens: int = 500
@@ -69,7 +74,7 @@ class AutonomiqConfig:
     ai_timeout_seconds: float = 60
     ai_max_retries: int = 2
     require_ai_confirmation: bool = True
-    auto_paper_trading: bool = True
+    auto_paper_trading: bool = False
     event_move_pct: float = 0.35
     market_start: time = time(9, 20)
     entry_cutoff: time = time(14, 45)
@@ -81,21 +86,23 @@ class AutonomiqConfig:
     min_signal_score: float = 60
     min_risk_reward: float = 1.5
     max_spread_pct: float = 2.0
+    max_entry_slippage_pct: float = 0.5
+    max_exit_slippage_pct: float = 1.0
+    estimated_round_trip_cost_rupees: float = 150
     max_open_positions: int = 3
     max_trades_per_day: int = 5
     daily_loss_limit_rupees: float = 3000
     max_risk_per_trade_rupees: float = 1000
-    paper_lots: int = 1
 
     @property
     def ai_configured(self) -> bool:
         return bool(self.api_key) and bool(self.primary_model)
 
     def model_for(self, trigger: str) -> str:
-        """Fable (advanced) only for event-driven analysis when FABLE_EVENT_ONLY is on."""
-        if self.fable_event_only:
-            return self.advanced_model if trigger == "EVENT" else self.primary_model
-        return self.advanced_model
+        """Use the advanced model only for event analysis when event-only mode is enabled."""
+        if self.fable_event_only and trigger == "EVENT":
+            return self.advanced_model
+        return self.primary_model
 
     @staticmethod
     def price(model: str) -> tuple[float, float]:
@@ -105,20 +112,27 @@ class AutonomiqConfig:
         """Non-secret view for the dashboard. The API key is never included."""
         return {
             "enabled": self.enabled, "ai_enabled": self.ai_enabled, "ai_configured": self.ai_configured,
-            "live_trading": self.live_trading, "analysis_interval_minutes": self.analysis_interval_minutes,
+            "deployment_mode": self.deployment_mode,
+            "live_execution_allowed": self.live_execution_allowed,
+            "analysis_interval_minutes": self.analysis_interval_minutes,
+            "analysis_start": self.analysis_start.strftime("%H:%M"),
+            "analysis_end": ANALYSIS_END.strftime("%H:%M"),
             "primary_model": self.primary_model, "advanced_model": self.advanced_model,
             "fable_event_only": self.fable_event_only, "reasoning_effort": self.reasoning_effort,
             "max_output_tokens": self.max_output_tokens, "prompt_cache": self.prompt_cache,
             "monthly_budget_usd": self.monthly_budget_usd, "daily_budget_usd": self.daily_budget_usd,
-            "require_ai_confirmation": self.require_ai_confirmation, "auto_paper_trading": self.auto_paper_trading,
+            "require_ai_confirmation": self.require_ai_confirmation,
             "market_start": self.market_start.strftime("%H:%M"), "entry_cutoff": self.entry_cutoff.strftime("%H:%M"),
             "square_off": self.square_off.strftime("%H:%M"), "market_end": self.market_end.strftime("%H:%M"),
             "min_signal_score": self.min_signal_score, "min_risk_reward": self.min_risk_reward,
             "max_data_age_seconds": self.max_data_age_seconds,
             "max_option_quote_age_seconds": self.max_option_quote_age_seconds,
+            "max_entry_slippage_pct": self.max_entry_slippage_pct,
+            "max_exit_slippage_pct": self.max_exit_slippage_pct,
+            "estimated_round_trip_cost_rupees": self.estimated_round_trip_cost_rupees,
             "max_open_positions": self.max_open_positions, "max_trades_per_day": self.max_trades_per_day,
             "daily_loss_limit_rupees": self.daily_loss_limit_rupees,
-            "max_risk_per_trade_rupees": self.max_risk_per_trade_rupees, "paper_lots": self.paper_lots,
+            "max_risk_per_trade_rupees": self.max_risk_per_trade_rupees,
         }
 
 
@@ -132,16 +146,20 @@ def load_config() -> AutonomiqConfig:
         return None
 
     effort = (g("AI_REASONING_EFFORT") or "low").strip().lower()
+    deployment_mode = (g("DEPLOYMENT_MODE") or "local").strip().lower()
+    live_execution_allowed = deployment_mode == "production"
     holidays = frozenset(day.strip() for day in (g("EXTRA_HOLIDAYS") or "").split(",") if day.strip())
     return AutonomiqConfig(
         enabled=_bool(g("ENABLED"), True),
         ai_enabled=_bool(g("AI_ENABLED"), False),
-        live_trading=_bool(g("LIVE_TRADE_ENABLED", "LIVE_TRADING"), False),
-        analysis_interval_minutes=_num(g("ANALYSIS_INTERVAL"), 5, 1, 60),
+        deployment_mode=deployment_mode,
+        live_execution_allowed=live_execution_allowed,
+        analysis_start=ANALYSIS_START,
+        analysis_interval_minutes=ANALYSIS_INTERVAL_MINUTES,
         api_key=(g("ANTHROPIC_API_KEY") or "").strip(),
-        primary_model=(g("PRIMARY_MODEL") or "claude-sonnet-5-5").strip(),
+        primary_model=(g("PRIMARY_MODEL") or "claude-fable-5-2").strip(),
         advanced_model=(g("ADVANCED_MODEL") or "claude-fable-5-2").strip(),
-        fable_event_only=_bool(g("FABLE_EVENT_ONLY"), True),
+        fable_event_only=_bool(g("FABLE_EVENT_ONLY"), False),
         reasoning_effort=effort if effort in ("low", "medium", "high", "xhigh", "max", "default") else "low",
         api_version=(g("AI_API_VERSION") or "2023-06-01").strip(),
         max_output_tokens=int(_num(g("MAX_OUTPUT_TOKENS"), 500, 200, 64000)),
@@ -151,7 +169,7 @@ def load_config() -> AutonomiqConfig:
         ai_timeout_seconds=_num(g("AI_TIMEOUT_SECONDS"), 60, 5, 600),
         ai_max_retries=int(_num(g("AI_MAX_RETRIES"), 2, 0, 5)),
         require_ai_confirmation=_bool(g("REQUIRE_AI_CONFIRMATION"), True),
-        auto_paper_trading=_bool(g("AUTO_PAPER_TRADING"), True),
+        auto_paper_trading=False,
         event_move_pct=_num(g("EVENT_MOVE_PCT"), 0.35, 0.05, 5),
         market_start=_clock(g("MARKET_START"), time(9, 20)),
         entry_cutoff=_clock(g("ENTRY_CUTOFF"), time(14, 45)),
@@ -163,9 +181,11 @@ def load_config() -> AutonomiqConfig:
         min_signal_score=_num(g("MIN_SIGNAL_SCORE"), 60, 10, 100),
         min_risk_reward=_num(g("MIN_RISK_REWARD"), 1.5, 0.5, 10),
         max_spread_pct=_num(g("MAX_SPREAD_PCT"), 2.0, 0.1, 20),
+        max_entry_slippage_pct=_num(g("MAX_ENTRY_SLIPPAGE_PCT"), 0.5, 0.05, 2),
+        max_exit_slippage_pct=_num(g("MAX_EXIT_SLIPPAGE_PCT"), 1.0, 0.1, 5),
+        estimated_round_trip_cost_rupees=_num(g("ESTIMATED_ROUND_TRIP_COST_RUPEES"), 150, 0, 1000),
         max_open_positions=int(_num(g("MAX_OPEN_POSITIONS"), 3, 1, 3)),
         max_trades_per_day=int(_num(g("MAX_TRADES_PER_DAY"), 5, 1, 50)),
         daily_loss_limit_rupees=_num(g("DAILY_LOSS_LIMIT_RUPEES"), 3000, 0, 10_000_000),
         max_risk_per_trade_rupees=_num(g("MAX_RISK_PER_TRADE_RUPEES"), 1000, 0, 10_000_000),
-        paper_lots=int(_num(g("PAPER_LOTS"), 1, 1, 50)),
     )

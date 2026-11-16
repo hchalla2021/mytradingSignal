@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from config import get_settings
 from services.app_access import app_access_service
+from services.autonomiq_pro.live_executor import LiveExecutionBlocked
 from services.autonomiq_pro.orchestrator import get_orchestrator
 
 router = APIRouter(prefix="/api/autonomiq-pro", tags=["AUTONOMIQ PRO"])
@@ -40,6 +41,8 @@ class ControlRequest(BaseModel):
     engine_enabled: bool | None = None
     auto_paper_trading: bool | None = None
     kill_switch: bool | None = None
+    live_trading_enabled: bool | None = None
+    confirm_live: str | None = None
 
 
 def _service():
@@ -71,11 +74,19 @@ async def health(response: Response):
 @router.post("/control")
 async def control(body: ControlRequest, actor: str = Depends(owner)):
     changes = body.model_dump(exclude_none=True)
+    confirm_live = changes.pop("confirm_live", None)
     if not changes:
         raise HTTPException(status_code=422, detail="No control change supplied")
     if changes.get("auto_paper_trading"):
         raise HTTPException(status_code=409, detail="Simulated trading has been disabled")
-    return await _service().control(actor, changes)
+    if changes.get("live_trading_enabled") and confirm_live != "ENABLE_AUTONOMIQ_LIVE_TRADING":
+        raise HTTPException(status_code=409, detail="Explicit live-trading confirmation is required")
+    try:
+        return await _service().control(actor, changes, confirm_live=confirm_live)
+    except LiveExecutionBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/analyze")

@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useState } from 'react';
 import {
   Activity, AlertTriangle, BarChart3, Bell, Bot, Brain, ChevronDown, ChevronUp, Cpu, Lock, Play,
-  Power, Settings, ShieldAlert, Wifi, WifiOff, Zap,
+  Power, Settings, ShieldAlert, TrendingDown, TrendingUp, Wifi, WifiOff, Zap,
 } from 'lucide-react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
@@ -11,7 +11,7 @@ import type { MarketData } from '@/hooks/useMarketSocket';
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 type Sym = (typeof SYMBOLS)[number];
-type Action = 'BUY_CE' | 'BUY_PE' | 'WAIT' | 'NO_TRADE';
+type Action = 'BUY_CE' | 'BUY_PE' | 'HOLD' | 'EXIT' | 'WAIT' | 'NO_TRADE';
 type Tab = 'live' | 'analysis' | 'alerts' | 'trades' | 'performance' | 'settings';
 
 interface Check { name: string; passed: boolean; detail: string }
@@ -22,7 +22,8 @@ interface Plan {
 }
 interface Signal {
   action: Action; strength: string; conviction: number; score: number; reasoning: string; risks?: string[];
-  source: string; plan?: Plan | null; risk?: { approved: boolean; checks: Check[] } | null; timestamp: string;
+  source: string; plan?: Plan | null; risk?: { approved: boolean; checks: Check[] } | null;
+  execution?: { status: string; detail: string }; timestamp: string;
 }
 interface Trend { trend: string; supertrend: string | null }
 interface IndexCycle {
@@ -37,8 +38,9 @@ interface IndexCycle {
 interface Spot { price: number | null; change?: number | null; change_pct?: number | null; fresh: boolean; age_s: number | null }
 interface Snapshot {
   generated_at: string;
-  config: Record<string, string | number | boolean>;
-  runtime: { engine_enabled: boolean; auto_paper_trading: boolean; kill_switch: boolean };
+  config: Record<string, string | number | boolean> & { live_execution_allowed?: boolean };
+  runtime: { engine_enabled: boolean; auto_paper_trading: boolean; kill_switch: boolean;
+    live_execution_allowed: boolean; live_trading_enabled: boolean };
   session: { phase: string; reason: string; market_open: boolean; trading_day: boolean };
   health: { healthy: boolean; ai_state: string; ai_last_error: string | null; last_cycle_at: string | null;
     next_run_at: string | null; cycle_running: boolean; last_error: string | null };
@@ -48,13 +50,25 @@ interface Snapshot {
   alerts: { id: number; created_at: string; level: string; symbol: string | null; message: string }[];
   decisions: { id: number; created_at: string; symbol: string; action: Action; strength: string; score: number;
     approved: number; reasoning: string; contract: string | null }[];
+  live_trades: LiveTrade[];
+  live_performance: { trades: number; pnl: number; wins: number;
+    today: { trades: number; realized: number; wins: number; losses: number } };
   ai_usage: { today: Usage; month: Usage };
+}
+interface LiveTrade {
+  id: number; symbol: Sym; exchange: string; tradingsymbol: string; option_type: string; status: string;
+  quantity: number; entry: number; entry_price: number | null; stop_loss: number; trailing_sl: number;
+  target1: number; target2: number; last_price: number | null; pnl: number | null;
+  exit_price: number | null; exit_reason: string | null; created_at: string; opened_at: string | null;
+  closed_at: string | null; risk_rupees: number;
 }
 interface Usage { calls: number; total_tokens: number; cost_usd: number; failures: number }
 
 const ACTION_STYLE: Record<Action, { label: string; text: string; ring: string; bg: string; dot: string }> = {
   BUY_CE: { label: 'BUY CE', text: 'text-emerald-400', ring: 'border-emerald-500/40', bg: 'bg-emerald-500/10', dot: 'bg-emerald-400' },
   BUY_PE: { label: 'BUY PE', text: 'text-rose-400', ring: 'border-rose-500/40', bg: 'bg-rose-500/10', dot: 'bg-rose-400' },
+  HOLD: { label: 'HOLD', text: 'text-sky-300', ring: 'border-sky-500/30', bg: 'bg-sky-500/10', dot: 'bg-sky-300' },
+  EXIT: { label: 'EXIT', text: 'text-rose-300', ring: 'border-rose-500/40', bg: 'bg-rose-500/10', dot: 'bg-rose-300' },
   WAIT: { label: 'WAIT', text: 'text-amber-300', ring: 'border-amber-500/30', bg: 'bg-amber-500/10', dot: 'bg-amber-300' },
   NO_TRADE: { label: 'NO TRADE', text: 'text-slate-400', ring: 'border-slate-600/40', bg: 'bg-slate-700/20', dot: 'bg-slate-500' },
 };
@@ -157,8 +171,8 @@ function IndexTile({ sym, spot, live, cycle }: { sym: Sym; spot?: Spot; live?: {
   );
 }
 
-function SignalCard({ sym, cycle, snap, current, elapsedMs }: {
-  sym: Sym; cycle?: IndexCycle; snap: Snapshot | null; current: boolean; elapsedMs: number;
+function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
+  sym: Sym; cycle?: IndexCycle; snap: Snapshot | null; current: boolean; elapsedMs: number; trade?: LiveTrade;
 }) {
   const [open, setOpen] = useState(false);
   const signal = cycle?.signal;
@@ -177,10 +191,14 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs }: {
   const action: Action = isBuy && !proposal ? 'WAIT' : signal?.action ?? 'NO_TRADE';
   const style = ACTION_STYLE[action];
   const bars = signal?.strength === 'High' ? 3 : signal?.strength === 'Medium' ? 2 : 1;
-  const entry = proposal?.entry ?? null;
-  const stop = proposal?.stop_loss ?? null;
-  const target1 = proposal?.target1 ?? null;
-  const target2 = proposal?.target2 ?? null;
+  const entry = trade?.entry_price ?? trade?.entry ?? proposal?.entry ?? null;
+  const stop = trade?.trailing_sl ?? proposal?.stop_loss ?? null;
+  const target1 = trade?.target1 ?? proposal?.target1 ?? null;
+  const target2 = trade?.target2 ?? proposal?.target2 ?? null;
+  const livePrice = trade?.status === 'CLOSED' ? trade.exit_price : trade?.last_price;
+  const livePoints = livePrice != null && entry != null ? livePrice - entry : null;
+  const livePercent = livePoints != null && entry ? livePoints * 100 / entry : null;
+  const execution = signal?.execution;
 
   return (
     <div aria-label={`${sym} trade card`} className={`flex min-w-0 flex-col rounded-2xl border ${style.ring} bg-slate-900/70 p-4`}>
@@ -203,9 +221,19 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs }: {
       </div>
 
       <div className="mt-3 min-h-[2.25rem] text-[14px] text-slate-300">
-        {proposal ? (
+        {trade ? (
           <>
-            <div className="font-bold text-amber-300">INDICATIVE SETUP · NO LIVE ORDER</div>
+            <div className="font-bold text-emerald-300">AUTONOMIQ LIVE · {trade.status.replace(/_/g, ' ')}</div>
+            <div className="break-all font-semibold text-white">{trade.tradingsymbol}</div>
+          </>
+        ) : proposal ? (
+          <>
+            <div className={`font-bold ${execution?.status === 'ENTRY_PENDING' ? 'text-emerald-300' : 'text-amber-300'}`}>
+              {execution?.status === 'ENTRY_PENDING' ? 'LIVE LIMIT SUBMITTED · FILL NOT CONFIRMED' :
+                snap?.runtime.live_execution_allowed && snap.runtime.live_trading_enabled
+                  ? `LIVE ENTRY · ${execution?.status ?? 'CHECKING'}`
+                  : 'ANALYSIS ONLY · NO LIVE ORDER'}
+            </div>
             <div className="break-all font-semibold text-white">{proposal.tradingsymbol}</div>
           </>
         ) : (
@@ -217,8 +245,8 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs }: {
       <dl aria-label={`${sym} trade prices`} className="mt-2 grid grid-cols-2 gap-2 text-[14px]">
         {([
           ['Entry (Premium)', inr(entry), 'text-white'],
-          ['Stop Loss', inr(stop), 'text-rose-400'],
-          ['Trailing SL', '—', 'text-amber-300'],
+          ['Stop Loss', inr(trade?.stop_loss ?? stop), 'text-rose-400'],
+          ['Trailing SL', inr(trade?.trailing_sl ?? null), 'text-amber-300'],
           ['Target (T1 / T2)', `${inr(target1)} / ${inr(target2)}`, 'text-emerald-400'],
         ] as const).map(([label, value, color]) => (
           <div key={label} className="min-w-0 rounded-lg bg-[#0b1c28] px-2.5 py-2">
@@ -230,7 +258,9 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs }: {
       <div className="mt-2 grid grid-cols-2 gap-2 text-[14px]">
         <div className="min-w-0 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-2">
           <div className="text-[12px] text-slate-300">Live P&L (pts / %)</div>
-          <div className="mt-0.5 font-bold text-slate-400">—</div>
+          <div className={`mt-0.5 font-bold ${livePoints != null && livePoints >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+            {trade ? `${num(livePoints)} / ${num(livePercent)}% · ${inr(livePoints != null ? livePoints * trade.quantity : null)}` : '—'}
+          </div>
         </div>
         <div className="min-w-0 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2">
           <div className="text-[12px] text-slate-300">Trailing profit / loss (pts / %)</div>
@@ -238,8 +268,9 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs }: {
         </div>
       </div>
       <div className="mt-2 text-[12px] leading-relaxed text-slate-400">
-        Live execution and position tracking are unavailable.
-        {proposal && ' Prices are indicative; no order has been placed.'}
+        {trade ? `Broker-reconciled AUTONOMIQ position · estimated net P&L ${inr(trade.pnl)}.` :
+          execution?.detail || (proposal ? 'Prices are indicative; no live order has been placed.' :
+            'No AUTONOMIQ live position is open.')}
       </div>
 
       <p className="mt-3 text-[14px] leading-relaxed text-slate-300">{signal?.reasoning ?? '—'}</p>
@@ -263,11 +294,50 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs }: {
             })}
           </div>
           <div>Quant score <b className="text-white">{num(cycle.quant.score, 0)}</b> · RSI {num(cycle.analysis.rsi_5m, 1)} · ATR {num(cycle.analysis.atr_5m, 1)} · PCR {num(cycle.options?.pcr ?? null)} · IV {num(cycle.options?.atm_iv ?? null, 1)}%</div>
-          {proposal && <div>Δ {num(proposal.quote.delta ?? null)} · spread {num(proposal.quote.spread_pct ?? null)}% · indicative risk {inr(proposal.risk_rupees, 0)} ({proposal.lots}×{proposal.lot_size})</div>}
+          {proposal && <div>Δ {num(proposal.quote.delta ?? null)} · spread {num(proposal.quote.spread_pct ?? null)}% · estimated risk {inr(proposal.risk_rupees, 0)} ({proposal.lots}×{proposal.lot_size})</div>}
           {signal?.risks?.map((r) => <div key={r} className="text-amber-300">⚠ {r}</div>)}
           {cycle.errors.length > 0 && <div className="text-slate-400">Data issues: {cycle.errors.join(', ')}</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+function LiveTradeTable({ trades, production }: { trades: LiveTrade[]; production: boolean }) {
+  if (!production) {
+    return <div className="rounded-xl border border-[#3b667b] bg-[#091722] p-4 text-[14px] text-slate-300">
+      Live execution history is available only in the production deployment.
+    </div>;
+  }
+  if (trades.length === 0) {
+    return <div className="rounded-xl border border-[#3b667b] bg-[#091722] p-4 text-[14px] text-slate-300">
+      No AUTONOMIQ live orders have been recorded.
+    </div>;
+  }
+  return (
+    <div className="overflow-x-auto rounded-xl border border-[#3b667b] bg-[#091722]">
+      <table className="w-full min-w-[760px] text-left text-[13px]">
+        <thead className="bg-slate-800/60 text-slate-300">
+          <tr>{['Time', 'Index / Contract', 'State', 'Qty', 'Entry', 'Stop / Trail', 'Last / Exit', 'Est. P&L'].map((h) =>
+            <th key={h} className="px-3 py-2 font-semibold">{h}</th>)}</tr>
+        </thead>
+        <tbody className="divide-y divide-slate-800">
+          {trades.map((trade) => (
+            <tr key={trade.id} className="text-slate-200">
+              <td className="px-3 py-2">{clock(trade.opened_at ?? trade.created_at)}</td>
+              <td className="px-3 py-2">{trade.symbol}<div className="text-slate-400">{trade.tradingsymbol}</div></td>
+              <td className="px-3 py-2">{trade.status.replace(/_/g, ' ')}</td>
+              <td className="px-3 py-2">{trade.quantity}</td>
+              <td className="px-3 py-2">{inr(trade.entry_price ?? trade.entry)}</td>
+              <td className="px-3 py-2">{inr(trade.stop_loss)} / {inr(trade.trailing_sl)}</td>
+              <td className="px-3 py-2">{inr(trade.last_price ?? trade.exit_price)}</td>
+              <td className={`px-3 py-2 font-semibold ${(trade.pnl ?? 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                {inr(trade.pnl)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -325,11 +395,16 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
 
   const cycle = snap?.cycle;
   const runtime = snap?.runtime;
+  const liveAvailable = runtime?.live_execution_allowed === true;
+  const liveEnabled = runtime?.live_trading_enabled === true;
   const aiState = snap?.health.ai_state ?? 'OFFLINE';
   const alertTone = cycle?.market_alert.tone ?? 'CAUTION';
   const alertStyle = alertTone === 'BULLISH' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
     : alertTone === 'BEARISH' ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
       : 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+  const AlertIcon = alertTone === 'BULLISH' ? TrendingUp : alertTone === 'BEARISH' ? TrendingDown : AlertTriangle;
+  const alertTitle = cycle?.market_alert.title || 'Awaiting analysis';
+  const alertDetail = cycle?.market_alert.detail || 'AUTONOMIQ PRO analyses the market every few minutes during market hours.';
 
   const sinceReceived = receivedAt == null ? Infinity : displayNow - receivedAt;
   const elapsedMs = sinceReceived + responseDelay;
@@ -359,14 +434,15 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
           <p className="mt-1 text-[12px] leading-5 text-slate-300 sm:text-[13px]">Autonomous AI Algorithmic Trading System</p>
         </div>
         <div className="flex items-center justify-center gap-1 sm:gap-2 xl:justify-end">
-          <span role="status" aria-label="Live order execution unavailable" title="Live order execution is unavailable"
-            className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-2 text-center text-[11px] font-bold leading-4 text-amber-300 sm:gap-1.5 sm:px-3 sm:text-[12px]">
+          <span role="status" aria-label={liveAvailable ? `Live trading ${liveEnabled ? 'on' : 'off'}` : 'Live orders production only'}
+            title={liveAvailable ? 'Owner-controlled production live execution' : 'Real orders are disabled in local/dev'}
+            className={`inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 py-2 text-center text-[11px] font-bold leading-4 sm:gap-1.5 sm:px-3 sm:text-[12px] ${liveAvailable ? liveEnabled ? 'border-rose-500/50 bg-rose-500/10 text-rose-300' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'}`}>
             <Lock className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" />
-            <span className="sm:hidden">LIVE UNAVAILABLE</span>
-            <span className="hidden sm:inline">LIVE EXECUTION UNAVAILABLE</span>
+            <span className="sm:hidden">{liveAvailable ? liveEnabled ? 'LIVE ON' : 'LIVE OFF' : 'LIVE ORDERS'}</span>
+            <span className="hidden sm:inline">{liveAvailable ? liveEnabled ? 'LIVE TRADING ON' : 'LIVE TRADING OFF' : 'LIVE ORDERS'}</span>
           </span>
           <button type="button" aria-label="Refresh now, no AI" disabled={busy || !snap} onClick={() => act('/api/autonomiq-pro/analyze', undefined, 'Quant refresh started — no AI tokens used')}
-            title="Re-runs indicator and quant analysis on live data now. AI runs only on the 5-minute schedule, so this never uses AI tokens."
+            title="Re-runs indicator and quant analysis on live data now. This refresh never uses AI tokens; scheduled Claude Fable analysis runs every 5 minutes while within budget."
             className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-emerald-500 bg-emerald-950/60 px-2 py-2 text-center text-[11px] font-bold leading-5 text-emerald-200 hover:bg-emerald-900/70 disabled:opacity-50 sm:gap-1.5 sm:px-4 sm:text-[14px]">
             <Play className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" />
             <span className="sm:hidden">Refresh · no AI</span>
@@ -374,6 +450,26 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
           </button>
         </div>
       </header>
+
+      <section aria-label="AUTONOMIQ market alert"
+        title={`${alertTitle} — ${alertDetail}`}
+        className={`mx-2 my-2 flex min-w-0 items-center gap-2 rounded-xl border border-l-4 bg-gradient-to-r from-[#0b1720] to-[#07121b] px-2 py-2 shadow-[0_8px_24px_rgba(0,0,0,.24)] sm:mx-5 sm:my-3 sm:gap-3 sm:rounded-2xl sm:px-4 ${alertStyle}`}>
+        <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-current/25 bg-black/20 sm:h-8 sm:w-8">
+          <AlertIcon className="h-4 w-4" />
+        </div>
+        <div className="no-scrollbar flex min-w-0 flex-1 touch-pan-x items-center gap-1.5 overflow-x-auto overscroll-x-contain whitespace-nowrap text-[13px] sm:gap-3 sm:text-[14px]">
+          <span className="shrink-0 text-[10px] font-extrabold uppercase tracking-[0.16em] opacity-80 sm:text-[11px]">
+            <span className="hidden sm:inline">AUTONOMIQ · MARKET ALERT</span>
+            <span className="sm:hidden">ALERT</span>
+          </span>
+          <span className="shrink-0 rounded-full border border-current/30 bg-black/20 px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide sm:px-2">
+            {alertTone.replace(/_/g, ' ')}
+          </span>
+          <span className="shrink-0 font-extrabold tracking-tight sm:text-[14px]">{alertTitle}</span>
+          <span aria-hidden="true" className="shrink-0 opacity-50">—</span>
+          <span className="pr-1 opacity-90">{alertDetail}</span>
+        </div>
+      </section>
 
       {/* Tabs */}
       <nav className="flex gap-1 overflow-x-auto border-b border-[#203847] bg-[#05101a] px-3 sm:px-5" aria-label="AUTONOMIQ PRO tabs">
@@ -392,18 +488,16 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
           </div>
         )}
         {notice && <div className="rounded-xl border border-slate-600/50 bg-slate-800/60 px-3 py-2 text-[14px] text-slate-200">{notice}</div>}
-        {runtime?.auto_paper_trading && (
-          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[14px] text-amber-200">
-            Legacy simulated entries may still be active. Restart the backend to disable them.
-          </div>
-        )}
-
         {/* Status bar */}
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
           <StatusPill icon={isConnected ? Wifi : WifiOff} label="Zerodha" value={isConnected ? 'Connected' : 'Disconnected'} tone={isConnected ? 'good' : 'bad'} />
           <StatusPill icon={Cpu} label="AI Engine" value={aiState.replace(/_/g, ' ')} tone={aiState === 'ACTIVE' ? 'good' : aiState === 'DISABLED' || aiState === 'NOT_CONFIGURED' ? 'muted' : 'warn'} />
-          <StatusPill icon={Bot} label="Auto Trading" value="UNAVAILABLE" tone="muted" />
-          <StatusPill icon={Lock} label="Live Trade" value="LOCKED OFF" tone="muted" />
+          <StatusPill icon={Brain} label="AI Analysis"
+            value={runtime?.engine_enabled && aiState === 'ACTIVE' ? 'ON' : runtime?.engine_enabled ? aiState.replace(/_/g, ' ') : 'OFF'}
+            tone={runtime?.engine_enabled && aiState === 'ACTIVE' ? 'good' : runtime?.engine_enabled ? 'warn' : 'muted'} />
+          <StatusPill icon={Lock} label="Live Trade"
+            value={!runtime?.live_execution_allowed ? 'PRODUCTION ONLY' : runtime.live_trading_enabled ? 'ON' : 'OFF'}
+            tone={!runtime?.live_execution_allowed ? 'good' : runtime.live_trading_enabled ? 'warn' : 'muted'} />
           <StatusPill icon={ShieldAlert} label="Kill Switch" value={runtime?.kill_switch ? 'ENGAGED' : 'Ready'} tone={runtime?.kill_switch ? 'bad' : 'good'} />
           <StatusPill icon={Activity} label="Session" value={(snap?.session.phase ?? '—').replace(/_/g, ' ')} tone={snap?.session.phase === 'ACTIVE' ? 'good' : 'muted'} />
         </div>
@@ -415,17 +509,11 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
                 <IndexTile key={s} sym={s} spot={snap?.spots[s]} live={marketData?.[s] ?? null} cycle={cycle?.indices[s]} />
               ))}
             </div>
-            <div className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${alertStyle}`}>
-              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
-              <div className="min-w-0">
-                <div className="text-[16px] font-bold">Market Alert: {cycle?.market_alert.title || 'Awaiting analysis'}</div>
-                <div className="text-[14px] opacity-90">{cycle?.market_alert.detail || 'AUTONOMIQ PRO analyses the market every few minutes during market hours.'}</div>
-              </div>
-            </div>
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
               {SYMBOLS.map((s) => (
                 <SignalCard key={s} sym={s} cycle={cycle?.indices[s]}
-                  snap={snap} current={snapshotCurrent} elapsedMs={elapsedMs} />
+                  snap={snap} current={snapshotCurrent} elapsedMs={elapsedMs}
+                  trade={snap?.live_trades?.find((item) => item.symbol === s && item.status !== 'CLOSED')} />
               ))}
             </div>
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:grid-rows-[auto_auto_auto_1fr_auto] lg:gap-y-0">
@@ -437,8 +525,9 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
                 <div>
                   <p tabIndex={0} aria-label="Market analysis summary, scroll horizontally for full text"
                     className="overflow-x-auto whitespace-nowrap text-[13px] leading-5 text-slate-300">{cycle?.summary || 'No analysis yet.'}</p>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-[14px] xl:grid-cols-4">
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[14px] xl:grid-cols-5">
                     <Meta label="Model" value={cycle?.model ?? 'Quant only'} />
+                    <Meta label="Latest AI cycle" value={(cycle?.ai_state ?? '—').replace(/_/g, ' ')} />
                     <Meta label="Next AI slot" value={clock(snap?.health.next_run_at)} />
                     <Meta label="AI cost today" value={`$${num(snap?.ai_usage.today.cost_usd ?? 0, 3)}`} />
                     <Meta label="Live P&L · gross" value="—" tone="text-slate-400" />
@@ -505,17 +594,24 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
         {tab === 'alerts' && <AlertList alerts={alerts} />}
 
         {tab === 'trades' && (
-          <div className="rounded-xl border border-[#3b667b] bg-[#091722] p-4 text-[14px] text-slate-300">
-            Live trade history is unavailable because live execution is not implemented.
-          </div>
+          <LiveTradeTable trades={snap?.live_trades ?? []} production={liveAvailable} />
         )}
 
         {tab === 'performance' && snap && (
           <div className="space-y-3">
-            <div className="rounded-xl border border-[#3b667b] bg-[#091722] p-4 text-[14px] text-slate-300">
-              Live trading performance is unavailable because live execution is not implemented.
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {liveAvailable ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Metric label="Closed live trades" value={String(snap.live_performance.trades)} />
+                <Metric label="Estimated net realized P&L" value={inr(snap.live_performance.pnl)} />
+                <Metric label="Today · realized P&L" value={inr(snap.live_performance.today.realized)} />
+              </div>
+            ) : (
+              <div className="rounded-xl border border-[#3b667b] bg-[#091722] p-4 text-[14px] text-slate-300">
+                Real trading performance is available only from the production executor.
+              </div>
+            )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Metric label="AI cost (today)" value={`$${num(snap.ai_usage.today.cost_usd, 3)}`} />
               <Metric label="AI cost (month)" value={`$${num(snap.ai_usage.month.cost_usd, 2)} / $${snap.config.monthly_budget_usd}`} />
               <Metric label="AI calls today" value={`${snap.ai_usage.today.calls} (${snap.ai_usage.today.failures} failed)`} />
             </div>
@@ -526,18 +622,31 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <div className="space-y-3 rounded-xl border border-[#3b667b] bg-[#091722] p-4">
               <h3 className="text-[16px] font-bold text-white">Controls (owner only)</h3>
-              <ControlRow label="Engine enabled" hint="Scheduled + event-driven analysis">
+              <ControlRow label="Analysis engine" hint="Runs Claude Fable analysis from 09:00–15:20 IST every 5 minutes, subject to AI budget and availability">
                 <Toggle label="Engine enabled" on={snap.runtime.engine_enabled} disabled={busy}
                   onClick={() => act('/api/autonomiq-pro/control', { engine_enabled: !snap.runtime.engine_enabled })} />
               </ControlRow>
-              <ControlRow label="Live trading" hint="Locked — live order execution is not implemented">
-                <Toggle label="Live trading" on={false} disabled />
+              <ControlRow label="Live trading" hint={liveAvailable
+                ? 'Owner-only production order control; turn ON with one confirmation. OFF immediately blocks new entries while AUTONOMIQ continues managing its own positions.'
+                : 'Real orders are hard-disabled in local/dev; production deployment only.'}>
+                <Toggle label="Live trading" on={liveEnabled} disabled={busy || !liveAvailable}
+                  onClick={() => {
+                    if (liveEnabled) {
+                      void act('/api/autonomiq-pro/control', { live_trading_enabled: false },
+                        'Live entries disabled; open AUTONOMIQ positions remain managed');
+                      return;
+                    }
+                    if (!window.confirm('Enable REAL Zerodha orders for AUTONOMIQ PRO in production?')) return;
+                    void act('/api/autonomiq-pro/control', {
+                      live_trading_enabled: true, confirm_live: 'ENABLE_AUTONOMIQ_LIVE_TRADING',
+                    }, 'Live trading enabled after broker and AI preflight');
+                  }} />
               </ControlRow>
               <button type="button" disabled={busy}
                 onClick={() => {
                   const engage = !snap.runtime.kill_switch;
-                  if (engage && !window.confirm('Engage kill switch? New entries will be blocked.')) return;
-                  act('/api/autonomiq-pro/control', { kill_switch: engage }, engage ? 'Kill switch engaged' : 'Kill switch released');
+                  if (engage && !window.confirm('Engage AUTONOMIQ kill switch? New entries will stop and its owned positions will be exited.')) return;
+                  act('/api/autonomiq-pro/control', { kill_switch: engage }, engage ? 'AUTONOMIQ kill switch engaged' : 'Kill switch released');
                 }}
                 className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[14px] font-bold ${snap.runtime.kill_switch ? 'bg-slate-700 text-white' : 'bg-rose-600 text-white hover:bg-rose-500'} disabled:opacity-50`}>
                 <Power className="h-4 w-4" /> {snap.runtime.kill_switch ? 'Release kill switch' : 'KILL SWITCH'}
@@ -559,7 +668,8 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
         )}
 
         <p className="text-center text-[12px] text-slate-400">
-          Live order execution is unavailable. Analysis is not investment advice.
+          Local/dev never places real orders. Production entries require owner authorization, fresh broker quotes,
+          AI/quant agreement, and independent risk checks; broker order fills are not guaranteed.
         </p>
       </div>
     </section>

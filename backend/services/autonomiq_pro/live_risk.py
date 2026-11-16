@@ -1,7 +1,7 @@
-"""Cost-aware risk calculations for a future AUTONOMIQ live executor.
+"""Cost-aware risk calculations for AUTONOMIQ PRO live execution.
 
-These calculations do not place orders or guarantee fills. The caller must provide
-fresh, broker-reconciled positions, pending intents, prices and cost estimates.
+These calculations do not place orders or guarantee fills. The executor supplies
+broker-reconciled positions, pending intents, fresh prices and cost estimates.
 """
 
 from __future__ import annotations

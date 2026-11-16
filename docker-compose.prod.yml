@@ -32,6 +32,7 @@ services:
       # Override with container-specific settings
       - PORT=8000
       - HOST=0.0.0.0
+      - AUTONOMIQ_PRO_DEPLOYMENT_MODE=production
       - ZERODHA_SHARED_AUTH_FILE=/run/zerodha/credentials.json
       # ✅ CRITICAL FIX: Use container name, not localhost
       - REDIS_URL=redis://redis:6379
@@ -45,6 +46,7 @@ services:
       # Mount logs directory (optional)
       - ./backend/logs:/app/logs
       - order-flow-data:/app/data/order_flow
+      - autonomiq-pro-data:/app/data/autonomiq_pro
       - aqte-data:/app/data/aqte
       - expiryedge-data:/app/data/expiryedge
     depends_on:
@@ -116,6 +118,7 @@ networks:
 volumes:
   redis-data:
   order-flow-data:
+  autonomiq-pro-data:
   aqte-data:
   expiryedge-data:
   morningedge-data:
