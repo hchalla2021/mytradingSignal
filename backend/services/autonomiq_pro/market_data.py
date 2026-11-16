@@ -172,7 +172,7 @@ class MarketDataCollector:
         try:
             raw5 = self.gateway.historical(INDEX_TOKENS[symbol], now - timedelta(days=6), now, "5minute")
             out["candles"]["5m"] = completed(raw5, 5, now)
-            raw15 = self.gateway.historical(INDEX_TOKENS[symbol], now - timedelta(days=12), now, "15minute")
+            raw15 = self.gateway.historical(INDEX_TOKENS[symbol], now - timedelta(days=30), now, "15minute")
             c15 = completed(raw15, 15, now)
             out["candles"]["15m"] = c15
             out["candles"]["60m"] = ind.resample(c15, 4)
@@ -220,7 +220,7 @@ class MarketDataCollector:
                 window = set(strikes[max(atm_index - CHAIN_WIDTH, 0): atm_index + CHAIN_WIDTH + 1])
                 contracts = [r for r in ce + pe if float(r["strike"]) in window]
                 quotes = self.gateway.quote([f"{exchange}:{r['tradingsymbol']}" for r in contracts])
-                chain = build_chain(quotes, contracts, exchange, spot_price, expiry, now)
+                chain = build_chain(quotes, contracts, exchange, spot_price, expiry, datetime.now(IST))
                 chain["exchange"] = exchange
                 prev = self._prev_oi.get(symbol)
                 if prev:

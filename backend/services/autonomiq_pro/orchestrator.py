@@ -43,7 +43,8 @@ def slot_run_at(now: datetime, minutes: float) -> datetime:
 
 def analysis_window_open(now: datetime, cfg: AutonomiqConfig, session: dict) -> bool:
     return (session["trading_day"] and session["phase"] in ("PRE_MARKET", "ACTIVE", "MANAGE_ONLY")
-            and cfg.analysis_start <= now.time() <= ANALYSIS_END)
+            and cfg.analysis_start <= now.time()
+            and slot_start(now, ANALYSIS_INTERVAL_MINUTES).time() <= ANALYSIS_END)
 
 
 def holidays() -> set[str]:
@@ -217,11 +218,16 @@ class AutonomiqOrchestrator:
                        cycle_id: int) -> dict:
         contexts: dict[str, dict] = {}
         for symbol in SYMBOLS:
-            spot = await self._spot(symbol, now)
-            data = await asyncio.to_thread(self.collector.collect_sync, symbol, spot.get("price"), now)
+            observed_at = datetime.now(IST)
+            spot = await self._spot(symbol, observed_at)
+            data = await asyncio.to_thread(self.collector.collect_sync, symbol, spot.get("price"), observed_at)
+            collected_at = datetime.now(IST)
             analysis = agents.MarketAnalysisAgent().run(data, day)
             quant = agents.QuantResearchAgent().run(analysis, data)
-            contexts[symbol] = {"spot": spot, "data": data, "analysis": analysis, "quant": quant}
+            contexts[symbol] = {"spot": spot, "data": data, "analysis": analysis, "quant": quant,
+                                "collected_at": collected_at}
+        for symbol, ctx in contexts.items():
+            ctx["spot"] = await self._spot(symbol, datetime.now(IST))
 
         ai_state = self.ai.status(cfg, day)
         big_move = trigger == "SCHEDULED" and self._big_move(contexts)
@@ -253,37 +259,38 @@ class AutonomiqOrchestrator:
             ai_state = skip or "SKIPPED"
 
         validator = agents.SignalValidationAgent()
-        signals: dict[str, dict] = {}
-        plans: dict[str, dict] = {}
-        for symbol, ctx in contexts.items():
-            ai_sig = (strategy or {}).get("indices", {}).get(symbol) if strategy else None
-            signal = validator.run(symbol, ctx, ai_sig, cfg.min_signal_score, cfg.require_ai_confirmation, ai_state,
-                                   has_open_position=symbol in live_by_symbol)
-            if signal["action"] in ("BUY_CE", "BUY_PE"):
-                plan = build_plan(symbol, signal["action"], ctx["data"]["options"], ctx["analysis"]["atr_5m"], cfg)
-                if plan.get("error"):
-                    signal.update(action="WAIT", reasoning=f"{signal['reasoning']} No trade: {plan['error']}.")
-                else:
-                    plans[symbol] = plan
-            signals[symbol] = signal
-
-        # The strategy call above is the only AI call per slot; Python and broker checks authorize live entries.
         state = self.runtime()
         indices: dict[str, Any] = {}
         for symbol, ctx in contexts.items():
-            signal, plan = signals[symbol], plans.get(symbol)
-            risk_result = None
+            decision_at = datetime.now(IST)
+            decision_session = session_state(cfg, decision_at)
+            ctx["spot"] = await self._spot(symbol, decision_at)
+            ai_sig = (strategy or {}).get("indices", {}).get(symbol) if strategy else None
+            signal = validator.run(symbol, ctx, ai_sig, cfg.min_signal_score, cfg.require_ai_confirmation, ai_state,
+                                   has_open_position=symbol in live_by_symbol)
+            plan = None
+            if signal["action"] in ("BUY_CE", "BUY_PE"):
+                elapsed = max(0, (decision_at - ctx["collected_at"]).total_seconds())
+                for strike in ctx["data"]["options"]["strikes"]:
+                    for kind in ("CE", "PE"):
+                        leg = strike.get(kind)
+                        if leg and leg.get("trade_age_s") is not None:
+                            leg["trade_age_s"] += elapsed
+                plan = build_plan(symbol, signal["action"], ctx["data"]["options"], ctx["analysis"]["atr_5m"], cfg)
+                if plan.get("error"):
+                    signal.update(action="WAIT", reasoning=f"{signal['reasoning']} No trade: {plan['error']}.")
+                    plan = None
             if plan:
-                risk_result = validate(
-                    plan, cfg=cfg, now=now, session=session, spot=ctx["spot"], state=state,
-                    open_trades=[], day_stats={"trades": 0, "realized": 0},
-                    recent_trades=[])
-                signal["risk"] = risk_result
+                signal["risk"] = validate(
+                    plan, cfg=cfg, now=decision_at, session=decision_session, spot=ctx["spot"], state=state,
+                    open_trades=self.store.open_live_trades(limit=10000),
+                    day_stats=self.store.live_day_stats(decision_at.strftime("%Y-%m-%d")),
+                    recent_trades=self.store.live_trades(limit=10000))
             execution = {"status": "NOT_REQUESTED", "detail": ""}
             if signal["action"] in ("BUY_CE", "BUY_PE") and cfg.live_execution_allowed:
                 execution = await self.live_executor.submit_entry(
-                    cfg=cfg, session=session, symbol=symbol, decision=signal,
-                    plan=plan or {}, cycle_id=cycle_id, now=now,
+                    cfg=cfg, session=decision_session, symbol=symbol, decision=signal,
+                    plan=plan or {}, cycle_id=cycle_id, now=decision_at,
                 )
             elif signal["action"] == "EXIT" and symbol in live_by_symbol:
                 trade = live_by_symbol[symbol]
@@ -292,7 +299,7 @@ class AutonomiqOrchestrator:
             elif signal["action"] in ("BUY_CE", "BUY_PE"):
                 execution = {"status": "LIVE_DISABLED", "detail": "Local/dev analysis cannot place real orders"}
             decision = {"symbol": symbol, **signal, "plan": plan, "execution": execution,
-                        "timestamp": now.isoformat()}
+                        "timestamp": decision_at.isoformat()}
             self.store.add_decision(cycle_id, day, decision)
             self._alert_on_change(symbol, decision)
             indices[symbol] = {

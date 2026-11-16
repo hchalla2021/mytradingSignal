@@ -87,7 +87,10 @@ class LiveOrderExecutor:
                 return {"status": "OFF", "detail": "Owner live-trading switch is OFF"}
             if self.store.get_state("kill_switch", False) or not self.store.get_state("engine_enabled", True):
                 return {"status": "BLOCKED", "detail": "Kill switch or analysis engine blocks entries"}
-            if not session.get("trading_day") or session.get("phase") != "ACTIVE":
+            now = datetime.now(IST)
+            if (not session.get("trading_day") or session.get("phase") != "ACTIVE"
+                    or not cfg.market_start <= now.time() <= cfg.entry_cutoff
+                    or now.time() >= cfg.square_off):
                 return {"status": "BLOCKED", "detail": "Outside the AUTONOMIQ entry session"}
             if decision.get("action") not in ("BUY_CE", "BUY_PE") or decision.get("source") != "ai+quant":
                 return {"status": "BLOCKED", "detail": "A reconciled AI and quant BUY decision is required"}
@@ -100,6 +103,7 @@ class LiveOrderExecutor:
     def _submit_entry_sync(
         self, cfg: AutonomiqConfig, symbol: str, decision: dict, plan: dict, cycle_id: int, now: datetime,
     ) -> dict:
+        now = datetime.now(IST)
         if not plan or plan.get("error") or plan.get("symbol") != symbol:
             return {"status": "BLOCKED", "detail": "Invalid AUTONOMIQ contract plan"}
         if plan.get("option_type") not in ("CE", "PE") or plan.get("exchange") not in ("NFO", "BFO"):
@@ -136,7 +140,7 @@ class LiveOrderExecutor:
                     return {"status": "BLOCKED", "detail": f"Broker position mismatch for {trade['tradingsymbol']}"}
                 quote = quotes.get(key) or {}
                 quote_at = parse_ts(quote.get("timestamp"))
-                age = (now - quote_at).total_seconds() if quote_at else None
+                age = (datetime.now(IST) - quote_at).total_seconds() if quote_at else None
                 bid = _best_price((quote.get("depth") or {}).get("buy"))
                 if age is None or age < -3 or age > min(5, cfg.max_option_quote_age_seconds) or bid <= 0:
                     return {"status": "BLOCKED", "detail": f"Fresh broker quote unavailable for {trade['tradingsymbol']}"}
@@ -174,7 +178,7 @@ class LiveOrderExecutor:
         quote_key = f"{exchange}:{tradingsymbol}"
         quote = kite.quote([quote_key]).get(quote_key) or {}
         quote_at = parse_ts(quote.get("timestamp"))
-        age = (now - quote_at).total_seconds() if quote_at else None
+        age = (datetime.now(IST) - quote_at).total_seconds() if quote_at else None
         depth = quote.get("depth") or {}
         bid = _best_price(depth.get("buy"))
         ask = _best_price(depth.get("sell"))
@@ -215,6 +219,14 @@ class LiveOrderExecutor:
         if not math.isfinite(available) or available < entry * lot_size + cfg.estimated_round_trip_cost_rupees:
             return {"status": "BLOCKED", "detail": "Available broker cash is insufficient for this one-lot entry"}
 
+        submitted_at = datetime.now(IST)
+        if (submitted_at.date() != now.date()
+                or not cfg.market_start <= submitted_at.time() <= cfg.entry_cutoff
+                or submitted_at.time() >= cfg.square_off):
+            return {"status": "BLOCKED", "detail": "Entry window closed during broker preflight"}
+        if (quote_at is None or not -3 <= (submitted_at - quote_at).total_seconds()
+                <= min(5, cfg.max_option_quote_age_seconds)):
+            return {"status": "BLOCKED", "detail": "Broker quote expired during preflight"}
         slot = now.replace(minute=(now.minute // 5) * 5, second=0, microsecond=0).isoformat()
         signal_key = hashlib.sha256(
             f"{now.date()}:{slot}:{symbol}:{decision['action']}:{tradingsymbol}".encode()
@@ -358,6 +370,7 @@ class LiveOrderExecutor:
 
     def _manage_trade(self, kite, trade: dict, orders: dict, positions: list[dict],
                       cfg: AutonomiqConfig, now: datetime, square_off) -> None:
+        now = datetime.now(IST)
         entry = _find_order(orders, trade.get("entry_order_id"), trade["tag"] + "E")
         if entry:
             entry_id = str(entry["order_id"])
@@ -390,9 +403,6 @@ class LiveOrderExecutor:
                     except Exception:
                         logger.exception("AUTONOMIQ PRO could not cancel the unfilled entry remainder")
                     return
-            elif status == "COMPLETE" and filled:
-                self.store.update_live_trade(trade["id"], status="PROTECTION_PENDING", last_broker_sync=now.isoformat())
-                trade["status"] = "PROTECTION_PENDING"
 
         if trade["status"] in TERMINAL_TRADES or trade["status"] in {"ENTRY_UNKNOWN", "RECONCILIATION_REQUIRED"}:
             return
@@ -423,7 +433,7 @@ class LiveOrderExecutor:
                 qkey = f"{trade['exchange']}:{trade['tradingsymbol']}"
                 quote = kite.quote([qkey]).get(qkey) or {}
                 quote_at = parse_ts(quote.get("timestamp"))
-                age = (now - quote_at).total_seconds() if quote_at else None
+                age = (datetime.now(IST) - quote_at).total_seconds() if quote_at else None
                 bid = _best_price((quote.get("depth") or {}).get("buy"))
                 if age is not None and -3 <= age <= min(5, cfg.max_option_quote_age_seconds) and bid > 0:
                     self._reprice_exit(kite, trade, exit_order, bid, cfg, now)
@@ -445,6 +455,13 @@ class LiveOrderExecutor:
                                                                      "broker": net_quantity})
             self.store.add_alert("error", message, trade["symbol"])
             return
+
+        if trade["status"] == "OPEN" and (not protective or _order_status(protective) in TERMINAL_ORDERS):
+            status = "PROTECTION_FAILED" if protective else "PROTECTION_UNKNOWN"
+            message = "Protective order ended without closing the position" if protective else "Protective order missing; broker reconciliation required"
+            self.store.update_live_trade(trade["id"], status=status, error=message)
+            self.store.add_alert("error", f"AUTONOMIQ {trade['tradingsymbol']}: {message}", trade["symbol"])
+            trade["status"] = status
 
         if trade["status"] == "PROTECTION_PENDING":
             if protective and _order_status(protective) not in TERMINAL_ORDERS:
@@ -530,7 +547,7 @@ class LiveOrderExecutor:
             logger.exception("AUTONOMIQ PRO position quote failed")
             return
         quote_at = parse_ts(quote.get("timestamp"))
-        age = (now - quote_at).total_seconds() if quote_at else None
+        age = (datetime.now(IST) - quote_at).total_seconds() if quote_at else None
         bid = _best_price((quote.get("depth") or {}).get("buy"))
         if age is None or age < -3 or age > min(5, cfg.max_option_quote_age_seconds) or bid <= 0:
             return
@@ -646,7 +663,7 @@ class LiveOrderExecutor:
         try:
             quote = kite.quote([key]).get(key) or {}
             quote_at = parse_ts(quote.get("timestamp"))
-            age = (now - quote_at).total_seconds() if quote_at else None
+            age = (datetime.now(IST) - quote_at).total_seconds() if quote_at else None
             bid = _best_price((quote.get("depth") or {}).get("buy"))
             if age is None or age < -3 or age > min(5, cfg.max_option_quote_age_seconds) or bid <= 0:
                 self.store.update_live_trade(trade["id"], error="Fresh bid unavailable; protective order rejected")

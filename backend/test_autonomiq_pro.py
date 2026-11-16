@@ -10,7 +10,7 @@ import httpx
 from services.autonomiq_pro import agents, indicators as ind
 from services.autonomiq_pro.ai_client import AIClient, AIUnavailable
 from services.autonomiq_pro.config import AutonomiqConfig, load_config
-from services.autonomiq_pro.market_data import IST, completed
+from services.autonomiq_pro.market_data import IST, MarketDataCollector, completed
 from services.autonomiq_pro.live_risk import EntryRisk, Exposure, entry_rejections, trailing_stop
 from services.autonomiq_pro.live_executor import LiveOrderExecutor
 from services.autonomiq_pro.orchestrator import analysis_window_open, session_state
@@ -96,13 +96,47 @@ class ConfigTests(unittest.TestCase):
         cfg = AutonomiqConfig()
         start = IST.localize(datetime.combine(NOW.date(), time(9, 0)))
         manage_only = IST.localize(datetime.combine(NOW.date(), time(15, 20)))
-        after_end = IST.localize(datetime.combine(NOW.date(), time(15, 20, 1)))
+        after_end = IST.localize(datetime.combine(NOW.date(), time(15, 25)))
         self.assertTrue(analysis_window_open(start, cfg, session_state(cfg, start)))
         self.assertTrue(analysis_window_open(manage_only, cfg, session_state(cfg, manage_only)))
         self.assertFalse(analysis_window_open(after_end, cfg, session_state(cfg, after_end)))
 
 
 class IndicatorTests(unittest.TestCase):
+    def test_collector_supplies_enough_full_hourly_bars_for_ema50(self):
+        def historical(token, start, end, interval):
+            minutes = 15 if interval == "15minute" else 5
+            candles = []
+            day = start.replace(hour=9, minute=15, second=0, microsecond=0)
+            while day <= end:
+                if day.weekday() < 5:
+                    for offset in range(0, 375, minutes):
+                        at = day + timedelta(minutes=offset)
+                        if start <= at and at + timedelta(minutes=minutes) <= end:
+                            price = 22000 + len(candles)
+                            candles.append({"date": at, "open": price, "high": price + 2,
+                                            "low": price - 2, "close": price + 1, "volume": 1})
+                day += timedelta(days=1)
+            return candles
+
+        gateway = mock.Mock()
+        gateway.historical.side_effect = historical
+        gateway.instruments.return_value = []
+        data = MarketDataCollector(gateway).collect_sync("NIFTY", None, NOW)
+        analysis = agents.MarketAnalysisAgent().run(data, DAY)
+        self.assertIsNotNone(analysis["timeframes"]["60m"])
+        self.assertEqual(analysis["timeframes"]["60m"]["trend"], "UP")
+
+    def test_hourly_resample_does_not_promote_partial_previous_session(self):
+        candles = [
+            {"date": (start + timedelta(minutes=15 * i)).isoformat(),
+             "open": 100, "high": 102, "low": 99, "close": 101, "volume": 1}
+            for start, count in [(NOW.replace(day=9, hour=9, minute=15), 5),
+                                 (NOW.replace(hour=9, minute=15), 4)]
+            for i in range(count)
+        ]
+        self.assertEqual([c["volume"] for c in ind.resample(candles, 4)], [4, 4])
+
     def test_rsi_extremes_and_completed_candle_filter(self):
         self.assertEqual(ind.rsi([float(i) for i in range(30)]), 100.0)
         candles = [{"date": "2026-03-10T10:50:00+05:30", "open": 1, "high": 2, "low": 1, "close": 2},
@@ -264,6 +298,114 @@ class StoreTests(unittest.TestCase):
 
 
 class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
+    def entry_fixture(self):
+        store = memory_store()
+        self.addCleanup(store.close)
+        kite = mock.Mock()
+        kite.profile.return_value = {"user_id": "owner"}
+        kite.orders.return_value = []
+        kite.positions.return_value = {"net": []}
+        kite.margins.return_value = {"available": {"cash": 100000}}
+        kite.place_order.return_value = "entry-1"
+        collector = mock.Mock()
+        collector.gateway.client.return_value = kite
+        plan = build_plan("NIFTY", "BUY_CE", chain(), atr_5m=5.0, cfg=CFG)
+        collector.gateway.instruments.return_value = [{
+            "tradingsymbol": plan["tradingsymbol"], "name": "NIFTY", "instrument_type": "CE",
+            "expiry": NOW.date() + timedelta(days=2), "lot_size": plan["lot_size"], "tick_size": 0.05,
+        }]
+        store.set_state("live_trading_enabled", True)
+        return LiveOrderExecutor(store, collector), kite, plan
+
+    def test_entry_checks_quote_against_current_time_not_cycle_start(self):
+        executor, kite, plan = self.entry_fixture()
+        current = NOW + timedelta(seconds=30)
+        kite.quote.return_value = {f"NFO:{plan['tradingsymbol']}": {
+            "timestamp": current, "depth": {"buy": [{"price": 99.5}], "sell": [{"price": 100}]},
+        }}
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = current
+            result = executor._submit_entry_sync(
+                CFG, "NIFTY", {"action": "BUY_CE"}, plan, 1, NOW)
+        self.assertEqual(result["status"], "ENTRY_PENDING", result)
+        kite.place_order.assert_called_once()
+
+    async def test_slow_analysis_cannot_submit_after_entry_cutoff(self):
+        executor, kite, plan = self.entry_fixture()
+        before = NOW.replace(hour=14, minute=44, second=59)
+        after = NOW.replace(hour=14, minute=45, second=20)
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt, \
+                mock.patch.object(executor, "_submit_entry_sync", return_value={"status": "ENTRY_PENDING"}) as submit:
+            dt.now.return_value = after
+            result = await executor.submit_entry(
+                cfg=AutonomiqConfig(live_execution_allowed=True), session=session_state(CFG, before),
+                symbol="NIFTY", decision={"action": "BUY_CE", "source": "ai+quant", "risk": {"approved": True}},
+                plan=plan, cycle_id=1, now=before)
+        self.assertEqual(result["status"], "BLOCKED")
+        submit.assert_not_called()
+        kite.place_order.assert_not_called()
+
+    def test_completed_entry_does_not_reset_exit_or_failed_protection(self):
+        executor, kite, plan = self.entry_fixture()
+        trade_id = executor.store.create_live_trade({
+            "signal_key": "recovery", "tag": "APRO1234567890", "day": DAY, "account_id": "owner",
+            **plan, "quantity": plan["lot_size"],
+        })
+        executor.store.update_live_trade(
+            trade_id, entry_order_id="entry-1", entry_filled=65, entry_price=100, status="EXIT_UNKNOWN")
+        entry = {"order_id": "entry-1", "status": "COMPLETE", "filled_quantity": 65, "average_price": 100}
+        position = {"exchange": "NFO", "tradingsymbol": plan["tradingsymbol"], "quantity": 65}
+        with mock.patch.object(executor, "_submit_emergency_exit") as emergency:
+            executor._manage_trade(kite, executor.store.live_trade(trade_id), {"entry-1": entry},
+                                   [position], CFG, NOW, CFG.square_off)
+            self.assertEqual(executor.store.live_trade(trade_id)["status"], "EXIT_UNKNOWN")
+            executor.store.update_live_trade(trade_id, status="PROTECTION_FAILED")
+            executor._manage_trade(kite, executor.store.live_trade(trade_id), {"entry-1": entry},
+                                   [position], CFG, NOW, CFG.square_off)
+            emergency.assert_called_once()
+        kite.place_order.assert_not_called()
+
+    def test_rejected_protection_on_open_trade_reaches_emergency_exit(self):
+        executor, kite, plan = self.entry_fixture()
+        trade_id = executor.store.create_live_trade({
+            "signal_key": "rejected-stop", "tag": "APRO1234567890", "day": DAY, "account_id": "owner",
+            **plan, "quantity": plan["lot_size"],
+        })
+        executor.store.update_live_trade(
+            trade_id, status="OPEN", entry_order_id="entry-1", entry_filled=65,
+            entry_price=100, protection_order_id="stop-1")
+        orders = {
+            "entry-1": {"order_id": "entry-1", "status": "COMPLETE", "filled_quantity": 65, "average_price": 100},
+            "stop-1": {"order_id": "stop-1", "status": "REJECTED", "filled_quantity": 0},
+        }
+        position = {"exchange": "NFO", "tradingsymbol": plan["tradingsymbol"], "quantity": 65}
+        with mock.patch.object(executor, "_submit_emergency_exit") as emergency:
+            executor._manage_trade(kite, executor.store.live_trade(trade_id), orders, [position],
+                                   CFG, NOW, CFG.square_off)
+            emergency.assert_called_once()
+        self.assertEqual(executor.store.live_trade(trade_id)["status"], "PROTECTION_FAILED")
+        kite.place_order.assert_not_called()
+
+    def test_quote_expiring_during_margin_check_blocks_submission(self):
+        executor, kite, plan = self.entry_fixture()
+        current = NOW
+        kite.quote.return_value = {f"NFO:{plan['tradingsymbol']}": {
+            "timestamp": NOW, "depth": {"buy": [{"price": 99.5}], "sell": [{"price": 100}]},
+        }}
+
+        def delayed_margin(*args):
+            nonlocal current
+            current += timedelta(seconds=6)
+            return {"available": {"cash": 100000}}
+
+        kite.margins.side_effect = delayed_margin
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.side_effect = lambda *args: current
+            result = executor._submit_entry_sync(CFG, "NIFTY", {"action": "BUY_CE"}, plan, 1, NOW)
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("quote expired", result["detail"])
+        kite.place_order.assert_not_called()
+
     async def test_owner_off_blocks_entry_before_broker_access(self):
         store = memory_store()
         self.addCleanup(store.close)
@@ -346,6 +488,89 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_risk_validation_uses_live_losses_trade_count_and_cooldown(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        store = memory_store()
+        self.addCleanup(store.close)
+        plan = build_plan("NIFTY", "BUY_CE", chain(), atr_5m=5, cfg=CFG)
+        trade_id = store.create_live_trade({
+            "signal_key": "prior-loss", "tag": "APRO1234567890", "account_id": "owner", "day": DAY,
+            **plan, "quantity": plan["lot_size"],
+        })
+        store.update_live_trade(trade_id, status="CLOSED", entry_filled=65, exit_filled=65,
+                                pnl=-3000, closed_at=(NOW - timedelta(minutes=5)).isoformat())
+        collector = mock.Mock()
+        collector.spot = mock.AsyncMock(return_value={"price": 22500, "age_s": 1})
+        collector.collect_sync.return_value = {
+            "errors": [], "candles": {"5m": [1], "15m": [1]}, "options": chain(), "futures": None,
+        }
+        ai = mock.Mock()
+        ai.status.return_value = "ACTIVE"
+        ai.complete_json = mock.AsyncMock(return_value={
+            "indices": {"NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"}}})
+        cfg = AutonomiqConfig(ai_enabled=True, live_execution_allowed=True, max_trades_per_day=1)
+        engine = AutonomiqOrchestrator(store, collector, ai)
+        engine.cfg = cfg
+        quant = {"score": 80, "bias": "BULLISH", "flags": [], "factors": [], "pcr": 1, "atm_iv": 14}
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt, \
+                mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 5}), \
+                mock.patch.object(agents.QuantResearchAgent, "run", return_value=quant):
+            dt.now.return_value = NOW
+            payload = await engine._analyze(cfg, NOW, DAY, session_state(cfg, NOW), "SCHEDULED",
+                                            store.start_cycle("SCHEDULED"))
+        signal = payload["indices"]["NIFTY"]["signal"]
+        self.assertFalse(signal["risk"]["approved"])
+        failures = {check["name"] for check in signal["risk"]["checks"] if not check["passed"]}
+        self.assertTrue({"Daily trade limit", "Daily loss limit", "Re-entry cooldown"} <= failures)
+        self.assertEqual(signal["execution"]["status"], "OFF")
+
+    async def test_each_index_uses_current_clock_and_revalidates_spot_after_ai(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        current = NOW
+
+        class Collector:
+            async def spot(self, symbol, now):
+                return {"price": 22500.0, "age_s": (now - current).total_seconds() + 1}
+
+            def collect_sync(self, symbol, spot_price, now):
+                nonlocal current
+                current += timedelta(seconds=8)
+                return {"symbol": symbol, "errors": [], "candles": {"5m": [1], "15m": [1]},
+                        "futures": None, "options": chain()}
+
+        async def strategy(*args):
+            nonlocal current
+            self.assertTrue(all(ctx["spot"]["fresh"] for ctx in args[-1]["indices"].values()))
+            current += timedelta(seconds=20)
+            return {"indices": {s: {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"}
+                                for s in ("NIFTY", "BANKNIFTY", "SENSEX")}}
+
+        store = memory_store()
+        self.addCleanup(store.close)
+        ai = mock.Mock()
+        ai.status.return_value = "ACTIVE"
+        ai.complete_json = mock.AsyncMock(side_effect=strategy)
+        engine = AutonomiqOrchestrator(store, Collector(), ai)
+        cfg = AutonomiqConfig(ai_enabled=True, live_execution_allowed=True)
+        engine.cfg = cfg
+        quant = {"score": 80, "bias": "BULLISH", "flags": [], "factors": [], "pcr": 1, "atm_iv": 14}
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt, \
+                mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 5}), \
+                mock.patch.object(agents.QuantResearchAgent, "run", return_value=quant), \
+                mock.patch.object(engine.live_executor, "submit_entry", new=mock.AsyncMock(
+                    return_value={"status": "OFF", "detail": "Owner switch OFF"})) as submit:
+            dt.now.side_effect = lambda *args: current
+            payload = await engine._analyze(cfg, NOW, DAY, session_state(cfg, NOW), "SCHEDULED",
+                                            store.start_cycle("SCHEDULED"))
+        for index in payload["indices"].values():
+            self.assertEqual(index["signal"]["action"], "BUY_CE", index["signal"])
+            self.assertEqual(index["spot"]["age_s"], 1)
+            self.assertEqual(index["signal"]["timestamp"], current.isoformat())
+        self.assertEqual(submit.await_count, 3)
+        self.assertTrue(all(call.kwargs["now"] == current for call in submit.await_args_list))
+
     async def test_stale_cycle_runs_ai_but_remains_no_trade_and_snapshot_serialises(self):
         from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
 
@@ -483,6 +708,12 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(engine.next_run_at, IST.localize(datetime(2026, 3, 10, 9, 10, 5)))
             self.assertEqual(cycle.await_count, 3)
 
+            engine.next_run_at = IST.localize(datetime(2026, 3, 10, 15, 20, 5))
+            FixedDateTime.current = engine.next_run_at
+            await engine._tick()
+            await engine._cycle_task
+            self.assertEqual(cycle.await_count, 4)
+
     def test_scheduled_ai_runs_without_quant_setup_and_reports_stale_inputs(self):
         engine = self.engine()
         setup = {"NIFTY": self.ctx(), "BANKNIFTY": self.ctx(score=10), "SENSEX": self.ctx(fresh=False)}
@@ -542,8 +773,10 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
         engine = AutonomiqOrchestrator(store, FreshCollector(), AIClient(store, httpx.MockTransport(handler)))
         engine.cfg = CFG
         store.set_state("auto_paper_trading", True)
-        with mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 20.0}), \
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt, \
+                mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 20.0}), \
                 mock.patch.object(agents.QuantResearchAgent, "run", side_effect=quant):
+            dt.now.return_value = NOW
             payload = await engine._analyze(CFG, NOW, DAY, session_state(CFG, NOW), "SCHEDULED",
                                             store.start_cycle("SCHEDULED"))
             again = await engine._analyze(CFG, NOW, DAY, session_state(CFG, NOW), "SCHEDULED",

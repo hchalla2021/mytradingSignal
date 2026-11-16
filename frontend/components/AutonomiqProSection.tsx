@@ -53,7 +53,9 @@ interface Snapshot {
   live_trades: LiveTrade[];
   live_performance: { trades: number; pnl: number; wins: number;
     today: { trades: number; realized: number; wins: number; losses: number } };
-  ai_usage: { today: Usage; month: Usage };
+  ai_usage: { today: Usage; month: Usage; recent?: {
+    created_at: string; model: string; status: string; error: string | null;
+  }[] };
 }
 interface LiveTrade {
   id: number; symbol: Sym; exchange: string; tradingsymbol: string; option_type: string; status: string;
@@ -198,6 +200,10 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
   const livePrice = trade?.status === 'CLOSED' ? trade.exit_price : trade?.last_price;
   const livePoints = livePrice != null && entry != null ? livePrice - entry : null;
   const livePercent = livePoints != null && entry ? livePoints * 100 / entry : null;
+  const trailPoints = trade && entry != null ? trade.trailing_sl - entry : null;
+  const trailPercent = trailPoints != null && entry ? trailPoints * 100 / entry : null;
+  const failedChecks = signal?.risk?.checks.filter((check) => !check.passed) ?? [];
+  const quantThreshold = num(typeof snap?.config.min_signal_score === 'number' ? snap.config.min_signal_score : null, 0);
   const execution = signal?.execution;
 
   return (
@@ -264,7 +270,9 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
         </div>
         <div className="min-w-0 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2">
           <div className="text-[12px] text-slate-300">Trailing profit / loss (pts / %)</div>
-          <div className="mt-0.5 font-bold text-slate-400">—</div>
+          <div className={`mt-0.5 font-bold ${trailPoints == null ? 'text-slate-400' : trailPoints >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+            {trade ? `${num(trailPoints)} / ${num(trailPercent)}%` : '—'}
+          </div>
         </div>
       </div>
       <div className="mt-2 text-[12px] leading-relaxed text-slate-400">
@@ -274,6 +282,12 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
       </div>
 
       <p className="mt-3 text-[14px] leading-relaxed text-slate-300">{signal?.reasoning ?? '—'}</p>
+      {cycle && <div className="mt-2 text-[12px] text-slate-400">
+        {`Quant ${num(cycle.quant.score, 0)} · entry needs ≥ +${quantThreshold} CE / ≤ -${quantThreshold} PE and AI agreement.`}
+      </div>}
+      {failedChecks.length > 0 && <ul aria-label={`${sym} entry blockers`} className="mt-2 space-y-1 break-words text-[12px] text-amber-300">
+        {failedChecks.map((check) => <li key={check.name}>{check.name}: {check.detail || 'Not passed'}</li>)}
+      </ul>}
       <div className="mt-auto flex items-center justify-between gap-2 pt-3 text-[12px] text-slate-400">
         <span>{clock(signal?.timestamp)} IST</span>
         <button type="button" onClick={() => setOpen((v) => !v)} className="inline-flex min-h-[44px] items-center gap-1 text-[14px] font-semibold text-sky-400 hover:text-sky-300">
@@ -398,6 +412,7 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
   const liveAvailable = runtime?.live_execution_allowed === true;
   const liveEnabled = runtime?.live_trading_enabled === true;
   const aiState = snap?.health.ai_state ?? 'OFFLINE';
+  const lastAICall = snap?.ai_usage.recent?.[0];
   const alertTone = cycle?.market_alert.tone ?? 'CAUTION';
   const alertStyle = alertTone === 'BULLISH' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
     : alertTone === 'BEARISH' ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
@@ -504,6 +519,13 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
 
         {tab === 'live' && (
           <>
+            <div aria-label="AI execution diagnostics" className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 break-words text-[12px] text-slate-300">
+              <span>Last AI request: {lastAICall ? `${clock(lastAICall.created_at)} IST · ${lastAICall.model} · ${lastAICall.status}` : 'No recorded request'}</span>
+              <span>Next slot: {clock(snap?.health.next_run_at)} IST</span>
+              {(snap?.health.ai_last_error || snap?.health.last_error) && <span className="text-amber-300">
+                Analysis error: {snap.health.ai_last_error || snap.health.last_error}
+              </span>}
+            </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               {SYMBOLS.map((s) => (
                 <IndexTile key={s} sym={s} spot={snap?.spots[s]} live={marketData?.[s] ?? null} cycle={cycle?.indices[s]} />
@@ -513,7 +535,7 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
               {SYMBOLS.map((s) => (
                 <SignalCard key={s} sym={s} cycle={cycle?.indices[s]}
                   snap={snap} current={snapshotCurrent} elapsedMs={elapsedMs}
-                  trade={snap?.live_trades?.find((item) => item.symbol === s && item.status !== 'CLOSED')} />
+                  trade={snap?.live_trades?.find((item) => item.symbol === s && !['CLOSED', 'UNFILLED', 'REJECTED'].includes(item.status))} />
               ))}
             </div>
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:grid-rows-[auto_auto_auto_1fr_auto] lg:gap-y-0">

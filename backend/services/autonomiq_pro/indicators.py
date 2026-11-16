@@ -99,7 +99,8 @@ def resample(candles: Sequence[dict], factor: int) -> list[dict]:
     bucket: list[dict] = []
     for c in candles:
         if bucket and (len(bucket) == factor or str(c["date"])[:10] != str(bucket[0]["date"])[:10]):
-            out.append(_merge(bucket))
+            if len(bucket) == factor:
+                out.append(_merge(bucket))
             bucket = []
         bucket.append(c)
     if len(bucket) == factor:

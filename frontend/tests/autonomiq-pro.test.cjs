@@ -216,6 +216,44 @@ test('a fresh proposal is indicative only and expires with its quote', () => {
   assert.match(body, /Entry \(Premium\) —/);
 });
 
+test('live diagnostics show actual AI request and failed risk checks', () => {
+  const snap = snapshot();
+  snap.config.min_signal_score = 60;
+  snap.health.ai_last_error = 'BAD_OUTPUT';
+  snap.ai_usage.recent = [{
+    created_at: at(-30), model: 'configured-model', status: 'BAD_OUTPUT', error: 'unparseable',
+  }];
+  snap.cycle = cycle({
+    action: 'WAIT', strength: 'Low', timestamp: at(0), source: 'ai+quant',
+    risk: { approved: false, checks: [
+      { name: 'Entry window', passed: true, detail: 'Open' },
+      { name: 'Risk per trade', passed: false, detail: 'Estimated risk exceeds limit' },
+    ] },
+  });
+  const tree = render(snap);
+  const diagnostics = nodes(tree).find(node => node.props?.['aria-label'] === 'AI execution diagnostics');
+  assert.match(text(diagnostics), /10:59:30 IST · configured-model · BAD_OUTPUT/);
+  assert.match(text(diagnostics).replace(/\s+/g, ' '), /Analysis error: BAD_OUTPUT/);
+  const body = card(tree);
+  assert.match(body, /entry needs ≥ \+60 CE \/ ≤ -60 PE and AI agreement/);
+  assert.match(body, /Risk per trade : Estimated risk exceeds limit/);
+  assert.doesNotMatch(body, /Entry window : Open/);
+});
+
+test('trailing profit uses the owned stop and terminal entry records are not positions', () => {
+  const snap = snapshot();
+  snap.runtime.live_execution_allowed = true;
+  snap.live_trades = [paperTrade({ quantity: 65, entry_price: 100 })];
+  assert.match(card(render(snap)), /Trailing profit \/ loss \(pts \/ %\) 5\.00 \/ 5\.00%/);
+  for (const status of ['CLOSED', 'UNFILLED', 'REJECTED']) {
+    snap.live_trades[0].status = status;
+    const body = card(render(snap));
+    assert.doesNotMatch(body, /AUTONOMIQ LIVE/);
+    assert.match(body, /No AUTONOMIQ live position is open/);
+    assert.match(body, /Entry \(Premium\) —/);
+  }
+});
+
 test('legacy simulated positions and results are never displayed as live across tabs', () => {
   const snap = snapshot();
   snap.open_trades = [paperTrade()];
