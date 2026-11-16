@@ -41,6 +41,27 @@ client is available, not that the last scheduled request succeeded. Manual refre
 no AI tokens and replaces the displayed cycle with a quant-only view; check the last
 recorded AI request and decision history when diagnosing a manual refresh.
 
+The AI Analysis badge and the warning above the live cards report the latest cycle's
+actual AI outcome, separately from client readiness. Neutral quant-only decisions also
+include the missing AI confirmation reason. A zero score does not mean missing data:
+opposing positive and negative factors can cancel; inspect View Details and data errors.
+The Analysis tab labels each index's last computation time and the next scheduled cycle.
+Its rule weights are constants, while rule states, VWAP, depth and OI measurements refresh
+with five-minute analysis cycles, even when AI spending is blocked. Live spot ticks update
+separately; polling the dashboard every five seconds does not recompute the rules.
+
+`AUTONOMIQ_PRO_DAILY_BUDGET_USD` and `AUTONOMIQ_PRO_MONTHLY_BUDGET_USD` cap AI spending,
+not broker trading risk. The next request must fit an estimated input-plus-output
+reservation. `DAILY_BUDGET_INSUFFICIENT` / `MONTHLY_BUDGET_INSUFFICIENT` mean the balance
+cannot cover that request even if recorded spend is still below the cap; `*_EXHAUSTED`
+means recorded spend has reached the cap. No budget is automatically increased.
+
+`OUTPUT_TOKEN_LIMIT` means Anthropic stopped at `AUTONOMIQ_PRO_MAX_OUTPUT_TOKENS`.
+The charged usage is recorded, the response is rejected, and there is no immediate
+paid retry. The strategy prompt requests short text for all three indices to reduce
+truncation, but a successful complete response is still required. Raising a budget or
+token limit increases potential API spending and is an explicit operator decision.
+
 ## Live-order boundary
 
 - Live execution is gated by `AUTONOMIQ_PRO_DEPLOYMENT_MODE=production`; the production

@@ -75,9 +75,9 @@ class AIClient:
         price_in, price_out = cfg.price(model)
         worst_case = ((prompt_chars / 3) * price_in + cfg.max_output_tokens * price_out) / 1_000_000
         if self.store.ai_usage(day)["cost_usd"] + worst_case > cfg.daily_budget_usd:
-            raise AIUnavailable("DAILY_BUDGET_EXHAUSTED")
+            raise AIUnavailable("DAILY_BUDGET_INSUFFICIENT")
         if self.store.ai_usage(day[:7])["cost_usd"] + worst_case > cfg.monthly_budget_usd:
-            raise AIUnavailable("MONTHLY_BUDGET_EXHAUSTED")
+            raise AIUnavailable("MONTHLY_BUDGET_INSUFFICIENT")
 
     async def complete_json(self, cfg: AutonomiqConfig, day: str, agent: str, model: str, system: str,
                             payload: dict[str, Any]) -> dict:
@@ -114,6 +114,11 @@ class AIClient:
                               cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
                               cache_write_tokens=int(usage.get("cache_creation_input_tokens") or 0),
                               cost_usd=call_cost(cfg, model, usage), latency_ms=latency)
+                if data.get("stop_reason") == "max_tokens":
+                    self.store.record_ai_call(day, agent, model, "OUTPUT_TOKEN_LIMIT",
+                                              error="Response reached max_tokens; no AI decision accepted", **record)
+                    self._failed("OUTPUT_TOKEN_LIMIT")
+                    raise AIUnavailable("OUTPUT_TOKEN_LIMIT")
                 text = "".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
                 try:
                     parsed = extract_json(text)

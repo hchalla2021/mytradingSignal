@@ -441,6 +441,38 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AIClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_next_request_is_blocked_before_total_spend_reaches_daily_cap(self):
+        store = memory_store()
+        self.addCleanup(store.close)
+        store.record_ai_call(DAY, "strategy", CFG.primary_model, "OK", cost_usd=1.2226)
+        requests = []
+        client = AIClient(store, httpx.MockTransport(lambda request: requests.append(request)))
+        self.assertEqual(client.status(CFG, DAY), "ACTIVE")
+        with self.assertRaisesRegex(AIUnavailable, "DAILY_BUDGET_INSUFFICIENT"):
+            await client.complete_json(CFG, DAY, "strategy", CFG.primary_model, "sys", {"data": "x" * 6000})
+        self.assertEqual(requests, [])
+        self.assertEqual(store.ai_usage(DAY)["calls"], 1)
+
+    async def test_truncated_response_records_charge_without_retry_or_decision(self):
+        store = memory_store()
+        self.addCleanup(store.close)
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={
+                "stop_reason": "max_tokens", "content": [{"type": "text", "text": '{"indices":{}}'}],
+                "usage": {"input_tokens": 2500, "output_tokens": 500},
+            })
+
+        client = AIClient(store, httpx.MockTransport(handler))
+        with self.assertRaisesRegex(AIUnavailable, "OUTPUT_TOKEN_LIMIT"):
+            await client.complete_json(CFG, DAY, "strategy", CFG.primary_model, "sys", {})
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(store.ai_calls(1)[0]["status"], "OUTPUT_TOKEN_LIMIT")
+        self.assertGreater(store.ai_usage(DAY)["cost_usd"], 0)
+        self.assertEqual(client.last_error, "OUTPUT_TOKEN_LIMIT")
+
     async def test_success_records_cost_including_prompt_cache(self):
         store = memory_store()
         transport = httpx.MockTransport(lambda request: anthropic_reply(
@@ -841,6 +873,14 @@ class SignalValidationTests(unittest.TestCase):
         validator = agents.SignalValidationAgent()
         self.assertEqual(validator.run("NIFTY", self.ctx(fresh=False), None, 60, True, "X")["action"], "NO_TRADE")
         self.assertEqual(validator.run("NIFTY", self.ctx(), None, 60, True, "DISABLED")["action"], "WAIT")
+
+    def test_neutral_quant_does_not_hide_unavailable_ai(self):
+        for state in ("DAILY_BUDGET_INSUFFICIENT", "OUTPUT_TOKEN_LIMIT", "SKIPPED_MANUAL_QUANT_ONLY"):
+            with self.subTest(state=state):
+                signal = agents.SignalValidationAgent().run("NIFTY", self.ctx(score=0), None, 60, True, state)
+                self.assertEqual(signal["action"], "WAIT")
+                self.assertIn(state, signal["reasoning"])
+                self.assertEqual(signal["source"], "quant")
 
     def test_malformed_ai_action_degrades_to_wait(self):
         out = agents.normalize_strategy({"indices": {"nifty": {"action": "SELL EVERYTHING", "conviction": "x"}}})

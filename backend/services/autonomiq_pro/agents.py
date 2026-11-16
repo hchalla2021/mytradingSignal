@@ -1,7 +1,7 @@
 """AUTONOMIQ PRO agents.
 
 Deterministic agents (Python): MarketAnalysisAgent, QuantResearchAgent, SignalValidationAgent.
-AI agents (Anthropic): StrategyAgent, RiskReviewAgent — they only choose/critique direction;
+AI agent (Anthropic): StrategyAgent — it only chooses direction;
 all prices come from live Zerodha quotes, never from the model.
 """
 
@@ -138,10 +138,12 @@ Rules:
 - Prefer WAIT when signals conflict, price is extended, or edge is unclear. NO_TRADE when data quality is poor.
 - Do NOT output prices, strikes, stop-losses or targets; the execution layer derives them from live quotes.
 - Never invent data that is not in the input.
-- Respond with ONE compact JSON object only, no markdown, no extra text (hard limit ~350 tokens), exactly:
-{"market_alert":{"tone":"BULLISH|BEARISH|NEUTRAL|CAUTION","title":"<= 5 words","detail":"<= 20 words"},
- "summary":"<= 45 words of market analysis",
- "indices":{"<INDEX>":{"action":"...","conviction":0-100,"reasoning":"<= 20 words","risks":["<= 8 words"]}}}"""
+- Respond with ONE compact JSON object only, no markdown, no extra text. Complete all indices before the
+  response limit: use at most 18 summary words, 10 detail words and 8 reasoning words per index.
+  Keep risks empty unless essential (at most one risk of 4 words per index). Do not repeat input data.
+{"market_alert":{"tone":"BULLISH|BEARISH|NEUTRAL|CAUTION","title":"<= 4 words","detail":"<= 10 words"},
+ "summary":"<= 18 words of market analysis",
+ "indices":{"<INDEX>":{"action":"...","conviction":0-100,"reasoning":"<= 8 words","risks":[]}}}"""
 
 def strategy_payload(contexts: dict[str, dict], session: dict, live_positions: list[dict] | None = None) -> dict:
     return {"session": session, "autonomiq_live_positions": live_positions or [], "indices": {
@@ -232,7 +234,10 @@ class SignalValidationAgent:
                 return {"action": "WAIT", "score": score, "strength": _strength(abs(score)), "conviction": abs(score),
                         "reasoning": f"{quant_note}. Awaiting AI confirmation ({ai_state}).", "source": "quant"}
             return {"action": quant_action_, "score": score, "strength": _strength(abs(score)),
-                    "conviction": abs(score), "reasoning": quant_note, "source": "quant"}
+                    "conviction": abs(score),
+                    "reasoning": (f"{quant_note}. AI confirmation unavailable ({ai_state})."
+                                  if require_ai else quant_note),
+                    "source": "quant"}
 
         ai_action = ai["action"]
         conviction = round((abs(score) + ai["conviction"]) / 2, 1)

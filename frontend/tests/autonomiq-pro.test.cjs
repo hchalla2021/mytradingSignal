@@ -56,7 +56,8 @@ function render(snap, options = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
   const states = [snap, options.error ?? null, options.tab ?? 'live', false, null, options.receivedAt ?? NOW, NOW,
-    options.responseDelay ?? 0, options.showAllDecisions ?? false, options.showAllAlerts ?? false];
+    options.responseDelay ?? 0, options.showAllDecisions ?? false, options.showAllAlerts ?? false,
+    options.expandSignalCards ?? false, options.expandSignalCards ?? false, options.expandSignalCards ?? false];
   let cursor = 0;
   const react = {
     memo: component => component,
@@ -238,6 +239,63 @@ test('live diagnostics show actual AI request and failed risk checks', () => {
   assert.match(body, /entry needs ≥ \+60 CE \/ ≤ -60 PE and AI agreement/);
   assert.match(body, /Risk per trade : Estimated risk exceeds limit/);
   assert.doesNotMatch(body, /Entry window : Open/);
+});
+
+test('budget-blocked analysis cannot show ON merely because the AI client is ACTIVE', () => {
+  const snap = snapshot();
+  snap.config.daily_budget_usd = 1.25;
+  snap.config.monthly_budget_usd = 25;
+  snap.ai_usage.today.cost_usd = 1.2226;
+  snap.ai_usage.month.cost_usd = 1.2226;
+  snap.cycle = cycle({ action: 'WAIT', strength: 'Low', timestamp: at(0), source: 'quant' });
+  snap.cycle.ai_state = 'DAILY_BUDGET_INSUFFICIENT';
+  const tree = render(snap);
+  const body = text(tree).replace(/\s+/g, ' ');
+  assert.match(body, /AI Engine ACTIVE/);
+  assert.match(body, /AI Analysis DAILY BUDGET INSUFFICIENT/);
+  assert.doesNotMatch(body, /AI Analysis ON/);
+  const blocker = nodes(tree).find(node => node.props?.['aria-label'] === 'AI analysis blocker');
+  assert.ok(blocker);
+  assert.match(text(blocker), /quant-only results, no new AI confirmation/);
+  assert.match(text(blocker), /\$1\.2226 \/ \$1\.25 daily/);
+  assert.match(text(blocker), /estimated next request/);
+});
+
+test('rule details explain how opposing live factors produce a zero net score', () => {
+  const snap = snapshot();
+  snap.cycle = cycle({ action: 'WAIT', strength: 'Low', timestamp: at(0), source: 'quant' });
+  snap.cycle.indices.NIFTY.quant.factors = [
+    { points: 15, factor: '15m trend up' }, { points: -15, factor: '5m bearish factors' },
+  ];
+  const body = card(render(snap, { expandSignalCards: true }));
+  assert.match(body, /\+15 15m trend up/);
+  assert.match(body, /-15 5m bearish factors/);
+});
+
+test('analysis shows snapshot times and updates measurements without changing rule weights', () => {
+  const snap = snapshot();
+  snap.cycle = cycle({ action: 'WAIT', strength: 'Low', timestamp: at(0), source: 'quant' });
+  snap.health.next_run_at = at(300);
+  const index = snap.cycle.indices.NIFTY;
+  index.futures = { vwap: 25287.97, order_imbalance: 0.181 };
+  index.quant.factors = [{ points: 15, factor: '60m trend up' }];
+  let tree = render(snap, { tab: 'analysis' });
+  let rules = nodes(tree).find(node => node.props?.['aria-label'] === 'NIFTY analysis rules');
+  assert.match(text(rules), /25,287\.97/);
+  assert.match(text(rules), /Last computed: 11:00:00 IST/);
+  assert.match(text(rules), /60m trend up \+ 15/);
+  const cadence = nodes(tree).find(node => node.props?.['aria-label'] === 'Analysis refresh cadence');
+  assert.match(text(cadence), /every 5 minutes, not on every tick/);
+  assert.match(text(cadence), /Next cycle: 11:05:00 IST/);
+
+  index.futures.vwap = 25290.25;
+  index.signal.timestamp = at(300);
+  tree = render(snap, { tab: 'analysis' });
+  rules = nodes(tree).find(node => node.props?.['aria-label'] === 'NIFTY analysis rules');
+  assert.match(text(rules), /25,290\.25/);
+  assert.doesNotMatch(text(rules), /25,287\.97/);
+  assert.match(text(rules), /Last computed: 11:05:00 IST/);
+  assert.match(text(rules), /60m trend up \+ 15/);
 });
 
 test('trailing profit uses the owned stop and terminal entry records are not positions', () => {

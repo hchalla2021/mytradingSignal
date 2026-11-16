@@ -308,6 +308,14 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
             })}
           </div>
           <div>Quant score <b className="text-white">{num(cycle.quant.score, 0)}</b> · RSI {num(cycle.analysis.rsi_5m, 1)} · ATR {num(cycle.analysis.atr_5m, 1)} · PCR {num(cycle.options?.pcr ?? null)} · IV {num(cycle.options?.atm_iv ?? null, 1)}%</div>
+          <ul aria-label={`${sym} quant rule contributions`} className="space-y-1 break-words">
+            {cycle.quant.factors.map((factor) => <li key={factor.factor}>
+              <span className={factor.points > 0 ? 'text-emerald-300' : factor.points < 0 ? 'text-rose-300' : 'text-slate-400'}>
+                {`${factor.points > 0 ? '+' : ''}${num(factor.points, 0)}`}
+              </span>{' '}{factor.factor}
+            </li>)}
+          </ul>
+          {cycle.quant.flags.map((flag) => <div key={flag} className="text-amber-300">{flag}</div>)}
           {proposal && <div>Δ {num(proposal.quote.delta ?? null)} · spread {num(proposal.quote.spread_pct ?? null)}% · estimated risk {inr(proposal.risk_rupees, 0)} ({proposal.lots}×{proposal.lot_size})</div>}
           {signal?.risks?.map((r) => <div key={r} className="text-amber-300">⚠ {r}</div>)}
           {cycle.errors.length > 0 && <div className="text-slate-400">Data issues: {cycle.errors.join(', ')}</div>}
@@ -412,6 +420,8 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
   const liveAvailable = runtime?.live_execution_allowed === true;
   const liveEnabled = runtime?.live_trading_enabled === true;
   const aiState = snap?.health.ai_state ?? 'OFFLINE';
+  const analysisAIState = aiState === 'ACTIVE' ? cycle?.ai_state ?? aiState : aiState;
+  const analysisOn = !!runtime?.engine_enabled && analysisAIState === 'ACTIVE';
   const lastAICall = snap?.ai_usage.recent?.[0];
   const alertTone = cycle?.market_alert.tone ?? 'CAUTION';
   const alertStyle = alertTone === 'BULLISH' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
@@ -508,8 +518,8 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
           <StatusPill icon={isConnected ? Wifi : WifiOff} label="Zerodha" value={isConnected ? 'Connected' : 'Disconnected'} tone={isConnected ? 'good' : 'bad'} />
           <StatusPill icon={Cpu} label="AI Engine" value={aiState.replace(/_/g, ' ')} tone={aiState === 'ACTIVE' ? 'good' : aiState === 'DISABLED' || aiState === 'NOT_CONFIGURED' ? 'muted' : 'warn'} />
           <StatusPill icon={Brain} label="AI Analysis"
-            value={runtime?.engine_enabled && aiState === 'ACTIVE' ? 'ON' : runtime?.engine_enabled ? aiState.replace(/_/g, ' ') : 'OFF'}
-            tone={runtime?.engine_enabled && aiState === 'ACTIVE' ? 'good' : runtime?.engine_enabled ? 'warn' : 'muted'} />
+            value={analysisOn ? 'ON' : runtime?.engine_enabled ? analysisAIState.replace(/_/g, ' ') : 'OFF'}
+            tone={analysisOn ? 'good' : runtime?.engine_enabled ? 'warn' : 'muted'} />
           <StatusPill icon={Lock} label="Live Trade"
             value={!runtime?.live_execution_allowed ? 'PRODUCTION ONLY' : runtime.live_trading_enabled ? 'ON' : 'OFF'}
             tone={!runtime?.live_execution_allowed ? 'good' : runtime.live_trading_enabled ? 'warn' : 'muted'} />
@@ -519,6 +529,18 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
 
         {tab === 'live' && (
           <>
+            {cycle && cycle.ai_state !== 'ACTIVE' && (
+              <div role="status" aria-label="AI analysis blocker"
+                className="min-w-0 break-words rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200">
+                <div className="font-semibold">{`Latest cycle ${clock(cycle.at)} IST: ${cycle.ai_state.replace(/_/g, ' ')} — quant-only results, no new AI confirmation.`}</div>
+                {cycle.ai_state.includes('BUDGET') && <div className="mt-1">
+                  {`AI spend: $${num(snap?.ai_usage.today.cost_usd, 4)} / $${num(typeof snap?.config.daily_budget_usd === 'number' ? snap.config.daily_budget_usd : null, 2)} daily; $${num(snap?.ai_usage.month.cost_usd, 4)} / $${num(typeof snap?.config.monthly_budget_usd === 'number' ? snap.config.monthly_budget_usd : null, 2)} monthly. Remaining budget must also cover the estimated next request.`}
+                </div>}
+                {cycle.ai_state === 'OUTPUT_TOKEN_LIMIT' && <div className="mt-1">
+                  AI response reached the configured output-token limit; the incomplete decision was rejected.
+                </div>}
+              </div>
+            )}
             <div aria-label="AI execution diagnostics" className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 break-words text-[12px] text-slate-300">
               <span>Last AI request: {lastAICall ? `${clock(lastAICall.created_at)} IST · ${lastAICall.model} · ${lastAICall.status}` : 'No recorded request'}</span>
               <span>Next slot: {clock(snap?.health.next_run_at)} IST</span>
@@ -581,11 +603,16 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
         )}
 
         {tab === 'analysis' && (
+          <>
+          <div aria-label="Analysis refresh cadence" className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 break-words text-[13px] text-slate-300">
+            <span>Rules refresh every 5 minutes, not on every tick. Point weights are fixed; measurements and rule states are recalculated.</span>
+            <span>{`Next cycle: ${clock(snap?.health.next_run_at)} IST`}</span>
+          </div>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
             {SYMBOLS.map((s) => {
               const c = cycle?.indices[s];
               return (
-                <div key={s} className="rounded-xl border border-[#3b667b] bg-[#091722] p-4 text-[14px] text-slate-300">
+                <div key={s} aria-label={`${s} analysis rules`} className="min-w-0 rounded-xl border border-[#3b667b] bg-[#091722] p-4 text-[14px] text-slate-300">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="font-bold text-white">{s}</span>
                     <span className={c?.quant.score && c.quant.score > 0 ? 'text-emerald-400' : 'text-rose-400'}>Score {num(c?.quant.score ?? null, 0)}</span>
@@ -607,10 +634,14 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
                     ))}
                     {(c?.quant.flags ?? []).map((f) => <li key={f} className="text-amber-300">⚠ {f}</li>)}
                   </ul>
+                  <div className="mt-3 border-t border-slate-700/50 pt-2 text-[12px] text-slate-400">
+                    {`Last computed: ${clock(c?.signal.timestamp)} IST`}
+                  </div>
                 </div>
               );
             })}
           </div>
+          </>
         )}
 
         {tab === 'alerts' && <AlertList alerts={alerts} />}
