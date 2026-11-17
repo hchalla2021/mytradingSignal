@@ -27,7 +27,7 @@
     "symbol": "NIFTY",
     "timeframe": "5m",
     "dataSource": "LIVE",
-    "timestamp": "2026-11-17T09:35:19.181511+05:30",
+    "timestamp": "2026-11-17T11:43:16.961819+05:30",
     "price": 25291.1,
     "changePct": 0.58,
     "three_factor": {
@@ -95,7 +95,7 @@
         "symbol": "NIFTY",
         "timeframe": "3m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-17T09:35:19.181108+05:30",
+        "timestamp": "2026-11-17T11:43:16.961517+05:30",
         "price": 25291.1,
         "changePct": 0.58,
         "three_factor": {
@@ -164,7 +164,7 @@
         "symbol": "NIFTY",
         "timeframe": "5m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-17T09:35:19.181511+05:30",
+        "timestamp": "2026-11-17T11:43:16.961819+05:30",
         "price": 25291.1,
         "changePct": 0.58,
         "three_factor": {
@@ -232,7 +232,7 @@
         "symbol": "NIFTY",
         "timeframe": "15m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-17T09:35:19.181593+05:30",
+        "timestamp": "2026-11-17T11:43:16.961901+05:30",
         "price": 25291.1,
         "changePct": 0.58,
         "three_factor": {
@@ -376,7 +376,7 @@
     "symbol": "BANKNIFTY",
     "timeframe": "5m",
     "dataSource": "LIVE",
-    "timestamp": "2026-11-17T09:35:19.181863+05:30",
+    "timestamp": "2026-11-17T11:43:16.962180+05:30",
     "price": 61575.9,
     "changePct": 0.89,
     "three_factor": {
@@ -444,7 +444,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "3m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-17T09:35:19.181638+05:30",
+        "timestamp": "2026-11-17T11:43:16.961942+05:30",
         "price": 61575.9,
         "changePct": 0.89,
         "three_factor": {
@@ -513,7 +513,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "5m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-17T09:35:19.181863+05:30",
+        "timestamp": "2026-11-17T11:43:16.962180+05:30",
         "price": 61575.9,
         "changePct": 0.89,
         "three_factor": {
@@ -581,7 +581,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "15m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-17T09:35:19.181927+05:30",
+        "timestamp": "2026-11-17T11:43:16.962247+05:30",
         "price": 61575.9,
         "changePct": 0.89,
         "three_factor": {
@@ -731,7 +731,7 @@
     "symbol": "SENSEX",
     "timeframe": "5m",
     "dataSource": "LIVE",
-    "timestamp": "2026-11-17T09:35:19.182188+05:30",
+    "timestamp": "2026-11-17T11:43:16.962547+05:30",
     "price": 82104.79,
     "changePct": 0.63,
     "three_factor": {
@@ -798,7 +798,7 @@
         "symbol": "SENSEX",
         "timeframe": "3m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-17T09:35:19.181966+05:30",
+        "timestamp": "2026-11-17T11:43:16.962310+05:30",
         "price": 82104.79,
         "changePct": 0.63,
         "three_factor": {
@@ -873,7 +873,7 @@
         "symbol": "SENSEX",
         "timeframe": "5m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-17T09:35:19.182188+05:30",
+        "timestamp": "2026-11-17T11:43:16.962547+05:30",
         "price": 82104.79,
         "changePct": 0.63,
         "three_factor": {
@@ -940,7 +940,7 @@
         "symbol": "SENSEX",
         "timeframe": "15m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-17T09:35:19.182249+05:30",
+        "timestamp": "2026-11-17T11:43:16.962610+05:30",
         "price": 82104.79,
         "changePct": 0.63,
         "three_factor": {

@@ -299,6 +299,61 @@ class StoreTests(unittest.TestCase):
 
 
 class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
+    def open_position_fixture(self):
+        executor, kite, plan = self.entry_fixture()
+        trade_id = executor.store.create_live_trade({
+            "signal_key": "trailing", "tag": "APRO1234567890", "day": DAY, "account_id": "owner",
+            **plan, "quantity": plan["lot_size"],
+        })
+        executor.store.update_live_trade(
+            trade_id, status="OPEN", entry_order_id="entry-1", entry_filled=65,
+            entry_price=100, trailing_sl=90, protection_order_id="stop-1")
+        orders = {
+            "entry-1": {"order_id": "entry-1", "status": "COMPLETE", "filled_quantity": 65, "average_price": 100},
+            "stop-1": {"order_id": "stop-1", "status": "TRIGGER PENDING", "order_type": "SL",
+                       "filled_quantity": 0, "trigger_price": 90},
+        }
+        positions = [{"exchange": "NFO", "tradingsymbol": plan["tradingsymbol"], "quantity": 65}]
+        return executor, kite, trade_id, orders, positions
+
+    def test_broker_trigger_keeps_trailing_above_t1_and_never_loosens(self):
+        executor, kite, trade_id, orders, positions = self.open_position_fixture()
+        stops = []
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            for bid in (112, 118, 116):
+                trade = executor.store.live_trade(trade_id)
+                kite.quote.return_value = {f"NFO:{trade['tradingsymbol']}": {
+                    "timestamp": NOW, "depth": {"buy": [{"price": bid}]},
+                }}
+                executor._manage_trade(kite, trade, orders, positions, CFG, NOW, CFG.square_off)
+                stops.append(executor.store.live_trade(trade_id)["trailing_sl"])
+                orders["stop-1"]["trigger_price"] = stops[-1]
+        self.assertGreater(stops[0], 100)
+        self.assertEqual(stops[1:], [108, 108])
+        self.assertEqual(kite.modify_order.call_count, 2)
+        last = kite.modify_order.call_args.kwargs
+        self.assertEqual((last["order_id"], last["order_type"], last["trigger_price"]), ("stop-1", "SL", 108))
+        self.assertLess(last["price"], last["trigger_price"])
+        kite.place_order.assert_not_called()
+
+    def test_failed_trailing_modification_preserves_last_broker_stop(self):
+        executor, kite, trade_id, orders, positions = self.open_position_fixture()
+        trade = executor.store.live_trade(trade_id)
+        kite.quote.return_value = {f"NFO:{trade['tradingsymbol']}": {
+            "timestamp": NOW, "depth": {"buy": [{"price": 118}]},
+        }}
+        kite.modify_order.side_effect = PermissionException("Stop modification rejected")
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            executor._manage_trade(kite, trade, orders, positions, CFG, NOW, CFG.square_off)
+        saved = executor.store.live_trade(trade_id)
+        self.assertEqual(saved["trailing_sl"], 90)
+        self.assertEqual(saved["protection_order_id"], "stop-1")
+        self.assertIn("Stop update failed", saved["error"])
+        kite.place_order.assert_not_called()
+        kite.cancel_order.assert_not_called()
+
     def test_acknowledged_unfilled_terminal_entry_is_reconciled(self):
         for status, expected in (("REJECTED", "REJECTED"), ("CANCELLED", "UNFILLED")):
             with self.subTest(status=status):
@@ -412,6 +467,10 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
             }]}
             kite.place_order.return_value = "stop-1"
             await engine.live_executor.reconcile_and_manage(engine.cfg, NOW, engine.cfg.square_off)
+            snapshot = await engine.snapshot()
+            self.assertEqual(snapshot["live_trades"][0]["entry_filled"], 65)
+            self.assertEqual(snapshot["live_trades"][0]["exit_filled"], 0)
+            self.assertIn("last_quote_at", snapshot["live_trades"][0])
         self.assertEqual(ai.complete_json.await_count, 1)
         self.assertEqual(kite.place_order.call_count, 2)
         stop_args = kite.place_order.call_args.kwargs

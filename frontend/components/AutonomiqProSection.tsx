@@ -63,6 +63,7 @@ interface LiveTrade {
   target1: number; target2: number; last_price: number | null; pnl: number | null;
   exit_price: number | null; exit_reason: string | null; created_at: string; opened_at: string | null;
   closed_at: string | null; risk_rupees: number; error?: string | null;
+  entry_filled?: number; exit_filled?: number; last_quote_at?: string | null;
 }
 interface Usage { calls: number; total_tokens: number; cost_usd: number; failures: number }
 
@@ -178,6 +179,13 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
 }) {
   const [open, setOpen] = useState(false);
   const signal = cycle?.signal;
+  const dataUnavailable = signal?.action === 'NO_TRADE' && signal.source === 'validation';
+  const strengthAvailable = !!signal && !['validation', 'risk-management'].includes(signal.source);
+  const strength = dataUnavailable ? 'Unavailable' : strengthAvailable ? signal?.strength : '—';
+  const positionQuantity = trade
+    ? Math.max(0, (trade.entry_filled ?? (trade.entry_price != null ? trade.quantity : 0)) - (trade.exit_filled ?? 0))
+    : 0;
+  const hasPosition = positionQuantity > 0;
   const isBuy = signal?.action === 'BUY_CE' || signal?.action === 'BUY_PE';
   const execution = signal?.execution;
   const entryBlocked = signal?.risk?.approved === false ||
@@ -193,17 +201,24 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
   const proposal = isBuy && !entryBlocked && snap?.session.phase === 'ACTIVE' && snap.config.enabled === true && snap.runtime.engine_enabled &&
     !snap.runtime.kill_switch && spotCurrent && quoteIsFresh(quoteAt, snap, current, elapsedMs)
     ? signal?.plan : null;
-  const action: Action = isBuy && !proposal ? 'WAIT' : signal?.action ?? 'NO_TRADE';
+  const action: Action = trade
+    ? trade.status.startsWith('EXIT') ? 'EXIT' : trade.status === 'OPEN' ? 'HOLD' : 'WAIT'
+    : isBuy && !proposal ? 'WAIT' : signal?.action ?? 'NO_TRADE';
   const style = ACTION_STYLE[action];
-  const bars = signal?.strength === 'High' ? 3 : signal?.strength === 'Medium' ? 2 : 1;
+  const statusLabel = trade
+    ? trade.status === 'OPEN' ? `OPEN ${trade.option_type}` : trade.status.replace(/_/g, ' ')
+    : dataUnavailable ? 'DATA UNAVAILABLE' : style.label;
+  const bars = !strengthAvailable ? 0 : signal?.strength === 'High' ? 3 : signal?.strength === 'Medium' ? 2 : 1;
   const entry = trade?.entry_price ?? trade?.entry ?? proposal?.entry ?? null;
-  const stop = trade?.trailing_sl ?? proposal?.stop_loss ?? null;
+  const stop = trade ? hasPosition ? trade.stop_loss : null : proposal?.stop_loss ?? null;
+  const trailing = hasPosition && trade ? trade.trailing_sl : null;
   const target1 = trade?.target1 ?? proposal?.target1 ?? null;
   const target2 = trade?.target2 ?? proposal?.target2 ?? null;
-  const livePrice = trade?.status === 'CLOSED' ? trade.exit_price : trade?.last_price;
+  const tradeQuoteFresh = !!trade && quoteIsFresh(Date.parse(trade.last_quote_at ?? ''), snap, current, elapsedMs);
+  const livePrice = hasPosition && tradeQuoteFresh ? trade?.last_price : null;
   const livePoints = livePrice != null && entry != null ? livePrice - entry : null;
   const livePercent = livePoints != null && entry ? livePoints * 100 / entry : null;
-  const trailPoints = trade && entry != null ? trade.trailing_sl - entry : null;
+  const trailPoints = trailing != null && entry != null ? trailing - entry : null;
   const trailPercent = trailPoints != null && entry ? trailPoints * 100 / entry : null;
   const failedChecks = signal?.risk?.checks.filter((check) => !check.passed) ?? [];
   const quantThreshold = num(typeof snap?.config.min_signal_score === 'number' ? snap.config.min_signal_score : null, 0);
@@ -214,7 +229,7 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
         <div>
           <div className="text-[14px] font-bold tracking-wider text-slate-300">{sym}</div>
           <div className={`mt-1 inline-flex items-center gap-2 rounded-lg ${style.bg} px-2.5 py-1 text-[16px] font-extrabold ${style.text}`}>
-            <span className={`h-2 w-2 rounded-full ${style.dot}`} />{style.label}
+            <span className={`h-2 w-2 rounded-full ${style.dot}`} />{statusLabel}
           </div>
         </div>
         <div className="text-right">
@@ -224,7 +239,7 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
               <span key={i} className={`h-3 w-1.5 rounded-sm ${i <= bars && signal ? style.dot : 'bg-slate-700'}`} />
             ))}
           </div>
-          <div className={`mt-0.5 text-[12px] font-semibold ${style.text}`}>{signal?.strength ?? '—'}</div>
+          <div className={`mt-0.5 text-[12px] font-semibold ${style.text}`}>{strength}</div>
         </div>
       </div>
 
@@ -235,6 +250,7 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
               AUTONOMIQ LIVE · {trade.status.replace(/_/g, ' ')}
             </div>
             <div className="break-all font-semibold text-white">{trade.tradingsymbol}</div>
+            {!hasPosition && <div>Entry pending or uncertain; protection starts after a confirmed fill.</div>}
           </>
         ) : proposal ? (
           <>
@@ -249,6 +265,7 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
         ) : (
           <div>{isBuy && entryBlocked ? 'ENTRY NOT CONFIRMED · check execution details below.' :
             isBuy ? 'Previous signal expired or unavailable; waiting for fresh data.' :
+            dataUnavailable ? 'Analysis data unavailable; entry and stop prices cannot be calculated.' :
             cycle ? 'No valid entry right now.' : 'Waiting for the first analysis.'}</div>
         )}
       </div>
@@ -256,8 +273,8 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
       <dl aria-label={`${sym} trade prices`} className="mt-2 grid grid-cols-2 gap-2 text-[14px]">
         {([
           ['Entry (Premium)', inr(entry), 'text-white'],
-          ['Stop Loss', inr(trade?.stop_loss ?? stop), 'text-rose-400'],
-          ['Trailing SL', inr(trade?.trailing_sl ?? null), 'text-amber-300'],
+          ['Stop Loss', inr(stop), 'text-rose-400'],
+          ['Trailing SL', inr(trailing), 'text-amber-300'],
           ['Target (T1 / T2)', `${inr(target1)} / ${inr(target2)}`, 'text-emerald-400'],
         ] as const).map(([label, value, color]) => (
           <div key={label} className="min-w-0 rounded-lg bg-[#0b1c28] px-2.5 py-2">
@@ -270,25 +287,32 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
         <div className="min-w-0 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-2">
           <div className="text-[12px] text-slate-300">Live P&L (pts / %)</div>
           <div className={`mt-0.5 font-bold ${livePoints != null && livePoints >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
-            {trade ? `${num(livePoints)} / ${num(livePercent)}% · ${inr(livePoints != null ? livePoints * trade.quantity : null)}` : '—'}
+            {livePoints != null ? `${num(livePoints)} / ${num(livePercent)}% · ${inr(livePoints * positionQuantity)}` : '—'}
           </div>
         </div>
         <div className="min-w-0 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2">
           <div className="text-[12px] text-slate-300">Trailing profit / loss (pts / %)</div>
           <div className={`mt-0.5 font-bold ${trailPoints == null ? 'text-slate-400' : trailPoints >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
-            {trade ? `${num(trailPoints)} / ${num(trailPercent)}%` : '—'}
+            {trailPoints != null ? `${num(trailPoints)} / ${num(trailPercent)}%` : '—'}
           </div>
         </div>
       </div>
       <div className="mt-2 text-[12px] leading-relaxed text-slate-400">
-        {trade ? `Broker-reconciled AUTONOMIQ position · estimated net P&L ${inr(trade.pnl)}.` :
+        {trade ? hasPosition ? `Broker-reconciled AUTONOMIQ position · estimated net P&L ${inr(trade.pnl)}.`
+          : 'AUTONOMIQ entry order recorded; no filled position confirmed.' :
           execution?.detail || (proposal ? 'Prices are indicative; no live order has been placed.' :
             'No AUTONOMIQ live position is open.')}
       </div>
       {trade?.error && <p role="status" className="mt-2 break-words text-[12px] text-amber-300">{trade.error}</p>}
+      {hasPosition && !tradeQuoteFresh && <p role="status" className="mt-2 text-[12px] text-amber-300">
+        Position quote stale or unavailable; live P&amp;L is hidden. Existing broker protection is unchanged.
+      </p>}
 
       <p className="mt-3 text-[14px] leading-relaxed text-slate-300">{signal?.reasoning ?? '—'}</p>
-      {cycle && <div className="mt-2 text-[12px] text-slate-400">
+      {dataUnavailable && cycle?.errors.length ? <ul aria-label={`${sym} data blockers`} className="mt-2 text-[12px] text-amber-300">
+        {cycle.errors.map((error) => <li key={error}>{error}</li>)}
+      </ul> : null}
+      {cycle && !dataUnavailable && <div className="mt-2 text-[12px] text-slate-400">
         {`Quant ${num(cycle.quant.score, 0)} · entry needs ≥ +${quantThreshold} CE / ≤ -${quantThreshold} PE and AI agreement.`}
       </div>}
       {failedChecks.length > 0 && <ul aria-label={`${sym} entry blockers`} className="mt-2 space-y-1 break-words text-[12px] text-amber-300">

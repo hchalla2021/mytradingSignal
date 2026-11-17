@@ -456,6 +456,7 @@ class AutonomiqOrchestrator:
                 "id", "created_at", "opened_at", "closed_at", "symbol", "exchange", "tradingsymbol",
                 "option_type", "quantity", "entry", "entry_price", "stop_loss", "trailing_sl", "target1",
                 "target2", "last_price", "exit_price", "exit_reason", "pnl", "risk_rupees", "status", "error",
+                "entry_filled", "exit_filled", "last_quote_at",
             )
         } for trade in live_rows]
         return {

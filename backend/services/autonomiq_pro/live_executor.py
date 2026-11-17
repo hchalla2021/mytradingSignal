@@ -13,7 +13,7 @@ from typing import Any
 from kiteconnect.exceptions import KiteException, TokenException
 
 from .config import AutonomiqConfig
-from .live_risk import EntryRisk, Exposure, entry_rejections
+from .live_risk import EntryRisk, Exposure, entry_rejections, trailing_stop
 from .market_data import IST, parse_ts
 from .store import Store
 
@@ -592,20 +592,17 @@ class LiveOrderExecutor:
             self._convert_protection_to_exit(kite, trade, protective, bid, cfg, close_reason, now)
             return
 
-        new_stop = current_stop
+        decision = trailing_stop(
+            entry=entry_price, initial_stop=float(trade["stop_loss"]), current_stop=current_stop,
+            highest_bid=highest, current_bid=bid, option_atr=max(float(trade["risk"]) / 2, TICK_SIZE),
+            quantity=owned, estimated_round_trip_cost=cfg.estimated_round_trip_cost_rupees,
+            estimated_exit_slippage=entry_price * owned * cfg.max_exit_slippage_pct / 100,
+            tick_size=TICK_SIZE,
+        )
+        new_stop = decision.stop
         if bid >= target1:
             new_stop = max(new_stop, _ceil_tick(entry_price + cfg.estimated_round_trip_cost_rupees / owned,
                                                 TICK_SIZE))
-        else:
-            from .live_risk import trailing_stop
-            decision = trailing_stop(
-                entry=entry_price, initial_stop=float(trade["stop_loss"]), current_stop=current_stop,
-                highest_bid=highest, current_bid=bid, option_atr=max(float(trade["risk"]) / 2, TICK_SIZE),
-                quantity=owned, estimated_round_trip_cost=cfg.estimated_round_trip_cost_rupees,
-                estimated_exit_slippage=entry_price * owned * cfg.max_exit_slippage_pct / 100,
-                tick_size=TICK_SIZE,
-            )
-            new_stop = decision.stop
         exit_filled = int(trade.get("exit_filled") or 0)
         exit_price = float(trade.get("exit_price") or 0)
         estimated_pnl = ((exit_price - entry_price) * exit_filled

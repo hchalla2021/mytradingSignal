@@ -135,6 +135,21 @@ Trailing profit/loss points and percent show the current stop relative to entry;
 are not realized P&L or a guaranteed fill price. Rejected and unfilled entry records
 remain in the trade history but are not displayed as open positions.
 
+Trailing calculations continue above T1: the stop keeps following the highest fresh
+bid once the cost-inclusive activation threshold is met, with the existing T1
+breakeven floor. A pullback never loosens the stop. The stored trailing price advances
+only after Zerodha acknowledges the SL modification; a rejected update retains the
+previous stop and raises an error.
+
+Live cards use the owned order/position state for their primary status, independently
+of the latest AI signal. Pending entries show their submitted entry limit, but do not
+show an active SL, trailing SL or position P&L before a fill is confirmed. Open-position
+live P&L requires a fresh position quote; stop prices remain visible if that quote is stale.
+When analysis inputs are missing, the card reports DATA UNAVAILABLE and unavailable
+signal strength instead of presenting a zero score as a low-strength signal. Without
+a qualified BUY plan or an owned order/position, entry and stop prices stay blank;
+WAIT is not an instruction to submit a broker order.
+
 The production deployment currently uses one backend worker and a persistent SQLite
 ledger. Do not scale AUTONOMIQ PRO to multiple backend replicas without shared
 coordination and ledger/lock changes.

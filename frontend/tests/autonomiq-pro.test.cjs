@@ -367,6 +367,64 @@ test('trailing profit uses the owned stop and terminal entry records are not pos
   }
 });
 
+test('missing analysis data shows unavailable strength, not a low-confidence trading signal', () => {
+  const snap = snapshot();
+  snap.cycle = cycle({
+    action: 'NO_TRADE', strength: 'Low', conviction: 0, timestamp: at(0), source: 'validation',
+    reasoning: 'Live spot tick missing or stale; Completed candles unavailable; Option chain unavailable',
+  });
+  const body = card(render(snap));
+  assert.match(body, /DATA UNAVAILABLE/);
+  assert.match(body, /Signal strength Unavailable/);
+  assert.doesNotMatch(body, /Signal strength Low/);
+  assert.match(body, /Entry \(Premium\) —/);
+  assert.match(body, /Stop Loss —/);
+  assert.match(body, /Trailing SL —/);
+});
+
+test('an owned open position controls status and prices even when analysis is unavailable', () => {
+  const snap = snapshot();
+  snap.cycle = cycle({
+    action: 'NO_TRADE', strength: 'Low', timestamp: at(0), source: 'validation', reasoning: 'Candles unavailable',
+  });
+  snap.live_trades = [paperTrade({ entry_filled: 65, exit_filled: 0, quantity: 65,
+    option_type: 'CE', entry_price: 100 })];
+  const body = card(render(snap));
+  assert.match(body, /OPEN CE/);
+  assert.doesNotMatch(body, /NO TRADE/);
+  assert.match(body, /Entry \(Premium\) ₹100\.00/);
+  assert.match(body, /Stop Loss ₹85\.00/);
+  assert.match(body, /Trailing SL ₹105\.00/);
+  assert.match(body, /Live P&L \(pts \/ %\) 12\.00 \/ 12\.00%/);
+});
+
+test('pending entry does not advertise an active stop or live position P&L', () => {
+  const snap = snapshot();
+  snap.live_trades = [paperTrade({ status: 'ENTRY_PENDING', entry_filled: 0, exit_filled: 0,
+    quantity: 65, entry_price: null, last_price: 112 })];
+  const body = card(render(snap));
+  assert.match(body, /ENTRY PENDING/);
+  assert.match(body, /Entry \(Premium\) ₹100\.00/);
+  assert.match(body, /Stop Loss —/);
+  assert.match(body, /Trailing SL —/);
+  assert.match(body, /Live P&L \(pts \/ %\) —/);
+  assert.match(body, /Trailing profit \/ loss \(pts \/ %\) —/);
+  assert.match(body, /protection starts after a confirmed fill/i);
+});
+
+test('stale owned-position quote hides live P&L but retains the broker stop prices', () => {
+  const snap = snapshot();
+  snap.live_trades = [paperTrade({ entry_filled: 65, exit_filled: 0, quantity: 65,
+    option_type: 'CE', entry_price: 100, last_quote_at: at(-61) })];
+  const body = card(render(snap));
+  assert.match(body, /OPEN CE/);
+  assert.match(body, /Stop Loss ₹85\.00/);
+  assert.match(body, /Trailing SL ₹105\.00/);
+  assert.match(body, /Live P&L \(pts \/ %\) —/);
+  assert.match(body, /quote stale or unavailable/i);
+  assert.doesNotMatch(body, /₹780\.00/);
+});
+
 test('legacy simulated positions and results are never displayed as live across tabs', () => {
   const snap = snapshot();
   snap.open_trades = [paperTrade()];
