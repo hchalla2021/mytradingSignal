@@ -73,6 +73,7 @@ def entry_rejections(
     must serialize this check with persisting its new intent.
     """
     loss = candidate.estimated_loss()
+    _finite(cfg.index_daily_loss_limit_rupees, "index daily loss limit", minimum=0)
     if type(trades_today) is not int or trades_today < 0:
         raise ValueError("trades_today must be a non-negative integer")
     if set(realized_net) != set(SYMBOLS):
@@ -98,11 +99,17 @@ def entry_rejections(
     global_reserved = sum(item.remaining_risk for item in all_exposures)
     reasons: list[str] = []
     if loss > cfg.max_risk_per_trade_rupees:
-        reasons.append(f"Estimated per-trade loss exceeds ₹{cfg.max_risk_per_trade_rupees:,.0f}")
-    if index_pnl - index_reserved - loss < -1000:
-        reasons.append("Index daily loss budget exhausted or reserved")
-    if global_pnl - global_reserved - loss < -cfg.daily_loss_limit_rupees:
-        reasons.append("Global daily loss budget exhausted or reserved")
+        reasons.append(f"Estimated per-trade loss ₹{loss:,.2f} exceeds ₹{cfg.max_risk_per_trade_rupees:,.2f}")
+    for scope, limit, pnl, reserved in (
+        ("Index", cfg.index_daily_loss_limit_rupees, index_pnl, index_reserved),
+        ("Global", cfg.daily_loss_limit_rupees, global_pnl, global_reserved),
+    ):
+        if pnl - reserved - loss < -limit:
+            reasons.append(
+                f"{scope} daily loss budget exceeded: estimated new loss including costs/slippage "
+                f"₹{loss:,.2f} exceeds available ₹{limit + pnl - reserved:,.2f} "
+                f"(limit ₹{limit:,.2f}; net P&L ₹{pnl:,.2f}; reserved ₹{reserved:,.2f})"
+            )
     if len(all_exposures) >= cfg.max_open_positions:
         reasons.append("Global position limit reached")
     if any(item.symbol == candidate.symbol for item in all_exposures):

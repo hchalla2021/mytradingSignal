@@ -7,12 +7,26 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_DB = Path(__file__).resolve().parents[2] / "data" / "autonomiq_pro" / "autonomiq_pro.sqlite3"
 
-MIGRATIONS: list[str] = [
+def _execution_tracking_migration(conn: sqlite3.Connection) -> str:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(live_trades)")}
+    tracking = (
+        ("protection_attempt", "INTEGER NOT NULL DEFAULT 0"),
+        ("exit_order_filled", "INTEGER NOT NULL DEFAULT 0"),
+        ("exit_order_value", "REAL NOT NULL DEFAULT 0"),
+        ("exit_attempt", "INTEGER NOT NULL DEFAULT 0"),
+    )
+    return "\n".join(
+        f"ALTER TABLE live_trades ADD COLUMN {name} {definition};"
+        for name, definition in tracking if name not in columns
+    )
+
+
+MIGRATIONS: list[str | Callable[[sqlite3.Connection], str]] = [
     # 1 — initial schema
     """
     CREATE TABLE runtime_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -73,11 +87,9 @@ MIGRATIONS: list[str] = [
     ALTER TABLE live_trades ADD COLUMN fees REAL NOT NULL DEFAULT 0;
     ALTER TABLE live_trades ADD COLUMN close_requested TEXT;
     ALTER TABLE live_trades ADD COLUMN last_broker_sync TEXT;
-    ALTER TABLE live_trades ADD COLUMN protection_attempt INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE live_trades ADD COLUMN exit_order_filled INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE live_trades ADD COLUMN exit_order_value REAL NOT NULL DEFAULT 0;
-    ALTER TABLE live_trades ADD COLUMN exit_attempt INTEGER NOT NULL DEFAULT 0;
     """,
+    _execution_tracking_migration,
+    "ALTER TABLE live_trades ADD COLUMN risk_model TEXT;",
 ]
 
 LIVE_TRADE_FIELDS = {
@@ -86,7 +98,7 @@ LIVE_TRADE_FIELDS = {
     "cancel_requested", "modifications", "expected_order_type", "expected_price", "expected_trigger", "error",
     "exit_order_id", "highest_bid", "last_quote_at", "fees", "close_requested", "last_broker_sync",
     "trailing_sl", "protection_attempt", "exit_order_filled", "exit_order_value",
-    "exit_attempt",
+    "exit_attempt", "risk_model", "target1", "target2",
 }
 
 
@@ -118,8 +130,10 @@ class Store:
             version = self.conn.execute("PRAGMA user_version").fetchone()[0]
             for index in range(version, len(MIGRATIONS)):
                 try:
+                    migration = MIGRATIONS[index]
+                    sql = migration(self.conn) if callable(migration) else migration
                     self.conn.executescript(
-                        f"BEGIN IMMEDIATE;\n{MIGRATIONS[index]}\nPRAGMA user_version = {index + 1};\nCOMMIT;"
+                        f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {index + 1};\nCOMMIT;"
                     )
                 except sqlite3.Error:
                     self.conn.rollback()
@@ -176,9 +190,13 @@ class Store:
                    (_now(), status, summary, json.dumps(payload, default=str) if payload is not None else None,
                     error, cycle_id))
 
-    def last_cycle(self, completed_only: bool = True) -> dict | None:
-        where = "WHERE payload IS NOT NULL" if completed_only else ""
-        rows = self._all(f"SELECT * FROM analysis_cycles {where} ORDER BY id DESC LIMIT 1")
+    def last_cycle(self, completed_only: bool = True, *, trigger: str | None = None) -> dict | None:
+        filters = ["payload IS NOT NULL"] if completed_only else []
+        if trigger is not None:
+            filters.append("trigger = ?")
+        where = "WHERE " + " AND ".join(filters) if filters else ""
+        rows = self._all(f"SELECT * FROM analysis_cycles {where} ORDER BY id DESC LIMIT 1",
+                         (trigger,) if trigger is not None else ())
         if not rows:
             return None
         row = rows[0]

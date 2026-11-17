@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import time
@@ -14,6 +15,10 @@ PREFIX = "AUTONOMIQ_PRO_"
 ANALYSIS_START = time(9, 0)
 ANALYSIS_END = time(15, 20)
 ANALYSIS_INTERVAL_MINUTES = 5
+LIVE_EXECUTION_DISABLED_REASON = (
+    "Live orders are disabled for this deployment. Local execution requires "
+    "AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE=true with AUTONOMIQ_PRO_DEPLOYMENT_MODE=local."
+)
 
 # USD per million tokens (input, output) — Anthropic published list prices.
 MODEL_PRICES = {
@@ -58,6 +63,7 @@ class AutonomiqConfig:
     enabled: bool = True
     ai_enabled: bool = False
     deployment_mode: str = "local"
+    allow_local_live: bool = False
     live_execution_allowed: bool = False
     analysis_start: time = ANALYSIS_START
     analysis_interval_minutes: float = ANALYSIS_INTERVAL_MINUTES
@@ -93,6 +99,7 @@ class AutonomiqConfig:
     max_trades_per_day: int = 5
     daily_loss_limit_rupees: float = 3000
     max_risk_per_trade_rupees: float = 1000
+    index_daily_loss_limit_rupees: float = 1000
 
     @property
     def ai_configured(self) -> bool:
@@ -113,6 +120,7 @@ class AutonomiqConfig:
         return {
             "enabled": self.enabled, "ai_enabled": self.ai_enabled, "ai_configured": self.ai_configured,
             "deployment_mode": self.deployment_mode,
+            "allow_local_live": self.allow_local_live,
             "live_execution_allowed": self.live_execution_allowed,
             "analysis_interval_minutes": self.analysis_interval_minutes,
             "analysis_start": self.analysis_start.strftime("%H:%M"),
@@ -136,6 +144,7 @@ class AutonomiqConfig:
             "max_open_positions": self.max_open_positions, "max_trades_per_day": self.max_trades_per_day,
             "daily_loss_limit_rupees": self.daily_loss_limit_rupees,
             "max_risk_per_trade_rupees": self.max_risk_per_trade_rupees,
+            "index_daily_loss_limit_rupees": self.index_daily_loss_limit_rupees,
         }
 
 
@@ -150,12 +159,21 @@ def load_config() -> AutonomiqConfig:
 
     effort = (g("AI_REASONING_EFFORT") or "low").strip().lower()
     deployment_mode = (g("DEPLOYMENT_MODE") or "local").strip().lower()
-    live_execution_allowed = deployment_mode == "production"
+    allow_local_live = _bool(g("ALLOW_LOCAL_LIVE"), False)
+    live_execution_allowed = deployment_mode == "production" or (deployment_mode == "local" and allow_local_live)
     holidays = frozenset(day.strip() for day in (g("EXTRA_HOLIDAYS") or "").split(",") if day.strip())
+    budget_error = "AUTONOMIQ_PRO_INDEX_DAILY_LOSS_LIMIT_RUPEES must be finite and non-negative"
+    try:
+        index_daily_loss_limit = float(g("INDEX_DAILY_LOSS_LIMIT_RUPEES") or "1000")
+    except ValueError as exc:
+        raise ValueError(budget_error) from exc
+    if not math.isfinite(index_daily_loss_limit) or index_daily_loss_limit < 0:
+        raise ValueError(budget_error)
     return AutonomiqConfig(
         enabled=_bool(g("ENABLED"), True),
         ai_enabled=_bool(g("AI_ENABLED"), False),
         deployment_mode=deployment_mode,
+        allow_local_live=allow_local_live,
         live_execution_allowed=live_execution_allowed,
         analysis_start=ANALYSIS_START,
         analysis_interval_minutes=ANALYSIS_INTERVAL_MINUTES,
@@ -191,4 +209,5 @@ def load_config() -> AutonomiqConfig:
         max_trades_per_day=int(_num(g("MAX_TRADES_PER_DAY"), 5, 1, 50)),
         daily_loss_limit_rupees=_num(g("DAILY_LOSS_LIMIT_RUPEES"), 3000, 0, 10_000_000),
         max_risk_per_trade_rupees=_num(g("MAX_RISK_PER_TRADE_RUPEES"), 1000, 0, 10_000_000),
+        index_daily_loss_limit_rupees=index_daily_loss_limit,
     )

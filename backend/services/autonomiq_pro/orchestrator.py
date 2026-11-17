@@ -9,20 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time as clock
 from datetime import datetime, timedelta
 from typing import Any
 
+from kiteconnect.exceptions import KiteException
+
 from . import agents
 from .ai_client import AIClient, AIUnavailable
-from .config import ANALYSIS_END, ANALYSIS_INTERVAL_MINUTES, AutonomiqConfig, load_config
-from .live_executor import LiveExecutionBlocked, LiveOrderExecutor
+from .config import ANALYSIS_END, ANALYSIS_INTERVAL_MINUTES, LIVE_EXECUTION_DISABLED_REASON, AutonomiqConfig, load_config
+from .live_executor import OWN_TAG_PREFIX, TERMINAL_ORDERS, LiveExecutionBlocked, LiveOrderExecutor
 from .market_data import IST, SYMBOLS, MarketDataCollector, parse_ts
-from .risk import build_plan, manage_position, validate
+from .risk import build_plan, hybrid_levels, manage_position, tick, validate
 from .store import Store
 
 logger = logging.getLogger(__name__)
-LOOP_SECONDS = 5
+LOOP_SECONDS = 1
+BROKER_RECONCILE_SECONDS = 5
 CYCLE_TIMEOUT_S = 240
 # Let Kite publish the just-closed candle before analysing it.
 CANDLE_SETTLE_S = 5
@@ -93,6 +97,8 @@ class AutonomiqOrchestrator:
         self.started_at: datetime | None = None
         self.quote_failures = 0
         self._last_actions: dict[str, tuple[str, str, str]] = {}
+        self._last_broker_management_at: float | None = None
+        self._broker_update_pending = threading.Event()
 
     # ── lifecycle ────────────────────────────────────────────────────
     async def start(self) -> None:
@@ -102,6 +108,7 @@ class AutonomiqOrchestrator:
         await asyncio.to_thread(self.store.set_state, "auto_paper_trading", False)
         await self.live_executor.deactivate(self.cfg)
         self.started_at = datetime.now(IST)
+        self._last_broker_management_at = None
         self.store.audit("system", "engine_start", {
             "live_trading_enabled": False, "live_execution_allowed": self.cfg.live_execution_allowed,
             "config": self.cfg.public(),
@@ -134,8 +141,14 @@ class AutonomiqOrchestrator:
         }
 
     # ── main loop ────────────────────────────────────────────────────
+    def broker_update(self, update: dict) -> None:
+        if (str(update.get("tag") or "").startswith(OWN_TAG_PREFIX)
+                and str(update.get("status") or "").upper() in TERMINAL_ORDERS):
+            self._broker_update_pending.set()
+
     async def _loop(self) -> None:
         while True:
+            started = clock.monotonic()
             try:
                 await self._tick()
             except asyncio.CancelledError:
@@ -143,7 +156,7 @@ class AutonomiqOrchestrator:
             except Exception as exc:  # noqa: BLE001 — isolate every failure
                 self.last_error = f"loop: {type(exc).__name__}"
                 logger.exception("AUTONOMIQ PRO loop iteration failed")
-            await asyncio.sleep(LOOP_SECONDS)
+            await asyncio.sleep(max(0, LOOP_SECONDS - (clock.monotonic() - started)))
 
     async def _tick(self) -> None:
         self.cfg = load_config()
@@ -151,9 +164,19 @@ class AutonomiqOrchestrator:
         self.last_loop_at = now
         session = session_state(self.cfg, now)
         if self.cfg.live_execution_allowed:
-            await self.live_executor.reconcile_and_manage(self.cfg, now, self.cfg.square_off)
-            if not self.runtime()["live_trading_enabled"]:
-                await self.live_executor.cancel_pending_entries()
+            self.live_executor.mark_positions(self.cfg, now)
+            management_at = clock.monotonic()
+            update_due = (self._broker_update_pending.is_set()
+                          and (self._last_broker_management_at is None
+                               or management_at - self._last_broker_management_at >= LOOP_SECONDS))
+            if (self._last_broker_management_at is None
+                    or management_at - self._last_broker_management_at >= BROKER_RECONCILE_SECONDS
+                    or update_due):
+                self._broker_update_pending.clear()
+                self._last_broker_management_at = management_at
+                await self.live_executor.reconcile_and_manage(self.cfg, now, self.cfg.square_off)
+                if not self.runtime()["live_trading_enabled"]:
+                    await self.live_executor.cancel_pending_entries()
         if self.store.get_state("kill_switch", False):
             for trade in self.store.open_live_trades(limit=10000):
                 if not trade.get("close_requested"):
@@ -168,7 +191,11 @@ class AutonomiqOrchestrator:
         if self.next_run_at is None:
             self.next_run_at = slot_run_at(now, ANALYSIS_INTERVAL_MINUTES)
         if now >= self.next_run_at:
-            self.trigger("SCHEDULED")
+            if self.store.get_state("ai_slot") == slot_start(now, ANALYSIS_INTERVAL_MINUTES).isoformat():
+                self.next_run_at = next_slot(now, ANALYSIS_INTERVAL_MINUTES)
+                logger.info("AUTONOMIQ PRO AI slot already claimed; next scheduled run %s", self.next_run_at.isoformat())
+            else:
+                self.trigger("SCHEDULED")
 
     def trigger(self, trigger: str) -> bool:
         if self._cycle_task and not self._cycle_task.done():
@@ -225,16 +252,31 @@ class AutonomiqOrchestrator:
             analysis = agents.MarketAnalysisAgent().run(data, day)
             quant = agents.QuantResearchAgent().run(analysis, data)
             contexts[symbol] = {"spot": spot, "data": data, "analysis": analysis, "quant": quant,
-                                "collected_at": collected_at}
+                                "collected_at": collected_at, "options_pending": not spot.get("price")}
         for symbol, ctx in contexts.items():
             ctx["spot"] = await self._spot(symbol, datetime.now(IST))
+            price = ctx["spot"].get("price")
+            if ctx["options_pending"] and not ctx["data"].get("options") and ctx["spot"]["fresh"] and price:
+                try:
+                    ctx["data"]["options"] = await asyncio.to_thread(
+                        self.collector.collect_options_sync, symbol, price, datetime.now(IST),
+                    )
+                except Exception as exc:  # noqa: BLE001 — broker failures leave this index in NO_TRADE
+                    ctx["data"]["errors"].append(f"options: {type(exc).__name__}")
+                    logger.warning("AUTONOMIQ PRO option-chain recovery failed for %s: %s", symbol, type(exc).__name__)
+                else:
+                    ctx["collected_at"] = datetime.now(IST)
+                    ctx["quant"] = agents.QuantResearchAgent().run(ctx["analysis"], ctx["data"])
 
         ai_state = self.ai.status(cfg, day)
         big_move = trigger == "SCHEDULED" and self._big_move(contexts)
         model = cfg.model_for("EVENT" if big_move else trigger)
         skip, ai_contexts = self._ai_gate(cfg, now, day, session, trigger, contexts)
         live_rows = self.store.open_live_trades(limit=10000) if cfg.live_execution_allowed else []
-        live_by_symbol = {trade["symbol"]: trade for trade in live_rows}
+        live_by_symbol = {
+            trade["symbol"]: trade for trade in live_rows
+            if int(trade.get("entry_filled") or 0) > int(trade.get("exit_filled") or 0)
+        }
         live_positions = [{
             "symbol": trade["symbol"], "tradingsymbol": trade["tradingsymbol"],
             "option_type": trade["option_type"], "quantity": max(
@@ -242,7 +284,7 @@ class AutonomiqOrchestrator:
             "entry": trade.get("entry_price") or trade["entry"], "stop_loss": trade["stop_loss"],
             "trailing_stop": trade["trailing_sl"], "target1": trade["target1"], "target2": trade["target2"],
             "last_price": trade.get("last_price"), "status": trade["status"],
-        } for trade in live_rows]
+        } for trade in live_by_symbol.values()]
         strategy: dict | None = None
         if ai_state == "ACTIVE" and ai_contexts:
             # Claim the slot before calling so no other path can spend tokens in the same slot.
@@ -266,8 +308,18 @@ class AutonomiqOrchestrator:
             decision_session = session_state(cfg, decision_at)
             ctx["spot"] = await self._spot(symbol, decision_at)
             ai_sig = (strategy or {}).get("indices", {}).get(symbol) if strategy else None
+            live_trade = next((
+                trade for trade in self.store.open_live_trades(limit=10000)
+                if trade["symbol"] == symbol
+                and int(trade.get("entry_filled") or 0) > int(trade.get("exit_filled") or 0)
+            ), None) if cfg.live_execution_allowed else None
             signal = validator.run(symbol, ctx, ai_sig, cfg.min_signal_score, cfg.require_ai_confirmation, ai_state,
-                                   has_open_position=symbol in live_by_symbol)
+                                   has_open_position=live_trade is not None)
+            if signal["action"] == "HOLD" and live_trade and live_trade["status"] != "OPEN":
+                signal.update(action="WAIT", reasoning=(
+                    f"Current broker state: {live_trade['status'].replace('_', ' ')}. "
+                    "Awaiting execution reconciliation; protection is not assumed."
+                ))
             plan = None
             if signal["action"] in ("BUY_CE", "BUY_PE"):
                 elapsed = max(0, (decision_at - ctx["collected_at"]).total_seconds())
@@ -277,6 +329,22 @@ class AutonomiqOrchestrator:
                         if leg and leg.get("trade_age_s") is not None:
                             leg["trade_age_s"] += elapsed
                 plan = build_plan(symbol, signal["action"], ctx["data"]["options"], ctx["analysis"]["atr_5m"], cfg)
+                if not plan.get("error") and cfg.live_execution_allowed:
+                    try:
+                        index_candles, option_candles = await asyncio.to_thread(
+                            self.collector.execution_candles, symbol, plan["exchange"],
+                            plan["tradingsymbol"], datetime.now(IST))
+                        levels = hybrid_levels(
+                            entry=plan["entry"], bid=plan["quote"]["bid"],
+                            quantity=plan["lot_size"], delta=plan["quote"]["delta"],
+                            option_type=plan["option_type"], index_candles=index_candles,
+                            option_candles=option_candles, cfg=cfg)
+                        plan.update(levels, risk_rupees=levels["risk"] * plan["lot_size"],
+                                    trailing_sl=tick(plan["entry"] - levels["risk"] * .5),
+                                    risk_reward=max(2, cfg.min_risk_reward))
+                    except (KiteException, ValueError, KeyError) as exc:
+                        logger.warning("AUTONOMIQ PRO hybrid plan unavailable for %s: %s", symbol, exc)
+                        plan = {"error": f"Hybrid plan unavailable: {str(exc)[:240]}"}
                 if plan.get("error"):
                     signal.update(action="WAIT", reasoning=f"{signal['reasoning']} No trade: {plan['error']}.")
                     plan = None
@@ -292,13 +360,19 @@ class AutonomiqOrchestrator:
                     cfg=cfg, session=decision_session, symbol=symbol, decision=signal,
                     plan=plan or {}, cycle_id=cycle_id, now=decision_at,
                 )
-            elif signal["action"] == "EXIT" and symbol in live_by_symbol:
-                trade = live_by_symbol[symbol]
-                self.store.update_live_trade(trade["id"], close_requested="AI_EXIT")
+            elif signal["action"] == "EXIT" and live_trade is not None:
+                self.store.update_live_trade(live_trade["id"], close_requested="AI_EXIT")
                 execution = {"status": "EXIT_REQUESTED", "detail": "AUTONOMIQ exit will be reconciled by the backend manager"}
             elif signal["action"] in ("BUY_CE", "BUY_PE"):
-                execution = {"status": "LIVE_DISABLED", "detail": "Local/dev analysis cannot place real orders"}
-            decision = {"symbol": symbol, **signal, "plan": plan, "execution": execution,
+                execution = {"status": "LIVE_DISABLED", "detail": LIVE_EXECUTION_DISABLED_REASON}
+            live_risk_checks = execution.pop("risk_checks", [])
+            if live_risk_checks:
+                signal["risk"]["checks"].extend(live_risk_checks)
+                signal["risk"]["approved"] = all(check["passed"] for check in signal["risk"]["checks"])
+            quant_action, _ = agents.quant_action(ctx, cfg.min_signal_score)
+            decision = {"symbol": symbol, **signal, "quant_action": quant_action,
+                        "ai_action": ai_sig["action"] if ai_sig else None,
+                        "plan": plan, "execution": execution,
                         "timestamp": decision_at.isoformat()}
             self.store.add_decision(cycle_id, day, decision)
             self._alert_on_change(symbol, decision)
@@ -405,7 +479,7 @@ class AutonomiqOrchestrator:
             if changes.get("kill_switch") is True or changes.get("engine_enabled") is False:
                 raise LiveExecutionBlocked("Live trading cannot be enabled while disabling the engine or engaging the kill switch")
             if not self.cfg.live_execution_allowed:
-                raise LiveExecutionBlocked("Live orders are available only in the production deployment")
+                raise LiveExecutionBlocked(LIVE_EXECUTION_DISABLED_REASON)
             if confirm_live != "ENABLE_AUTONOMIQ_LIVE_TRADING":
                 raise LiveExecutionBlocked("Explicit live-trading confirmation is required")
             if self.runtime()["kill_switch"]:
@@ -435,13 +509,47 @@ class AutonomiqOrchestrator:
                 await self.live_executor.reconcile_and_manage(self.cfg, datetime.now(IST), self.cfg.square_off)
         return self.runtime()
 
+    def quote_pins(self, catalog: list[dict]) -> dict:
+        """Keep owned options on the shared quote feed, even after ATM rotation."""
+        if self.store.conn is None or not self.cfg.live_execution_allowed:
+            return {}
+        from services.aqte_engine import Contract
+
+        owned = {(t["exchange"], t["tradingsymbol"]) for t in self.store.open_live_trades(limit=10000)
+                 if int(t.get("entry_filled") or 0) > int(t.get("exit_filled") or 0)}
+        return {
+            int(row["instrument_token"]): Contract(
+                row["name"], int(row["instrument_token"]), row["tradingsymbol"], row["exchange"],
+                row["instrument_type"], float(row["strike"]), str(row["expiry"])[:10],
+                int(row["lot_size"]), float(row["tick_size"]),
+            )
+            for row in catalog if (row["exchange"], row["tradingsymbol"]) in owned
+        }
+
     # ── snapshot / health ────────────────────────────────────────────
     async def snapshot(self) -> dict:
         now = datetime.now(IST)
         day = now.strftime("%Y-%m-%d")
         spots = {s: await self._spot(s, now) for s in SYMBOLS}
         last = self.store.last_cycle()
+        scheduled = last if last and last["trigger"] == "SCHEDULED" else self.store.last_cycle(trigger="SCHEDULED")
+        scheduled_payload = scheduled["payload"] if scheduled else None
+        last_scheduled = None
+        if scheduled_payload and scheduled_payload["at"][:10] == day:
+            last_scheduled = {
+                "at": scheduled_payload["at"], "ai_state": scheduled_payload["ai_state"],
+                "signals": {
+                    symbol: {key: data["signal"].get(key) for key in (
+                        "action", "quant_action", "ai_action", "reasoning", "execution", "timestamp",
+                    )}
+                    for symbol, data in scheduled_payload["indices"].items()
+                },
+            }
         live_rows = self.store.live_trades(50) if self.cfg.live_execution_allowed else []
+        for trade in live_rows:
+            mark = self.live_executor.quote_mark(trade, self.cfg, now)
+            if mark is not None:
+                trade.update(mark)
         live_closed = [trade for trade in self.store.live_trades(10000)
                        if trade["status"] == "CLOSED"] if self.cfg.live_execution_allowed else []
         live_pnl = round(sum(float(trade.get("pnl") or 0) for trade in live_closed), 2)
@@ -456,13 +564,13 @@ class AutonomiqOrchestrator:
                 "id", "created_at", "opened_at", "closed_at", "symbol", "exchange", "tradingsymbol",
                 "option_type", "quantity", "entry", "entry_price", "stop_loss", "trailing_sl", "target1",
                 "target2", "last_price", "exit_price", "exit_reason", "pnl", "risk_rupees", "status", "error",
-                "entry_filled", "exit_filled", "last_quote_at",
+                "entry_filled", "exit_filled", "last_quote_at", "last_broker_sync", "risk_model",
             )
         } for trade in live_rows]
         return {
             "generated_at": now.isoformat(), "config": self.cfg.public(), "runtime": self.runtime(),
             "session": session_state(self.cfg, now), "health": self.health(now),
-            "spots": spots, "cycle": last["payload"] if last else None,
+            "spots": spots, "cycle": last["payload"] if last else None, "last_scheduled": last_scheduled,
             "alerts": self.store.alerts(30), "decisions": self.store.decisions(30),
             "trades": [], "open_trades": [], "live_trades": public_live_trades,
             "live_performance": live_performance,
@@ -493,7 +601,7 @@ class AutonomiqOrchestrator:
             "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
             "cycle_running": bool(self._cycle_task and not self._cycle_task.done()),
             "last_error": self.last_error,
-            "live_execution": "AVAILABLE" if self.cfg.live_execution_allowed else "PRODUCTION_ONLY",
+            "live_execution": "AVAILABLE" if self.cfg.live_execution_allowed else "DISABLED_BY_CONFIG",
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "uptime_s": round(clock.time() - self.started_at.timestamp()) if self.started_at else None,
         }
@@ -516,10 +624,12 @@ def _quant_summary(contexts: dict[str, dict], ai_state: str) -> str:
 
 
 _orchestrator: AutonomiqOrchestrator | None = None
+_orchestrator_lock = threading.Lock()
 
 
 def get_orchestrator() -> AutonomiqOrchestrator:
     global _orchestrator
-    if _orchestrator is None:
-        _orchestrator = AutonomiqOrchestrator()
-    return _orchestrator
+    with _orchestrator_lock:
+        if _orchestrator is None:
+            _orchestrator = AutonomiqOrchestrator()
+        return _orchestrator

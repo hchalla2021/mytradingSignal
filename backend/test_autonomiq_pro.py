@@ -1,12 +1,14 @@
 import json
 import os
 import sqlite3
+import threading
 import unittest
 from datetime import datetime, time, timedelta
+from types import SimpleNamespace
 from unittest import mock
 
 import httpx
-from kiteconnect.exceptions import PermissionException, TokenException
+from kiteconnect.exceptions import NetworkException, PermissionException, TokenException
 
 from services.autonomiq_pro import agents, indicators as ind
 from services.autonomiq_pro.ai_client import AIClient, AIUnavailable
@@ -15,7 +17,7 @@ from services.autonomiq_pro.market_data import IST, MarketDataCollector, complet
 from services.autonomiq_pro.live_risk import EntryRisk, Exposure, entry_rejections, trailing_stop
 from services.autonomiq_pro.live_executor import LiveOrderExecutor
 from services.autonomiq_pro.orchestrator import analysis_window_open, session_state
-from services.autonomiq_pro.risk import build_plan, manage_position, validate
+from services.autonomiq_pro.risk import build_plan, hybrid_levels, manage_position, validate
 from services.autonomiq_pro.store import MIGRATIONS, Store
 
 DAY = "2026-03-10"
@@ -42,6 +44,12 @@ def chain(**ce_overrides):
     ]}
 
 
+def execution_history(price=100, half_range=3.33):
+    return [{"date": (NOW - timedelta(minutes=5 * (20 - i))).isoformat(),
+             "open": price, "high": price + half_range, "low": price - half_range,
+             "close": price, "volume": 1000} for i in range(20)]
+
+
 def anthropic_reply(payload, usage=None):
     return httpx.Response(200, json={"content": [{"type": "text", "text": json.dumps(payload)}],
                                      "usage": usage or {"input_tokens": 1000, "output_tokens": 200},
@@ -55,8 +63,8 @@ class ConfigTests(unittest.TestCase):
             cfg = load_config()
         defaults = AutonomiqConfig()
         fields = ("max_risk_per_trade_rupees", "max_trades_per_day",
-                  "max_open_positions", "daily_loss_limit_rupees")
-        expected = (1000, 5, 3, 3000)
+                  "max_open_positions", "daily_loss_limit_rupees", "index_daily_loss_limit_rupees")
+        expected = (1000, 5, 3, 3000, 1000)
         self.assertEqual(tuple(getattr(defaults, field) for field in fields), expected)
         self.assertEqual(tuple(getattr(cfg, field) for field in fields), expected)
         self.assertEqual(tuple(cfg.public()[field] for field in fields), expected)
@@ -93,6 +101,40 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.public()["analysis_start"], "09:00")
         self.assertEqual(cfg.public()["analysis_end"], "15:20")
 
+    def test_local_live_requires_explicit_opt_in_and_unknown_modes_stay_blocked(self):
+        for mode, opt_in, expected in (
+            ("local", None, False), ("local", "false", False), ("local", "true", True),
+            ("local", "invalid", False), ("production", None, True), ("development", "true", False),
+        ):
+            with self.subTest(mode=mode, opt_in=opt_in):
+                env = {"AUTONOMIQ_PRO_DEPLOYMENT_MODE": mode}
+                if opt_in is not None:
+                    env["AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE"] = opt_in
+                with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={}), \
+                        mock.patch.dict(os.environ, env, clear=True):
+                    cfg = load_config()
+                self.assertEqual(cfg.live_execution_allowed, expected)
+                self.assertEqual(cfg.public()["live_execution_allowed"], expected)
+
+    def test_index_daily_budget_override_is_explicit_and_invalid_values_fail_closed(self):
+        for mode, value, expected in (("local", "2000", 2000), ("production", None, 1000)):
+            with self.subTest(mode=mode):
+                env = {"AUTONOMIQ_PRO_DEPLOYMENT_MODE": mode, "AUTONOMIQ_PRO_MAX_RISK_PER_TRADE_RUPEES": "2000"}
+                if value is not None:
+                    env["AUTONOMIQ_PRO_INDEX_DAILY_LOSS_LIMIT_RUPEES"] = value
+                with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value=env), \
+                        mock.patch.dict(os.environ, {}, clear=True):
+                    cfg = load_config()
+                self.assertEqual(cfg.index_daily_loss_limit_rupees, expected)
+                self.assertEqual(cfg.public()["index_daily_loss_limit_rupees"], expected)
+        for value in ("nan", "inf", "-1", "invalid"):
+            with self.subTest(value=value), \
+                    mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={
+                        "AUTONOMIQ_PRO_INDEX_DAILY_LOSS_LIMIT_RUPEES": value}), \
+                    mock.patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(ValueError, "INDEX_DAILY_LOSS_LIMIT_RUPEES"):
+                    load_config()
+
     def test_analysis_runs_through_1520_but_entry_window_remains_separate(self):
         cfg = AutonomiqConfig()
         start = IST.localize(datetime.combine(NOW.date(), time(9, 0)))
@@ -104,6 +146,24 @@ class ConfigTests(unittest.TestCase):
 
 
 class IndicatorTests(unittest.TestCase):
+    def test_execution_history_caches_completed_bars_and_rejects_stale_or_invalid_history(self):
+        gateway = mock.Mock()
+        gateway.historical.return_value = [*execution_history(), {
+            **execution_history()[-1], "date": NOW.isoformat(), "high": 9999,
+        }]
+        collector = MarketDataCollector(gateway)
+        first = collector._execution_candles(11, NOW)
+        self.assertEqual(len(first), 20)
+        self.assertLess(max(c["high"] for c in first), 200)
+        self.assertEqual(collector._execution_candles(11, NOW + timedelta(seconds=20)), first)
+        self.assertEqual(gateway.historical.call_count, 1)
+        with self.assertRaisesRegex(ValueError, "Latest completed"):
+            collector._execution_candles(11, NOW + timedelta(minutes=10))
+        gateway.historical.return_value = execution_history()
+        gateway.historical.return_value[-1]["low"] = float("nan")
+        with self.assertRaisesRegex(ValueError, "OHLC"):
+            collector._execution_candles(12, NOW)
+
     def test_collector_supplies_enough_full_hourly_bars_for_ema50(self):
         def historical(token, start, end, interval):
             minutes = 15 if interval == "15minute" else 5
@@ -149,6 +209,33 @@ class IndicatorTests(unittest.TestCase):
     def test_implied_vol_round_trips_black_scholes(self):
         price = ind.bs_price(22500, 22500, 7 / 365, 0.065, 0.15, "CE")
         self.assertAlmostEqual(ind.implied_vol(price, 22500, 22500, 7 / 365, 0.065, "CE"), 0.15, places=3)
+
+
+class StreamedOptionQuoteTests(unittest.TestCase):
+    def test_only_the_matching_fresh_full_depth_option_is_used(self):
+        from services.aqte_engine import Contract, Tick
+
+        contract = Contract("NIFTY", 91, "HELDCE", "NFO", "CE", 22500, "2026-03-12", 65, .05)
+        market = SimpleNamespace(lock=threading.Lock(), engine=SimpleNamespace(
+            contracts={91: contract}, options={}))
+        collector = MarketDataCollector(mock.Mock())
+        with mock.patch("services.aqte_service.get_aqte_service", return_value=market):
+            for exchange_age, receipt_age, bid_qty in ((1, .2, 65), (6, .2, 65), (1, 6, 65),
+                                                       (-4, .2, 65), (1, .2, 0)):
+                market.engine.options[91] = Tick(
+                    "NIFTY", "option", 91, 112.5, NOW.timestamp() - exchange_age,
+                    NOW.timestamp() - receipt_age, bid=112, ask=113, bid_quantity=bid_qty,
+                    ask_quantity=65,
+                )
+                quote = collector.cached_option_quote("NFO", "HELDCE", NOW)
+                if (exchange_age, receipt_age, bid_qty) == (1, .2, 65):
+                    self.assertEqual(quote["depth"]["buy"][0]["price"], 112)
+                    self.assertEqual(quote["timestamp"], NOW - timedelta(seconds=1))
+                else:
+                    self.assertIsNone(quote)
+            self.assertIsNone(collector.cached_option_quote("BFO", "HELDCE", NOW))
+            self.assertIsNone(collector.cached_option_quote("NFO", "OTHERCE", NOW))
+        collector.gateway.quote.assert_not_called()
 
 
 class SessionTests(unittest.TestCase):
@@ -200,16 +287,72 @@ class SessionTests(unittest.TestCase):
 
 
 class StoreTests(unittest.TestCase):
+    def test_scheduled_lookup_survives_manual_failed_and_running_cycles(self):
+        store = memory_store()
+        self.addCleanup(store.close)
+        scheduled_id = store.start_cycle("SCHEDULED")
+        store.finish_cycle(scheduled_id, "OK", payload={"at": NOW.isoformat()})
+        manual_id = store.start_cycle("MANUAL")
+        store.finish_cycle(manual_id, "OK", payload={"at": NOW.isoformat()})
+        store.finish_cycle(store.start_cycle("SCHEDULED"), "FAILED", error="TokenException")
+        running_id = store.start_cycle("SCHEDULED")
+        self.assertEqual(store.last_cycle()["id"], manual_id)
+        self.assertEqual(store.last_cycle(trigger="SCHEDULED")["id"], scheduled_id)
+        self.assertEqual(store.last_cycle(False, trigger="SCHEDULED")["id"], running_id)
+
     def test_migrates_and_rejects_duplicate_paper_signal(self):
         store = memory_store()
         self.addCleanup(store.close)
-        self.assertEqual(store.migrate(), 4)
+        self.assertEqual(store.migrate(), len(MIGRATIONS))
         trade = {"signal_key": "k1", "day": DAY, "symbol": "NIFTY", "exchange": "NFO", "tradingsymbol": "X",
                  "option_type": "CE", "lot_size": 65, "lots": 1, "entry": 100, "stop_loss": 85,
                  "trailing_sl": 85, "target1": 115, "target2": 130, "risk": 15}
         self.assertIsNotNone(store.open_paper_trade(trade))
         self.assertIsNone(store.open_paper_trade(trade))
         self.assertEqual(len(store.open_trades()), 1)
+
+    def test_version4_tracking_repair_preserves_filled_trade_and_existing_columns(self):
+        tracking = (
+            ("protection_attempt", "INTEGER NOT NULL DEFAULT 0"),
+            ("exit_order_filled", "INTEGER NOT NULL DEFAULT 0"),
+            ("exit_order_value", "REAL NOT NULL DEFAULT 0"),
+            ("exit_attempt", "INTEGER NOT NULL DEFAULT 0"),
+        )
+        for already_present in (0, 2, 4):
+            with self.subTest(already_present=already_present):
+                store = Store(":memory:")
+                self.addCleanup(store.close)
+                store.conn = sqlite3.connect(":memory:")
+                store.conn.row_factory = sqlite3.Row
+                for migration in MIGRATIONS[:4]:
+                    store.conn.executescript(migration)
+                store.conn.execute("PRAGMA user_version = 4")
+                for name, definition in tracking[:already_present]:
+                    store.conn.execute(f"ALTER TABLE live_trades ADD COLUMN {name} {definition}")
+                trade_id = store.create_live_trade({
+                    "signal_key": "existing-fill", "tag": "APRO1234567890", "day": DAY, "symbol": "SENSEX",
+                    "exchange": "BFO", "tradingsymbol": "SENSEXTESTCE", "option_type": "CE",
+                    "account_id": "owner", "quantity": 20, "lot_size": 20, "lots": 1,
+                    "entry": 100, "stop_loss": 90, "trailing_sl": 90, "target1": 110,
+                    "target2": 120, "risk": 10, "risk_rupees": 200,
+                })
+                store.update_live_trade(
+                    trade_id, status="PROTECTION_PENDING", entry_order_id="existing-entry",
+                    entry_filled=20, entry_price=99.5)
+                if already_present:
+                    store.update_live_trade(trade_id, protection_attempt=2)
+                self.assertEqual(store.migrate(), len(MIGRATIONS))
+                self.assertEqual(store.migrate(), len(MIGRATIONS))
+                trade = store.live_trade(trade_id)
+                self.assertEqual((trade["status"], trade["entry_filled"], trade["entry_price"]),
+                                 ("PROTECTION_PENDING", 20, 99.5))
+                self.assertEqual(trade["entry_order_id"], "existing-entry")
+                self.assertIsNone(trade["risk_model"])
+                self.assertEqual(trade["protection_attempt"], 2 if already_present else 0)
+                self.assertTrue(all(name in trade for name, _ in tracking))
+                store.update_live_trade(trade_id, protection_attempt=3, exit_order_filled=0,
+                                        exit_order_value=0, exit_attempt=1)
+                self.assertEqual(store.live_trade(trade_id)["exit_attempt"], 1)
 
     def test_partial_protective_fill_is_recorded_once_across_reconciliation(self):
         store = memory_store()
@@ -299,6 +442,279 @@ class StoreTests(unittest.TestCase):
 
 
 class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tick_rounding_cannot_exceed_entry_slippage_cap(self):
+        executor, kite, plan = self.entry_fixture()
+        plan["entry"] = 100.01
+        kite.quote.return_value = {f"NFO:{plan['tradingsymbol']}": {
+            "timestamp": NOW, "depth": {"buy": [{"price": 100}], "sell": [{"price": 100.51}]},
+        }}
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            result = await executor.submit_entry(
+                cfg=AutonomiqConfig(live_execution_allowed=True), session=session_state(CFG, NOW),
+                symbol="NIFTY", decision={"action": "BUY_CE", "source": "ai+quant", "risk": {"approved": True}},
+                plan=plan, cycle_id=1, now=NOW)
+        self.assertIn("Tick-rounded entry", result["detail"])
+        kite.place_order.assert_not_called()
+
+    def test_missing_protective_order_id_never_claims_an_open_protected_position(self):
+        executor, kite, trade_id, orders, positions = self.open_position_fixture()
+        executor.store.update_live_trade(trade_id, status="PROTECTION_PENDING", protection_order_id=None)
+        orders.pop("stop-1")
+        kite.place_order.return_value = None
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            executor._manage_trade(kite, executor.store.live_trade(trade_id), orders, positions, CFG, NOW, CFG.square_off)
+        saved = executor.store.live_trade(trade_id)
+        self.assertEqual(saved["status"], "PROTECTION_UNKNOWN")
+        self.assertIsNone(saved["protection_order_id"])
+        self.assertIn("uncertain", saved["error"])
+
+    async def test_hybrid_entry_blocks_missing_history_and_never_shrinks_an_unaffordable_stop(self):
+        for unavailable in (True, False):
+            with self.subTest(unavailable=unavailable):
+                executor, kite, plan = self.entry_fixture()
+                if unavailable:
+                    executor.collector.execution_candles.side_effect = ValueError("Latest completed history missing")
+                else:
+                    executor.collector.execution_candles.return_value = (
+                        execution_history(22500, 5), execution_history(100, 25))
+                kite.quote.return_value = {f"NFO:{plan['tradingsymbol']}": {
+                    "timestamp": NOW, "depth": {"buy": [{"price": 99.5}], "sell": [{"price": 100}]},
+                }}
+                with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+                    dt.now.return_value = NOW
+                    result = await executor.submit_entry(
+                        cfg=AutonomiqConfig(live_execution_allowed=True), session=session_state(CFG, NOW),
+                        symbol="NIFTY", decision={"action": "BUY_CE", "source": "ai+quant",
+                                                 "risk": {"approved": True}}, plan=plan, cycle_id=1, now=NOW)
+                self.assertEqual(result["status"], "BLOCKED", result)
+                self.assertIn("history" if unavailable else "Estimated loss", result["detail"])
+                self.assertEqual(executor.store.open_live_trades(), [])
+                kite.place_order.assert_not_called()
+
+    def test_hybrid_trailing_uses_actual_atr_preserves_stop_on_missing_data_and_honours_exit(self):
+        executor, kite, trade_id, orders, positions = self.open_position_fixture()
+        executor.store.update_live_trade(trade_id, risk_model="HYBRID_V1", highest_bid=119, target2=150)
+        executor.collector.execution_candles.return_value = (execution_history(22500, 5), execution_history(100, 1))
+        key = f"NFO:{positions[0]['tradingsymbol']}"
+        kite.quote.return_value = {key: {"timestamp": NOW, "depth": {"buy": [{"price": 118}]}}}
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            executor._manage_trade(kite, executor.store.live_trade(trade_id), orders, positions, CFG, NOW, CFG.square_off)
+            self.assertEqual(kite.modify_order.call_args.kwargs["trigger_price"], 115)
+            self.assertEqual(executor.store.live_trade(trade_id)["trailing_sl"], 115)
+            orders["stop-1"]["trigger_price"] = 115
+            kite.modify_order.reset_mock()
+            executor.collector.execution_candles.side_effect = ValueError("Stale history")
+            executor._manage_trade(kite, executor.store.live_trade(trade_id), orders, positions, CFG, NOW, CFG.square_off)
+            self.assertEqual(executor.store.live_trade(trade_id)["trailing_sl"], 115)
+            self.assertIn("existing stop retained", executor.store.live_trade(trade_id)["error"])
+            kite.modify_order.assert_not_called()
+            kite.quote.return_value[key]["depth"]["buy"][0]["price"] = 114
+            executor._manage_trade(kite, executor.store.live_trade(trade_id), orders, positions, CFG, NOW, CFG.square_off)
+            self.assertEqual(kite.modify_order.call_args.kwargs["order_type"], "LIMIT")
+            self.assertEqual(executor.store.live_trade(trade_id)["status"], "EXIT_PENDING")
+        kite.place_order.assert_not_called()
+
+    def test_hybrid_targets_use_confirmed_fill_without_widening_structural_stop(self):
+        executor, kite, trade_id, orders, positions = self.open_position_fixture()
+        executor.store.update_live_trade(trade_id, risk_model="HYBRID_V1", status="ENTRY_PENDING",
+                                        entry_filled=0, entry_price=None, protection_order_id=None)
+        orders["entry-1"]["average_price"] = 98
+        orders.pop("stop-1")
+        kite.place_order.return_value = "new-stop"
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            executor._manage_trade(kite, executor.store.live_trade(trade_id), orders, positions, CFG, NOW, CFG.square_off)
+        saved = executor.store.live_trade(trade_id)
+        self.assertEqual((saved["entry_price"], saved["stop_loss"], saved["trailing_sl"]), (98, 90, 90))
+        self.assertEqual((saved["target1"], saved["target2"]), (112.6, 123.9))
+        self.assertEqual(kite.place_order.call_args.kwargs["trigger_price"], 90)
+
+    async def test_banknifty_position_allows_separate_nifty_and_sensex_orders_with_reserved_risk(self):
+        executor, kite, _ = self.entry_fixture()
+        plans = {}
+        for symbol, quantity in (("NIFTY", 65), ("BANKNIFTY", 30), ("SENSEX", 20)):
+            option = leg(f"{symbol}TESTCE")
+            option["lot_size"] = quantity
+            plans[symbol] = build_plan(symbol, "BUY_CE", {
+                "atm": 22500, "expiry": "2026-03-12", "exchange": "BFO" if symbol == "SENSEX" else "NFO",
+                "strikes": [{"strike": 22500, "CE": option}],
+            }, atr_5m=5, cfg=CFG)
+        bank = plans["BANKNIFTY"]
+        bank_id = executor.store.create_live_trade({
+            **bank, "quantity": 30, "day": DAY, "account_id": "owner",
+            "signal_key": "held-bank", "tag": "APRO1234567890",
+        })
+        executor.store.update_live_trade(
+            bank_id, status="OPEN", entry_filled=30, entry_price=100, last_price=99.5,
+            entry_order_id="bank-entry", protection_order_id="bank-stop", trailing_sl=90,
+        )
+        kite.orders.return_value = [{
+            "order_id": "bank-stop", "tag": "APRO1234567890S0000", "status": "TRIGGER PENDING",
+        }]
+        kite.positions.return_value = {"net": [{
+            "exchange": bank["exchange"], "tradingsymbol": bank["tradingsymbol"], "quantity": 30,
+        }]}
+        kite.quote.side_effect = lambda keys: {key: {
+            "timestamp": NOW, "depth": {"buy": [{"price": 99.5}], "sell": [{"price": 100}]},
+        } for key in keys}
+        executor.collector.gateway.instruments.side_effect = lambda exchange, today: [{
+            "name": symbol, "tradingsymbol": plan["tradingsymbol"], "instrument_type": "CE",
+            "expiry": NOW.date() + timedelta(days=2), "lot_size": plan["lot_size"], "tick_size": .05,
+        } for symbol, plan in plans.items() if plan["exchange"] == exchange]
+        kite.place_order.side_effect = ["nifty-entry", "sensex-entry"]
+        cfg = AutonomiqConfig(deployment_mode="production", live_execution_allowed=True)
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            for symbol in ("NIFTY", "SENSEX"):
+                result = await executor.submit_entry(
+                    cfg=cfg, session=session_state(cfg, NOW), symbol=symbol,
+                    decision={"action": "BUY_CE", "source": "ai+quant", "risk": {"approved": True}},
+                    plan=plans[symbol], cycle_id=1, now=NOW)
+                self.assertEqual(result["status"], "ENTRY_PENDING", result)
+        self.assertEqual({t["symbol"] for t in executor.store.open_live_trades()},
+                         {"NIFTY", "BANKNIFTY", "SENSEX"})
+        self.assertEqual(executor.store.live_trade(bank_id)["status"], "OPEN")
+        self.assertEqual([(c.kwargs["exchange"], c.kwargs["quantity"])
+                          for c in kite.place_order.call_args_list], [("NFO", 65), ("BFO", 20)])
+        kite.modify_order.assert_not_called()
+        kite.cancel_order.assert_not_called()
+
+    async def test_position_closed_during_ai_reply_cannot_produce_a_phantom_hold_or_exit(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        for status, action in (("CLOSED", "HOLD"), ("CLOSED", "EXIT"),
+                               ("RECONCILIATION_REQUIRED", "HOLD"), ("OPEN", "HOLD")):
+            with self.subTest(status=status, action=action):
+                executor, kite, trade_id, _, _ = self.open_position_fixture()
+                collector = executor.collector
+                collector.spot = mock.AsyncMock(return_value={"price": 22500, "age_s": 1})
+                collector.collect_sync.side_effect = lambda symbol, *args: {
+                    "symbol": symbol, "errors": [], "candles": {"5m": [1], "15m": [1]},
+                    "options": chain(), "futures": None,
+                }
+
+                async def reply(*args):
+                    self.assertEqual(len(args[-1]["autonomiq_live_positions"]), 1)
+                    executor.store.update_live_trade(trade_id, status=status,
+                                                     exit_filled=65 if status == "CLOSED" else 0)
+                    return {"indices": {"NIFTY": {"action": action, "conviction": 80, "reasoning": "Manage"}}}
+
+                ai = mock.Mock()
+                ai.status.return_value = "ACTIVE"
+                ai.complete_json = mock.AsyncMock(side_effect=reply)
+                engine = AutonomiqOrchestrator(executor.store, collector, ai)
+                engine.cfg = AutonomiqConfig(ai_enabled=True, live_execution_allowed=True)
+                with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt, \
+                        mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 5}), \
+                        mock.patch.object(agents.QuantResearchAgent, "run", return_value={
+                            "score": 80, "bias": "BULLISH", "flags": [], "factors": [], "pcr": 1, "atm_iv": 14,
+                        }):
+                    dt.now.return_value = NOW
+                    payload = await engine.run_cycle("SCHEDULED")
+                signal = payload["indices"]["NIFTY"]["signal"]
+                self.assertEqual(signal["action"], "HOLD" if status == "OPEN" else "WAIT")
+                if status == "RECONCILIATION_REQUIRED":
+                    self.assertIn("protection is not assumed", signal["reasoning"])
+                self.assertIsNone(executor.store.live_trade(trade_id)["close_requested"])
+                ai.complete_json.assert_awaited_once()
+                self.assertEqual(kite.method_calls, [])
+
+    def test_stricter_quote_age_falls_back_to_rest_instead_of_skipping_position_management(self):
+        executor, kite, trade_id, orders, positions = self.open_position_fixture()
+        executor.collector.cached_option_quote.return_value = {
+            "timestamp": NOW - timedelta(seconds=2), "depth": {"buy": [{"price": 119}]},
+        }
+        trade = executor.store.live_trade(trade_id)
+        kite.quote.return_value = {
+            f"NFO:{trade['tradingsymbol']}": {"timestamp": NOW, "depth": {"buy": [{"price": 112}]}},
+        }
+        cfg = AutonomiqConfig(max_option_quote_age_seconds=1)
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            executor._manage_trade(kite, trade, orders, positions, cfg, NOW, cfg.square_off)
+        kite.quote.assert_called_once()
+        self.assertEqual(executor.store.live_trade(trade_id)["last_price"], 112)
+
+    def test_completed_owned_stop_recovers_a_transient_order_position_mismatch_without_orders(self):
+        for filled, tag in ((65, "APRO1234567890S0000"), (15, "APRO1234567890S0000"), (65, "MANUAL")):
+            with self.subTest(filled=filled, tag=tag):
+                executor, kite, trade_id, orders, _ = self.open_position_fixture()
+                with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+                    dt.now.return_value = NOW
+                    executor._manage_trade(
+                        kite, executor.store.live_trade(trade_id), orders, [], CFG, NOW, CFG.square_off)
+                    self.assertEqual(executor.store.live_trade(trade_id)["status"], "RECONCILIATION_REQUIRED")
+                    orders["stop-1"].update({
+                        "tag": tag, "exchange": "NFO", "tradingsymbol": executor.store.live_trade(trade_id)["tradingsymbol"],
+                        "transaction_type": "SELL", "quantity": 65, "filled_quantity": filled,
+                        "average_price": 89.9, "order_type": "LIMIT",
+                        "status": "COMPLETE" if filled == 65 else "OPEN",
+                    })
+                    executor._manage_trade(
+                        kite, executor.store.live_trade(trade_id), orders, [], CFG, NOW, CFG.square_off)
+                    saved = executor.store.live_trade(trade_id)
+                    if tag == "MANUAL":
+                        self.assertEqual((saved["status"], saved["exit_filled"]), ("RECONCILIATION_REQUIRED", 0))
+                    elif filled == 65:
+                        self.assertEqual((saved["status"], saved["exit_filled"], saved["exit_price"]),
+                                         ("CLOSED", 65, 89.9))
+                        self.assertEqual(saved["exit_reason"], "STOP_LOSS")
+                        self.assertIsNone(saved["error"])
+                    else:
+                        self.assertEqual((saved["status"], saved["exit_filled"]), ("RECONCILIATION_REQUIRED", 15))
+                    executor._manage_trade(kite, saved, orders, [], CFG, NOW, CFG.square_off)
+                    self.assertEqual(executor.store.live_trade(trade_id)["exit_filled"], saved["exit_filled"])
+                self.assertEqual(kite.method_calls, [])
+
+    async def test_streamed_marks_use_actual_partial_fills_without_mutating_snapshot_or_stops(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        executor, kite, trade_id, _, _ = self.open_position_fixture()
+        executor.store.update_live_trade(
+            trade_id, entry_price=98, exit_filled=15, exit_price=110, last_price=105, pnl=49,
+        )
+        collector = executor.collector
+        collector.spot = mock.AsyncMock(return_value={"price": 22500, "age_s": .1})
+        collector.cached_option_quote.return_value = {
+            "timestamp": NOW, "depth": {"buy": [{"price": 112}]},
+        }
+        ai = mock.Mock()
+        ai.status.return_value = "ACTIVE"
+        engine = AutonomiqOrchestrator(executor.store, collector, ai)
+        engine.cfg = AutonomiqConfig(deployment_mode="production", live_execution_allowed=True)
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            public = (await engine.snapshot())["live_trades"][0]
+        self.assertEqual((public["entry_price"], public["last_price"], public["pnl"]), (98, 112, 730))
+        self.assertEqual(executor.store.live_trade(trade_id)["last_price"], 105)
+        executor.mark_positions(engine.cfg, NOW)
+        saved = executor.store.live_trade(trade_id)
+        self.assertEqual((saved["last_price"], saved["pnl"], saved["trailing_sl"]), (112, 730, 90))
+        for timestamp in (NOW - timedelta(seconds=6), NOW + timedelta(seconds=4)):
+            collector.cached_option_quote.return_value["timestamp"] = timestamp
+            self.assertIsNone(executor.quote_mark(saved, engine.cfg, NOW))
+        self.assertEqual(kite.method_calls, [])
+
+    def test_streamed_peak_between_broker_passes_drives_only_acknowledged_trailing(self):
+        executor, kite, trade_id, orders, positions = self.open_position_fixture()
+        for bid in (119, 112):
+            executor.collector.cached_option_quote.return_value = {
+                "timestamp": NOW, "depth": {"buy": [{"price": bid}]},
+            }
+            executor.mark_positions(CFG, NOW)
+        trade = executor.store.live_trade(trade_id)
+        self.assertEqual((trade["highest_bid"], trade["trailing_sl"]), (119, 90))
+        kite.modify_order.assert_not_called()
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            executor._manage_trade(kite, trade, orders, positions, CFG, NOW, CFG.square_off)
+        self.assertEqual(kite.modify_order.call_args.kwargs["trigger_price"], 109)
+        self.assertEqual(executor.store.live_trade(trade_id)["trailing_sl"], 109)
+        kite.quote.assert_not_called()
+
     def open_position_fixture(self):
         executor, kite, plan = self.entry_fixture()
         trade_id = executor.store.create_live_trade({
@@ -382,16 +798,100 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
         kite.quote.return_value = {f"NFO:{plan['tradingsymbol']}": {
             "timestamp": NOW, "depth": {"buy": [{"price": 99.5}], "sell": [{"price": 100}]},
         }}
-        kite.place_order.side_effect = PermissionException("Order access not permitted from this IP")
+        kite.place_order.side_effect = NetworkException("Connection reset before acknowledgement")
         with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
             dt.now.return_value = NOW
             result = executor._submit_entry_sync(CFG, "NIFTY", {"action": "BUY_CE"}, plan, 1, NOW)
             retry = executor._submit_entry_sync(CFG, "NIFTY", {"action": "BUY_CE"}, plan, 1, NOW)
         self.assertEqual(result["status"], "ENTRY_UNKNOWN")
-        self.assertIn("this IP", result["detail"])
-        self.assertIn("this IP", executor.store.open_live_trades()[0]["error"])
+        self.assertIn("Connection reset", result["detail"])
+        self.assertIn("Connection reset", executor.store.open_live_trades()[0]["error"])
         self.assertEqual(retry["status"], "BLOCKED")
         kite.place_order.assert_called_once()
+
+    def test_explicit_permission_denial_is_rejected_without_retry_or_reserved_budget(self):
+        executor, kite, plan = self.entry_fixture()
+        kite.quote.return_value = {f"NFO:{plan['tradingsymbol']}": {
+            "timestamp": NOW, "depth": {"buy": [{"price": 99.5}], "sell": [{"price": 100}]},
+        }}
+        kite.place_order.side_effect = PermissionException("IP is not allowed to place orders for this app")
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            result = executor._submit_entry_sync(CFG, "NIFTY", {"action": "BUY_CE"}, plan, 1, NOW)
+            retry = executor._submit_entry_sync(CFG, "NIFTY", {"action": "BUY_CE"}, plan, 1, NOW)
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("not allowed", result["detail"])
+        self.assertEqual(executor.store.live_trade(result["trade_id"])["status"], "REJECTED")
+        self.assertEqual(executor.store.open_live_trades(), [])
+        self.assertEqual(executor._risk_state(DAY)[1:], ([], [], 0))
+        self.assertEqual(retry["status"], "DUPLICATE")
+        kite.place_order.assert_called_once()
+
+    def test_legacy_ip_denial_requires_same_day_empty_broker_evidence(self):
+        for case in ("refused", "network", "position", "older", "order", "filled"):
+            with self.subTest(case=case):
+                executor, kite, plan = self.entry_fixture()
+                day = (NOW.date() - timedelta(days=1)).isoformat() if case == "older" else DAY
+                trade_id = executor.store.create_live_trade({
+                    "signal_key": case, "tag": "APRO1234567890", "day": day, "account_id": "owner",
+                    **plan, "quantity": plan["lot_size"],
+                })
+                denial = ("Entry result uncertain (PermissionException: IP (203.0.113.10) "
+                          "is not allowed to place orders for this app); reconcile before retry")
+                if case == "network":
+                    denial = "Entry result uncertain (NetworkException: timeout); reconcile before retry"
+                executor.store.update_live_trade(
+                    trade_id, status="ENTRY_UNKNOWN", error=denial, entry_filled=1 if case == "filled" else 0)
+                positions = [{"exchange": "NFO", "tradingsymbol": plan["tradingsymbol"], "quantity": 65}] \
+                    if case == "position" else []
+                orders = {"existing": {
+                    "order_id": "existing", "tag": "APRO1234567890E", "status": "OPEN", "filled_quantity": 0,
+                }} if case == "order" else {}
+                with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+                    dt.now.return_value = NOW
+                    executor._manage_trade(
+                        kite, executor.store.live_trade(trade_id), orders, positions, CFG, NOW, CFG.square_off)
+                expected = "REJECTED" if case == "refused" else "ENTRY_UNKNOWN"
+                self.assertEqual(executor.store.live_trade(trade_id)["status"], expected)
+                if case == "refused":
+                    self.assertEqual(executor.store.open_live_trades(), [])
+                    self.assertEqual(executor.store.audit_entries()[0]["action"], "live_entry_rejected")
+                kite.place_order.assert_not_called()
+                kite.modify_order.assert_not_called()
+                kite.cancel_order.assert_not_called()
+
+    async def test_unfilled_intent_is_not_sent_to_ai_as_a_held_position(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        executor, kite, plan = self.entry_fixture()
+        trade_id = executor.store.create_live_trade({
+            "signal_key": "unknown", "tag": "APRO1234567890", "day": DAY, "account_id": "owner",
+            **plan, "quantity": plan["lot_size"],
+        })
+        executor.store.update_live_trade(trade_id, status="ENTRY_UNKNOWN")
+        collector = executor.collector
+        collector.spot = mock.AsyncMock(return_value={"price": 22500, "age_s": 1})
+        collector.collect_sync.side_effect = lambda symbol, *args: {
+            "symbol": symbol, "errors": [], "candles": {"5m": [1], "15m": [1]},
+            "options": chain(), "futures": None,
+        }
+        ai = mock.Mock()
+        ai.status.return_value = "ACTIVE"
+        ai.complete_json = mock.AsyncMock(return_value={
+            "indices": {"NIFTY": {"action": "HOLD", "conviction": 80, "reasoning": "Manage position"}}})
+        engine = AutonomiqOrchestrator(executor.store, collector, ai)
+        engine.cfg = AutonomiqConfig(ai_enabled=True, api_key="test-key", live_execution_allowed=True)
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt, \
+                mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 5}), \
+                mock.patch.object(agents.QuantResearchAgent, "run", return_value={
+                    "score": 80, "bias": "BULLISH", "flags": [], "factors": [], "pcr": 1, "atm_iv": 14,
+                }):
+            dt.now.return_value = NOW
+            payload = await engine.run_cycle("SCHEDULED")
+        self.assertEqual(ai.complete_json.call_args.args[-1]["autonomiq_live_positions"], [])
+        self.assertEqual(payload["indices"]["NIFTY"]["signal"]["action"], "WAIT")
+        self.assertEqual(executor.store.live_trade(trade_id)["status"], "ENTRY_UNKNOWN")
+        kite.place_order.assert_not_called()
 
     async def test_risk_rejection_reports_failed_check_without_broker_access(self):
         executor, kite, plan = self.entry_fixture()
@@ -441,7 +941,13 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
         ai.complete_json = mock.AsyncMock(return_value={
             "indices": {"NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"}}})
         engine = AutonomiqOrchestrator(executor.store, collector, ai)
-        engine.cfg = AutonomiqConfig(ai_enabled=True, api_key="test-key", live_execution_allowed=True)
+        with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={}), \
+                mock.patch.dict(os.environ, {
+                    "AUTONOMIQ_PRO_DEPLOYMENT_MODE": "local", "AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE": "true",
+                    "AUTONOMIQ_PRO_AI_ENABLED": "true", "AUTONOMIQ_PRO_ANTHROPIC_API_KEY": "test-key",
+                }, clear=True):
+            engine.cfg = load_config()
+        self.assertTrue(engine.cfg.live_execution_allowed)
         with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as odt, \
                 mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as edt, \
                 mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 5}), \
@@ -479,6 +985,50 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(stop_args["price"], stop_args["trigger_price"])
         self.assertEqual(executor.store.open_live_trades()[0]["protection_order_id"], "stop-1")
 
+    async def test_cost_aware_rejection_updates_signal_risk_without_submitting(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        executor, kite, plan = self.entry_fixture()
+        collector = executor.collector
+        collector.spot = mock.AsyncMock(return_value={"price": 22500, "age_s": 1})
+        collector.collect_sync.side_effect = lambda symbol, *args: {
+            "symbol": symbol, "errors": [], "candles": {"5m": [1], "15m": [1]},
+            "options": chain(), "futures": None,
+        }
+        kite.quote.return_value = {f"NFO:{plan['tradingsymbol']}": {
+            "timestamp": NOW, "depth": {"buy": [{"price": 99.5}], "sell": [{"price": 100}]},
+        }}
+        ai = mock.Mock()
+        ai.status.return_value = "ACTIVE"
+        ai.complete_json = mock.AsyncMock(return_value={
+            "indices": {"NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"}}})
+        engine = AutonomiqOrchestrator(executor.store, collector, ai)
+        engine.cfg = AutonomiqConfig(
+            ai_enabled=True, api_key="test-key", live_execution_allowed=True,
+            max_risk_per_trade_rupees=2000, estimated_round_trip_cost_rupees=300)
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as odt, \
+                mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as edt, \
+                mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 5}), \
+                mock.patch.object(agents.QuantResearchAgent, "run", return_value={
+                    "score": 80, "bias": "BULLISH", "flags": [], "factors": [], "pcr": 1, "atm_iv": 14,
+                }):
+            odt.now.return_value = edt.now.return_value = NOW
+            payload = await engine.run_cycle("SCHEDULED")
+        signal = payload["indices"]["NIFTY"]["signal"]
+        self.assertEqual(signal["execution"]["status"], "BLOCKED")
+        self.assertFalse(signal["risk"]["approved"])
+        failed = [check for check in signal["risk"]["checks"] if not check["passed"]]
+        self.assertEqual(len(failed), 1)
+        self.assertIn("1,015.00", failed[0]["detail"])
+        self.assertIn("1,000.00", failed[0]["detail"])
+        self.assertNotIn("risk_checks", signal["execution"])
+        self.assertEqual(executor.store.open_live_trades(), [])
+        kite.place_order.assert_not_called()
+        saved = next(d for d in executor.store.decisions() if d["symbol"] == "NIFTY")
+        self.assertFalse(saved["approved"])
+        self.assertEqual(executor.store.last_cycle()["payload"]["indices"]["NIFTY"]["signal"]["risk"],
+                         signal["risk"])
+
     async def test_expired_broker_session_returns_reconnect_error_and_keeps_live_off(self):
         from fastapi import FastAPI
         from routers import autonomiq_pro
@@ -510,6 +1060,53 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(executor.store.get_state("live_trading_enabled", False))
                 kite.place_order.assert_not_called()
 
+    async def test_local_live_control_requires_opt_in_confirmation_and_broker_preflight(self):
+        from fastapi import FastAPI
+        from routers import autonomiq_pro
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        executor, kite, _ = self.entry_fixture()
+        executor.store.set_state("live_trading_enabled", False)
+        ai = mock.Mock()
+        ai.status.return_value = "ACTIVE"
+        engine = AutonomiqOrchestrator(executor.store, executor.collector, ai)
+        engine.live_executor = executor
+        app = FastAPI()
+        app.include_router(autonomiq_pro.router)
+        app.dependency_overrides[autonomiq_pro.owner] = lambda: "owner"
+        for opt_in in ("false", "true"):
+            with self.subTest(opt_in=opt_in):
+                with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={}), \
+                        mock.patch.dict(os.environ, {
+                            "AUTONOMIQ_PRO_DEPLOYMENT_MODE": "local",
+                            "AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE": opt_in, "AUTONOMIQ_PRO_AI_ENABLED": "true",
+                            "AUTONOMIQ_PRO_ANTHROPIC_API_KEY": "test-key",
+                        }, clear=True):
+                    engine.cfg = load_config()
+                with mock.patch.object(autonomiq_pro, "_service", return_value=engine):
+                    async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test",
+                    ) as client:
+                        unconfirmed = await client.post("/api/autonomiq-pro/control",
+                                                        json={"live_trading_enabled": True})
+                        self.assertEqual(unconfirmed.status_code, 409)
+                        self.assertFalse(executor.store.get_state("live_trading_enabled"))
+                        kite.profile.assert_not_called()
+                        response = await client.post("/api/autonomiq-pro/control", json={
+                            "live_trading_enabled": True, "confirm_live": "ENABLE_AUTONOMIQ_LIVE_TRADING",
+                        })
+                self.assertEqual(response.status_code, 200 if opt_in == "true" else 409)
+                self.assertEqual(executor.store.get_state("live_trading_enabled"), opt_in == "true")
+                if opt_in == "true":
+                    kite.profile.assert_called_once()
+                    kite.orders.assert_called_once()
+                    kite.positions.assert_called_once()
+                    kite.margins.assert_called_once_with("equity")
+                else:
+                    self.assertIn("AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE", response.json()["detail"])
+                    kite.profile.assert_not_called()
+                kite.place_order.assert_not_called()
+
     def entry_fixture(self):
         store = memory_store()
         self.addCleanup(store.close)
@@ -520,6 +1117,8 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
         kite.margins.return_value = {"available": {"cash": 100000}}
         kite.place_order.return_value = "entry-1"
         collector = mock.Mock()
+        collector.cached_option_quote.return_value = None
+        collector.execution_candles.return_value = (execution_history(22500, 5), execution_history())
         collector.gateway.client.return_value = kite
         plan = build_plan("NIFTY", "BUY_CE", chain(), atr_5m=5.0, cfg=CFG)
         collector.gateway.instruments.return_value = [{
@@ -732,6 +1331,208 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    def test_startup_and_socket_threads_share_a_single_executor_instance(self):
+        import time as clock
+        from concurrent.futures import ThreadPoolExecutor
+        from services.autonomiq_pro import orchestrator
+
+        instance = object()
+
+        def construct():
+            clock.sleep(.02)
+            return instance
+
+        with mock.patch.object(orchestrator, "_orchestrator", None), \
+                mock.patch.object(orchestrator, "AutonomiqOrchestrator", side_effect=construct) as factory, \
+                ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(lambda _: orchestrator.get_orchestrator(), range(2)))
+        self.assertTrue(all(result is instance for result in results))
+        factory.assert_called_once()
+
+    def test_existing_kite_order_callback_notifies_both_engines(self):
+        from services.market_feed import MarketFeedService
+
+        update = {"tag": "APRO1234567890E", "status": "COMPLETE"}
+        with mock.patch("services.aqte_live.get_live_service") as aqte, \
+                mock.patch("services.autonomiq_pro.orchestrator.get_orchestrator") as autonomiq:
+            MarketFeedService._on_order_update(mock.Mock(), None, update)
+        aqte.return_value.broker_update.assert_called_once_with(update)
+        autonomiq.return_value.broker_update.assert_called_once_with(update)
+
+    async def test_owned_terminal_events_accelerate_reconciliation_without_flooding_or_ai_calls(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        store = memory_store()
+        self.addCleanup(store.close)
+        engine = AutonomiqOrchestrator(store, mock.Mock(), mock.Mock())
+        engine.live_executor = mock.Mock()
+        engine.live_executor.cancel_pending_entries = mock.AsyncMock()
+        update = {"tag": "APRO1234567890E", "status": "COMPLETE"}
+        calls = 0
+
+        async def reconcile(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                engine.broker_update(update)
+
+        engine.live_executor.reconcile_and_manage = mock.AsyncMock(side_effect=reconcile)
+        engine._last_broker_management_at = 10
+        cfg = AutonomiqConfig(live_execution_allowed=True, enabled=False)
+        with mock.patch("services.autonomiq_pro.orchestrator.load_config", return_value=cfg), \
+                mock.patch("services.autonomiq_pro.orchestrator.clock.monotonic",
+                           side_effect=[10.1, 10.2, 11, 11.3, 12]):
+            engine.broker_update({"tag": "MANUAL", "status": "COMPLETE"})
+            engine.broker_update({"tag": update["tag"], "status": "TRIGGER PENDING"})
+            await engine._tick()
+            self.assertEqual(calls, 0)
+            engine.broker_update(update)
+            await engine._tick()
+            self.assertEqual(calls, 0)
+            await engine._tick()
+            self.assertEqual(calls, 1)
+            self.assertTrue(engine._broker_update_pending.is_set(), "Update during broker I/O must not be lost")
+            await engine._tick()
+            self.assertEqual(calls, 1)
+            await engine._tick()
+            self.assertEqual(calls, 2)
+        self.assertFalse(engine._broker_update_pending.is_set())
+        engine.ai.complete_json.assert_not_called()
+
+    async def test_fast_quote_marks_do_not_increase_broker_reconciliation_or_ai_calls(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        store = memory_store()
+        self.addCleanup(store.close)
+        engine = AutonomiqOrchestrator(store, mock.Mock(), mock.Mock())
+        engine.live_executor = mock.Mock()
+        engine.live_executor.reconcile_and_manage = mock.AsyncMock()
+        engine.live_executor.cancel_pending_entries = mock.AsyncMock()
+        cfg = AutonomiqConfig(deployment_mode="production", live_execution_allowed=True, enabled=False)
+        with mock.patch("services.autonomiq_pro.orchestrator.load_config", return_value=cfg), \
+                mock.patch("services.autonomiq_pro.orchestrator.clock.monotonic", side_effect=[0, 1, 2, 5]):
+            for _ in range(4):
+                await engine._tick()
+        self.assertEqual(engine.live_executor.mark_positions.call_count, 4)
+        self.assertEqual(engine.live_executor.reconcile_and_manage.await_count, 2)
+        self.assertEqual(engine.live_executor.cancel_pending_entries.await_count, 2)
+        engine.ai.complete_json.assert_not_called()
+
+    def test_shared_subscription_pins_only_owned_filled_contracts_after_atm_rotation(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        store = memory_store()
+        self.addCleanup(store.close)
+        engine = AutonomiqOrchestrator(store, mock.Mock(), mock.Mock())
+        engine.cfg = AutonomiqConfig(deployment_mode="production", live_execution_allowed=True)
+        plan = build_plan("NIFTY", "BUY_CE", chain(), atr_5m=5, cfg=CFG)
+        trade_id = store.create_live_trade({
+            **plan, "signal_key": "held", "tag": "APRO1234567890", "account_id": "owner",
+            "day": DAY, "quantity": 65,
+        })
+        catalog = [{
+            "instrument_token": 91, "name": "NIFTY", "tradingsymbol": plan["tradingsymbol"],
+            "exchange": "NFO", "instrument_type": "CE", "strike": 22500, "expiry": "2026-03-12",
+            "lot_size": 65, "tick_size": .05,
+        }, {
+            "instrument_token": 92, "name": "NIFTY", "tradingsymbol": "UNOWNED",
+            "exchange": "NFO", "instrument_type": "CE", "strike": 23000, "expiry": "2026-03-12",
+            "lot_size": 65, "tick_size": .05,
+        }]
+        self.assertEqual(engine.quote_pins(catalog), {})
+        store.update_live_trade(trade_id, status="OPEN", entry_filled=65, entry_price=100)
+        pins = engine.quote_pins(catalog)
+        self.assertEqual(set(pins), {91})
+        self.assertEqual(pins[91].trading_symbol, plan["tradingsymbol"])
+        store.update_live_trade(trade_id, status="CLOSED", exit_filled=65)
+        self.assertEqual(engine.quote_pins(catalog), {})
+
+    async def test_option_chains_skipped_before_first_tick_recover_without_refetching_candles(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        for recovery_fails in (False, True):
+            with self.subTest(recovery_fails=recovery_fails):
+                store = memory_store()
+                self.addCleanup(store.close)
+                collector = mock.Mock()
+                reads = {}
+
+                async def spot(symbol, now):
+                    count = reads.get(symbol, 0)
+                    reads[symbol] = count + 1
+                    if count == 0 and symbol in ("NIFTY", "BANKNIFTY"):
+                        return {"price": None, "age_s": None}
+                    return {"price": 22500, "age_s": 1}
+
+                collector.spot = mock.AsyncMock(side_effect=spot)
+                collector.collect_sync.side_effect = lambda symbol, price, now: {
+                    "symbol": symbol, "errors": [], "candles": {"5m": [1], "15m": [1]},
+                    "futures": None, "options": chain() if price else None,
+                }
+                collector.collect_options_sync.return_value = chain()
+                if recovery_fails:
+                    collector.collect_options_sync.side_effect = RuntimeError("No quotes")
+                ai = mock.Mock()
+                ai.status.return_value = "ACTIVE"
+                ai.complete_json = mock.AsyncMock(return_value={"indices": {
+                    s: {"action": "WAIT", "conviction": 40, "reasoning": "Review"}
+                    for s in ("NIFTY", "BANKNIFTY", "SENSEX")
+                }})
+                engine = AutonomiqOrchestrator(store, collector, ai)
+                engine.cfg = CFG
+                quant = {"score": 70, "bias": "BULLISH", "flags": [], "factors": [], "pcr": 1.0, "atm_iv": 14.0}
+                with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt, \
+                        mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 5}), \
+                        mock.patch.object(agents.QuantResearchAgent, "run", return_value=quant):
+                    dt.now.return_value = NOW
+                    payload = await engine.run_cycle("SCHEDULED")
+                self.assertEqual(collector.collect_sync.call_count, 3)
+                self.assertEqual(collector.collect_options_sync.call_count, 2)
+                self.assertEqual(ai.complete_json.await_count, 1)
+                for symbol in ("NIFTY", "BANKNIFTY"):
+                    index = payload["indices"][symbol]
+                    if recovery_fails:
+                        self.assertEqual(index["signal"]["action"], "NO_TRADE")
+                        self.assertIn("options: RuntimeError", index["errors"])
+                    else:
+                        self.assertIsNotNone(index["options"])
+                        self.assertEqual(index["errors"], [])
+                        self.assertNotEqual(index["signal"]["source"], "validation")
+
+    async def test_manual_snapshot_retains_only_todays_scheduled_decisions_without_active_plan(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        store = memory_store()
+        self.addCleanup(store.close)
+        collector = mock.Mock()
+        collector.spot = mock.AsyncMock(return_value={"price": 22500, "age_s": 1})
+        engine = AutonomiqOrchestrator(store, collector)
+        engine.cfg = CFG
+        for at in (NOW - timedelta(days=1), NOW):
+            with self.subTest(at=at):
+                scheduled = {"at": at.isoformat(), "ai_state": "ACTIVE", "indices": {
+                    "NIFTY": {"signal": {"action": "WAIT", "ai_action": "WAIT", "quant_action": "BUY_CE",
+                                        "reasoning": "Await a pullback", "timestamp": at.isoformat(),
+                                        "execution": {"status": "NOT_REQUESTED", "detail": ""},
+                                        "plan": {"entry": 100}}}}}
+                store.finish_cycle(store.start_cycle("SCHEDULED"), "OK", payload=scheduled)
+                manual = {"at": NOW.isoformat(), "trigger": "MANUAL", "ai_state": "SKIPPED_MANUAL_QUANT_ONLY"}
+                store.finish_cycle(store.start_cycle("MANUAL"), "OK", payload=manual)
+                with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt:
+                    dt.now.return_value = NOW
+                    snapshot = await engine.snapshot()
+                self.assertEqual(snapshot["cycle"], manual)
+                if at.date() != NOW.date():
+                    self.assertIsNone(snapshot["last_scheduled"])
+                else:
+                    prior = snapshot["last_scheduled"]["signals"]["NIFTY"]
+                    self.assertEqual(prior["action"], "WAIT")
+                    self.assertEqual(prior["ai_action"], "WAIT")
+                    self.assertEqual(prior["reasoning"], "Await a pullback")
+                    self.assertNotIn("plan", prior)
+        collector.gateway.client.assert_not_called()
+        self.assertEqual(store.ai_usage(DAY)["calls"], 0)
+
     def test_buy_alerts_and_history_distinguish_blocked_candidates_from_submissions(self):
         from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
 
@@ -772,6 +1573,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         collector.collect_sync.return_value = {
             "errors": [], "candles": {"5m": [1], "15m": [1]}, "options": chain(), "futures": None,
         }
+        collector.execution_candles.return_value = (execution_history(22500, 5), execution_history())
         ai = mock.Mock()
         ai.status.return_value = "ACTIVE"
         ai.complete_json = mock.AsyncMock(return_value={
@@ -800,6 +1602,9 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         class Collector:
             async def spot(self, symbol, now):
                 return {"price": 22500.0, "age_s": (now - current).total_seconds() + 1}
+
+            def execution_candles(self, symbol, exchange, trading_symbol, now):
+                return execution_history(22500, 5), execution_history()
 
             def collect_sync(self, symbol, spot_price, now):
                 nonlocal current
@@ -864,7 +1669,9 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         transport = httpx.MockTransport(handler)
         engine = AutonomiqOrchestrator(store, StaleCollector(), AIClient(store, transport))
         engine.cfg = CFG
-        payload = await engine.run_cycle("SCHEDULED")
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            payload = await engine.run_cycle("SCHEDULED")
         self.assertEqual({i["signal"]["action"] for i in payload["indices"].values()}, {"NO_TRADE"})
         self.assertEqual(len(calls), 1)
         self.assertEqual(list(json.loads(calls[0]["messages"][0]["content"])["indices"]),
@@ -941,6 +1748,28 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
         at = IST.localize(datetime(2026, 3, 10, 9, 21, 30))
         self.assertEqual(slot_start(at, 5), IST.localize(datetime(2026, 3, 10, 9, 20)))
         self.assertEqual(next_slot(at, 5), IST.localize(datetime(2026, 3, 10, 9, 25, 5)))
+
+    async def test_restart_does_not_replay_a_claimed_slot_and_overwrite_the_scheduled_result(self):
+        from services.autonomiq_pro.orchestrator import slot_start
+
+        engine = self.engine()
+        engine.store.set_state("ai_slot", slot_start(NOW, 5).isoformat())
+        payload = {"at": NOW.isoformat(), "ai_state": "ACTIVE", "indices": {}}
+        engine.store.finish_cycle(engine.store.start_cycle("SCHEDULED"), "OK", payload=payload)
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt, \
+                mock.patch("services.autonomiq_pro.orchestrator.load_config", return_value=CFG), \
+                mock.patch.object(engine, "_guarded_cycle", new=mock.AsyncMock()) as cycle:
+            dt.now.return_value = NOW + timedelta(minutes=2)
+            await engine._tick()
+            if engine._cycle_task:
+                await engine._cycle_task
+            cycle.assert_not_awaited()
+            self.assertEqual(engine.next_run_at, NOW + timedelta(minutes=5, seconds=5))
+            self.assertEqual(engine.store.last_cycle()["payload"], payload)
+            dt.now.return_value = NOW + timedelta(minutes=5, seconds=5)
+            await engine._tick()
+            await engine._cycle_task
+            cycle.assert_awaited_once_with("SCHEDULED")
 
     async def test_scheduler_starts_at_nine_and_repeats_every_five_minutes(self):
         class FixedDateTime(datetime):
@@ -1050,12 +1879,15 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
                                           store.start_cycle("SCHEDULED"))
 
         self.assertTrue(payload["indices"]["NIFTY"]["signal"]["risk"]["approved"])
+        self.assertEqual(payload["indices"]["NIFTY"]["signal"]["quant_action"], "BUY_CE")
+        self.assertEqual(payload["indices"]["NIFTY"]["signal"]["ai_action"], "BUY_CE")
         self.assertFalse(engine.runtime()["auto_paper_trading"])
         self.assertEqual(store.open_trades(), [])
         self.assertEqual(len(calls), 1)
         self.assertEqual(list(json.loads(calls[0]["messages"][0]["content"])["indices"]),
                          ["NIFTY", "BANKNIFTY", "SENSEX"])
         self.assertEqual(again["ai_state"], "SKIPPED_SLOT_ALREADY_ANALYZED")
+        self.assertIsNone(again["indices"]["NIFTY"]["signal"]["ai_action"])
         self.assertEqual(store.ai_usage(DAY)["calls"], 1)
 
     async def test_simulated_trading_cannot_be_reenabled(self):
@@ -1139,7 +1971,7 @@ class LiveRiskCalculationTests(unittest.TestCase):
         self.assertEqual(self.rejections(candidate, realized_net=self.zero_pnl, exposures=[], pending=[], trades_today=0), [])
         reasons = self.rejections(self.candidate(stop=81.95), realized_net=self.zero_pnl, exposures=[],
                                   pending=[], trades_today=0)
-        self.assertIn("Estimated per-trade loss exceeds ₹1,000", reasons)
+        self.assertIn("Estimated per-trade loss ₹1,002.50 exceeds ₹1,000.00", reasons)
         with self.assertRaisesRegex(ValueError, "one lot"):
             self.candidate(quantity=100).estimated_loss()
 
@@ -1147,12 +1979,40 @@ class LiveRiskCalculationTests(unittest.TestCase):
         candidate = self.candidate()
         reasons = self.rejections(candidate, realized_net={**self.zero_pnl, "NIFTY": -700},
                                   exposures=[], pending=[], trades_today=1)
-        self.assertIn("Index daily loss budget exhausted or reserved", reasons)
+        self.assertTrue(any("Index daily loss budget exceeded" in reason for reason in reasons))
         reasons = self.rejections(candidate, realized_net={**self.zero_pnl, "BANKNIFTY": -900, "SENSEX": -900},
                                   exposures=[Exposure("BANKNIFTY", -200, 300)],
                                   pending=[Exposure("SENSEX", 0, 400)], trades_today=2)
-        self.assertIn("Global daily loss budget exhausted or reserved", reasons)
-        self.assertNotIn("Index daily loss budget exhausted or reserved", reasons)
+        self.assertTrue(any("Global daily loss budget exceeded" in reason for reason in reasons))
+        self.assertFalse(any("Index daily loss budget exceeded" in reason for reason in reasons))
+
+    def test_configured_index_budget_includes_costs_pending_risk_and_global_limit(self):
+        candidate = self.candidate(
+            symbol="BANKNIFTY", entry=490.2, stop=435.75, quantity=30, lot_size=30,
+            estimated_round_trip_cost=150, estimated_exit_slippage=147.06)
+        loss = candidate.estimated_loss()
+        self.assertAlmostEqual(loss, 1930.56)
+        state = dict(realized_net=self.zero_pnl, exposures=[], pending=[], trades_today=0)
+        for limit, blocked in ((1000, True), (loss, False), (loss - 0.01, True), (2000, False)):
+            with self.subTest(limit=limit):
+                cfg = AutonomiqConfig(max_risk_per_trade_rupees=2000, index_daily_loss_limit_rupees=limit,
+                                      daily_loss_limit_rupees=3500)
+                reasons = entry_rejections(candidate, cfg=cfg, **state)
+                self.assertEqual(bool(reasons), blocked)
+                if limit == 1000:
+                    self.assertIn("₹1,930.56 exceeds available ₹1,000.00", reasons[0])
+                    self.assertIn("reserved ₹0.00", reasons[0])
+        cfg = AutonomiqConfig(max_risk_per_trade_rupees=2000, index_daily_loss_limit_rupees=2000,
+                              daily_loss_limit_rupees=3500)
+        reasons = entry_rejections(candidate, cfg=cfg, **{
+            **state, "pending": [Exposure("BANKNIFTY", 0, 100)]})
+        self.assertTrue(any("available ₹1,900.00" in reason and "reserved ₹100.00" in reason for reason in reasons))
+        reasons = entry_rejections(candidate, cfg=cfg, **{
+            **state, "realized_net": {**self.zero_pnl, "NIFTY": -1700}})
+        self.assertTrue(any("Global daily loss budget exceeded" in reason for reason in reasons))
+        self.assertFalse(any("Index daily loss budget exceeded" in reason for reason in reasons))
+        with self.assertRaisesRegex(ValueError, "index daily loss limit"):
+            entry_rejections(candidate, cfg=AutonomiqConfig(index_daily_loss_limit_rupees=float("nan")), **state)
 
     def test_duplicate_position_and_pending_entries_block_limits(self):
         reasons = self.rejections(self.candidate(), realized_net=self.zero_pnl,
@@ -1177,8 +2037,8 @@ class LiveRiskCalculationTests(unittest.TestCase):
                               max_trades_per_day=1, daily_loss_limit_rupees=500)
         reasons = entry_rejections(self.candidate(), cfg=cfg, realized_net=self.zero_pnl,
                                    exposures=[Exposure("SENSEX", -200, 0)], pending=[], trades_today=1)
-        self.assertIn("Estimated per-trade loss exceeds ₹300", reasons)
-        self.assertIn("Global daily loss budget exhausted or reserved", reasons)
+        self.assertIn("Estimated per-trade loss ₹400.00 exceeds ₹300.00", reasons)
+        self.assertTrue(any("Global daily loss budget exceeded" in reason for reason in reasons))
         self.assertIn("Global position limit reached", reasons)
         self.assertIn("Daily trade limit reached", reasons)
 
@@ -1206,6 +2066,26 @@ class LiveRiskCalculationTests(unittest.TestCase):
 
 
 class RiskTests(unittest.TestCase):
+    def test_hybrid_stop_respects_candle_low_and_targets_include_costs(self):
+        candles = execution_history()
+        candles[-1]["low"] = 85
+        levels = hybrid_levels(entry=100, bid=99.5, quantity=65, delta=.5, option_type="CE",
+                               index_candles=execution_history(22500, 5), option_candles=candles, cfg=CFG)
+        self.assertLess(levels["stop_loss"], 85)
+        costs = CFG.estimated_round_trip_cost_rupees / 65 + 1
+        loss = 100 - levels["stop_loss"] + costs
+        self.assertGreaterEqual(levels["target1"] - 100 - costs, loss)
+        self.assertGreaterEqual(levels["target2"] - 100 - costs, 2 * loss)
+
+    def test_hybrid_support_resistance_is_directional_and_blocks_poor_room(self):
+        for kind, delta in (("CE", .5), ("PE", -.5)):
+            with self.subTest(kind=kind):
+                candles = execution_history(22500, 5)
+                candles[8]["high" if kind == "CE" else "low"] += 5 if kind == "CE" else -5
+                with self.assertRaisesRegex(ValueError, "Insufficient room"):
+                    hybrid_levels(entry=100, bid=99.5, quantity=65, delta=delta, option_type=kind,
+                                  index_candles=candles, option_candles=execution_history(), cfg=CFG)
+
     def evaluate(self, plan, **overrides):
         args = dict(cfg=CFG, now=NOW, session=session_state(CFG, NOW), spot={"fresh": True, "age_s": 1},
                     state={"kill_switch": False, "engine_enabled": True}, open_trades=[],
@@ -1218,6 +2098,22 @@ class RiskTests(unittest.TestCase):
         self.assertEqual(plan["tradingsymbol"], "NIFTY22500CE")
         self.assertEqual((plan["entry"], plan["stop_loss"], plan["target1"], plan["target2"]), (100, 85, 115, 130))
         self.assertTrue(self.evaluate(plan)["approved"])
+
+    def test_one_lot_banknifty_risk_rejection_explains_actual_stop_cost(self):
+        option = leg("BANKNIFTYTESTCE", ask=506.7, bid=505.15, delta=0.5249)
+        option["lot_size"] = 30
+        option_chain = {"atm": 62400.0, "expiry": "2026-03-12", "exchange": "NFO",
+                        "strikes": [{"strike": 62400.0, "CE": option}]}
+        plan = build_plan("BANKNIFTY", "BUY_CE", option_chain, atr_5m=63.73, cfg=CFG)
+        self.assertAlmostEqual(plan["risk_rupees"], 1519.50)
+        self.assertEqual((plan["lot_size"], plan["lots"]), (30, 1))
+        result = self.evaluate(plan)
+        check = next(check for check in result["checks"] if check["name"] == "Risk per trade")
+        self.assertFalse(check["passed"])
+        self.assertIn("₹1,519.50 exceeds ₹1,000.00", check["detail"])
+        self.assertIn("30 units x 50.65", check["detail"])
+        self.assertIn("before fees/slippage", check["detail"])
+        self.assertFalse(result["approved"])
 
     def test_wide_spread_falls_back_to_itm_and_stale_quotes_reject(self):
         plan = build_plan("NIFTY", "BUY_CE", chain(bid=90.0), atr_5m=20.0, cfg=CFG)

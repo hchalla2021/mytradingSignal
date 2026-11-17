@@ -8,6 +8,7 @@ all prices come from live Zerodha quotes, never from the model.
 from __future__ import annotations
 
 from . import indicators as ind
+from .risk import price_structure
 
 ACTIONS = ("BUY_CE", "BUY_PE", "HOLD", "EXIT", "WAIT", "NO_TRADE")
 
@@ -55,6 +56,7 @@ class MarketAnalysisAgent:
             "day_low": min((c["low"] for c in today), default=None),
             "prev_day_high": max((c["high"] for c in prev), default=None),
             "prev_day_low": min((c["low"] for c in prev), default=None),
+            "price_action": price_structure(c5) if len(c5) >= 5 else None,
             "sparkline": [round(c["close"], 2) for c in today][-75:],
         }
 
@@ -136,6 +138,9 @@ Rules:
 - If an AUTONOMIQ live position is listed for an index, choose HOLD or EXIT for that position; do not propose
   another entry for that index. Broker-side protective stops and the Python risk manager remain authoritative.
 - Prefer WAIT when signals conflict, price is extended, or edge is unclear. NO_TRADE when data quality is poor.
+- Use price_action previous-candle OHLC, confirmed swings, previous-day levels and ATR to assess
+  breakout/pullback quality and nearby opposing levels. WAIT on a failed breakout or poor room to move.
+- Python independently builds structural premium stops and cost-aware targets; never relax risk limits.
 - Do NOT output prices, strikes, stop-losses or targets; the execution layer derives them from live quotes.
 - Never invent data that is not in the input.
 - Respond with ONE compact JSON object only, no markdown, no extra text. Complete all indices before the

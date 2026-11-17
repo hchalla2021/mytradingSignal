@@ -15,6 +15,7 @@ from typing import Any
 import pytz
 
 from . import indicators as ind
+from .risk import measured_atr
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
@@ -152,6 +153,57 @@ class MarketDataCollector:
     def __init__(self, gateway: KiteGateway | None = None):
         self.gateway = gateway or KiteGateway()
         self._prev_oi: dict[str, tuple[int, int]] = {}
+        self._candle_cache: dict[int, tuple[datetime, list[dict[str, Any]]]] = {}
+
+    def _execution_candles(self, token: int, now: datetime) -> list[dict[str, Any]]:
+        boundary = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0)
+        cached = self._candle_cache.get(token)
+        if cached and cached[0] == boundary:
+            return cached[1]
+        candles = completed(self.gateway.historical(token, now - timedelta(days=6), now, "5minute"), 5, now)
+        dates: list[datetime] = []
+        for candle in candles:
+            at = parse_ts(candle["date"])
+            if at is None:
+                raise ValueError("Invalid execution candle timestamp")
+            dates.append(at)
+        if (len(candles) < 14 or dates != sorted(set(dates))
+                or dates[-1] + timedelta(minutes=5) != boundary):
+            raise ValueError("Latest completed 5-minute history is unavailable")
+        measured_atr(candles)
+        self._candle_cache[token] = (boundary, candles)
+        return candles
+
+    def execution_candles(self, symbol: str, exchange: str, trading_symbol: str,
+                          now: datetime) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        contracts = self.gateway.instruments(exchange, now.date().isoformat())
+        contract = next((c for c in contracts if c["tradingsymbol"] == trading_symbol
+                         and c["name"] == symbol and c["instrument_type"] in ("CE", "PE")), None)
+        if contract is None:
+            raise ValueError("Option history instrument is unavailable")
+        return (self._execution_candles(INDEX_TOKENS[symbol], now),
+                self._execution_candles(int(contract["instrument_token"]), now))
+
+    def cached_option_quote(self, exchange: str, trading_symbol: str, now: datetime) -> dict | None:
+        """Read full-depth option ticks from the existing shared Kite connection."""
+        from services.aqte_service import get_aqte_service
+
+        market = get_aqte_service()
+        with market.lock:
+            contract = next((c for c in market.engine.contracts.values()
+                             if c.exchange == exchange and c.trading_symbol == trading_symbol), None)
+            tick = market.engine.options.get(contract.token) if contract else None
+        if tick is None or tick.bid <= 0 or tick.bid_quantity <= 0:
+            return None
+        timestamp = now.timestamp()
+        if not (-3 <= timestamp - tick.at <= 5 and -3 <= timestamp - tick.received <= 5):
+            return None
+        return {
+            "timestamp": datetime.fromtimestamp(min(tick.at, tick.received), IST),
+            "last_price": tick.price,
+            "depth": {"buy": [{"price": tick.bid, "quantity": tick.bid_quantity}],
+                      "sell": [{"price": tick.ask, "quantity": tick.ask_quantity}]},
+        }
 
     async def spot(self, symbol: str, now: datetime) -> dict:
         from services.cache import CacheService
@@ -172,6 +224,12 @@ class MarketDataCollector:
         try:
             raw5 = self.gateway.historical(INDEX_TOKENS[symbol], now - timedelta(days=6), now, "5minute")
             out["candles"]["5m"] = completed(raw5, 5, now)
+            c5 = out["candles"]["5m"]
+            boundary = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0)
+            dates = [datetime.fromisoformat(c["date"]) for c in c5]
+            if len(c5) >= 14 and dates == sorted(set(dates)) and dates[-1] + timedelta(minutes=5) == boundary:
+                measured_atr(c5)
+                self._candle_cache[INDEX_TOKENS[symbol]] = (boundary, c5)
             raw15 = self.gateway.historical(INDEX_TOKENS[symbol], now - timedelta(days=30), now, "15minute")
             c15 = completed(raw15, 15, now)
             out["candles"]["15m"] = c15
@@ -210,27 +268,36 @@ class MarketDataCollector:
                 out["errors"].append(f"futures: {type(exc).__name__}")
 
         if spot_price:
-            expiry, ce = nearest(rows, symbol, "CE", today)
-            _, pe = nearest(rows, symbol, "PE", today)
             try:
-                strikes = sorted({float(r["strike"]) for r in ce})
-                if not strikes or expiry is None:
-                    raise RuntimeError("no option contracts")
-                atm_index = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot_price))
-                window = set(strikes[max(atm_index - CHAIN_WIDTH, 0): atm_index + CHAIN_WIDTH + 1])
-                contracts = [r for r in ce + pe if float(r["strike"]) in window]
-                quotes = self.gateway.quote([f"{exchange}:{r['tradingsymbol']}" for r in contracts])
-                chain = build_chain(quotes, contracts, exchange, spot_price, expiry, datetime.now(IST))
-                chain["exchange"] = exchange
-                prev = self._prev_oi.get(symbol)
-                if prev:
-                    chain["call_oi_change"] = chain["call_oi"] - prev[0]
-                    chain["put_oi_change"] = chain["put_oi"] - prev[1]
-                self._prev_oi[symbol] = (chain["call_oi"], chain["put_oi"])
-                out["options"] = chain
+                out["options"] = self.collect_options_sync(symbol, spot_price, now, rows=rows)
             except Exception as exc:  # noqa: BLE001
                 out["errors"].append(f"options: {type(exc).__name__}")
+                logger.warning("AUTONOMIQ PRO option-chain fetch failed for %s: %s", symbol, type(exc).__name__)
         return out
+
+    def collect_options_sync(self, symbol: str, spot_price: float, now: datetime,
+                             *, rows: list[dict] | None = None) -> dict:
+        """Fetch only the option chain so first-tick recovery does not repeat history calls."""
+        exchange = DERIVATIVE_EXCHANGE[symbol]
+        if rows is None:
+            rows = self.gateway.instruments(exchange, now.date().isoformat())
+        expiry, ce = nearest(rows, symbol, "CE", now.date())
+        _, pe = nearest(rows, symbol, "PE", now.date())
+        strikes = sorted({float(r["strike"]) for r in ce})
+        if not strikes or expiry is None:
+            raise RuntimeError("no option contracts")
+        atm_index = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot_price))
+        window = set(strikes[max(atm_index - CHAIN_WIDTH, 0): atm_index + CHAIN_WIDTH + 1])
+        contracts = [r for r in ce + pe if float(r["strike"]) in window]
+        quotes = self.gateway.quote([f"{exchange}:{r['tradingsymbol']}" for r in contracts])
+        chain = build_chain(quotes, contracts, exchange, spot_price, expiry, datetime.now(IST))
+        chain["exchange"] = exchange
+        prev = self._prev_oi.get(symbol)
+        if prev:
+            chain["call_oi_change"] = chain["call_oi"] - prev[0]
+            chain["put_oi_change"] = chain["put_oi"] - prev[1]
+        self._prev_oi[symbol] = (chain["call_oi"], chain["put_oi"])
+        return chain
 
     def quote_contracts(self, keys: list[str]) -> dict:
         return self.gateway.quote(keys)

@@ -1,4 +1,4 @@
-"""Production-only Zerodha execution for AUTONOMIQ PRO."""
+"""Owner-authorized Zerodha execution for AUTONOMIQ PRO."""
 
 from __future__ import annotations
 
@@ -10,11 +10,12 @@ from datetime import datetime
 from uuid import uuid4
 from typing import Any
 
-from kiteconnect.exceptions import KiteException, TokenException
+from kiteconnect.exceptions import KiteException, PermissionException, TokenException
 
-from .config import AutonomiqConfig
+from .config import LIVE_EXECUTION_DISABLED_REASON, AutonomiqConfig
 from .live_risk import EntryRisk, Exposure, entry_rejections, trailing_stop
 from .market_data import IST, parse_ts
+from .risk import hybrid_levels, live_targets, measured_atr, price_structure
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -36,13 +37,13 @@ class LiveOrderExecutor:
 
     async def preflight(self, cfg: AutonomiqConfig) -> dict:
         if not cfg.live_execution_allowed:
-            raise LiveExecutionBlocked("Live orders are available only in the production deployment")
+            raise LiveExecutionBlocked(LIVE_EXECUTION_DISABLED_REASON)
         return await asyncio.to_thread(self._preflight_sync)
 
     async def activate(self, cfg: AutonomiqConfig) -> dict:
         async with self._lock:
             if not cfg.live_execution_allowed:
-                raise LiveExecutionBlocked("Live orders are available only in the production deployment")
+                raise LiveExecutionBlocked(LIVE_EXECUTION_DISABLED_REASON)
             account = await asyncio.to_thread(self._preflight_sync)
             self.store.set_state("live_trading_enabled", True)
             self.store.audit("owner", "live_trading_enabled", {"account_id": account["account_id"]})
@@ -91,7 +92,7 @@ class LiveOrderExecutor:
     ) -> dict:
         async with self._lock:
             if not cfg.live_execution_allowed:
-                return {"status": "BLOCKED", "detail": "Production-only live execution"}
+                return {"status": "BLOCKED", "detail": LIVE_EXECUTION_DISABLED_REASON}
             if not self.store.get_state("live_trading_enabled", False):
                 return {"status": "OFF", "detail": "Owner live-trading switch is OFF"}
             if self.store.get_state("kill_switch", False) or not self.store.get_state("engine_enabled", True):
@@ -192,6 +193,12 @@ class LiveOrderExecutor:
         if lot_size <= 0 or int(plan.get("lot_size") or 0) != lot_size:
             return {"status": "BLOCKED", "detail": "Zerodha lot-size metadata changed"}
 
+        try:
+            index_candles, option_candles = self.collector.execution_candles(
+                symbol, exchange, tradingsymbol, datetime.now(IST))
+        except (KiteException, ValueError, KeyError) as exc:
+            logger.warning("AUTONOMIQ PRO hybrid entry history unavailable for %s: %s", symbol, exc)
+            return {"status": "BLOCKED", "detail": f"Hybrid entry history unavailable: {str(exc)[:240]}"}
         quote_key = f"{exchange}:{tradingsymbol}"
         quote = kite.quote([quote_key]).get(quote_key) or {}
         quote_at = parse_ts(quote.get("timestamp"))
@@ -210,13 +217,21 @@ class LiveOrderExecutor:
             return {"status": "BLOCKED", "detail": "Fresh ask exceeds the approved entry slippage cap"}
 
         tick_size = float(contract.get("tick_size") or TICK_SIZE)
+        if not math.isfinite(tick_size) or tick_size <= 0:
+            return {"status": "BLOCKED", "detail": "Invalid broker tick-size metadata"}
         entry = _ceil_tick(ask, tick_size)
-        risk_points = reference - float(plan["stop_loss"])
-        if not math.isfinite(risk_points) or risk_points <= 0 or entry <= risk_points:
-            return {"status": "BLOCKED", "detail": "Entry/stop structure is invalid after requoting"}
-        stop = _floor_tick(entry - risk_points, tick_size)
-        target1 = _ceil_tick(entry + risk_points, tick_size)
-        target2 = _ceil_tick(entry + 2 * risk_points, tick_size)
+        if entry > reference * (1 + cfg.max_entry_slippage_pct / 100):
+            return {"status": "BLOCKED", "detail": "Tick-rounded entry exceeds the approved slippage cap"}
+        try:
+            levels = hybrid_levels(
+                entry=entry, bid=bid, quantity=lot_size, delta=float(plan["quote"]["delta"]),
+                option_type=plan["option_type"], index_candles=index_candles,
+                option_candles=option_candles, cfg=cfg, tick_size=tick_size)
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.warning("AUTONOMIQ PRO hybrid entry blocked for %s: %s", symbol, exc)
+            return {"status": "BLOCKED", "detail": f"Hybrid entry validation: {str(exc)[:240]}"}
+        risk_points, stop = levels["risk"], levels["stop_loss"]
+        target1, target2 = levels["target1"], levels["target2"]
         estimated_slippage = max((ask - bid) * lot_size, entry * lot_size * cfg.max_exit_slippage_pct / 100)
         risk = EntryRisk(
             symbol=symbol, entry=entry, stop=stop, quantity=lot_size, lot_size=lot_size,
@@ -227,7 +242,15 @@ class LiveOrderExecutor:
         rejected = entry_rejections(risk, realized_net=realized, exposures=exposures, pending=pending,
                                     trades_today=trades_today, cfg=cfg)
         if rejected:
-            return {"status": "BLOCKED", "detail": "; ".join(rejected)}
+            detail = (
+                f"Estimated loss ₹{risk.estimated_loss():,.2f} "
+                f"(stop ₹{(entry - stop) * lot_size:,.2f} + costs "
+                f"₹{cfg.estimated_round_trip_cost_rupees:,.2f} + exit slippage ₹{estimated_slippage:,.2f}). "
+                + "; ".join(rejected)
+            )
+            return {"status": "BLOCKED", "detail": detail, "risk_checks": [
+                {"name": "Live execution risk", "passed": False, "detail": detail},
+            ]}
 
         try:
             available = float(kite.margins("equity")["available"]["cash"])
@@ -259,9 +282,11 @@ class LiveOrderExecutor:
         trade_id = self.store.create_live_trade(trade)
         if trade_id is None:
             return {"status": "DUPLICATE", "detail": "This signal already has an AUTONOMIQ execution record"}
+        self.store.update_live_trade(trade_id, risk_model="HYBRID_V1")
         self.store.audit("autonomiq-pro", "live_entry_intent", {
             "trade_id": trade_id, "symbol": symbol, "contract": tradingsymbol, "quantity": lot_size,
             "reference_entry": reference, "limit": entry, "stop": stop, "risk_rupees": trade["risk_rupees"],
+            "risk_model": "HYBRID_V1", "option_atr": levels["option_atr"],
         })
         try:
             order_id = kite.place_order(
@@ -270,6 +295,11 @@ class LiveOrderExecutor:
             )
             if not order_id:
                 raise RuntimeError("Broker did not return an order ID")
+        except PermissionException as exc:
+            return self._reject_entry(
+                trade_id, symbol, f"Zerodha rejected entry (PermissionException): {str(exc)[:300]}",
+                datetime.now(IST),
+            )
         except Exception as exc:
             detail = f"{type(exc).__name__}: {str(exc)[:300]}" if isinstance(exc, KiteException) else type(exc).__name__
             message = f"Entry result uncertain ({detail}); reconcile before retry"
@@ -287,6 +317,15 @@ class LiveOrderExecutor:
         })
         return {"status": "ENTRY_PENDING", "trade_id": trade_id, "order_id": str(order_id),
                 "detail": "One-lot marketable limit submitted; fill is not guaranteed"}
+
+    def _reject_entry(self, trade_id: int, symbol: str, detail: str, now: datetime) -> dict:
+        self.store.update_live_trade(
+            trade_id, status="REJECTED", error=detail, last_broker_sync=now.isoformat(),
+        )
+        self.store.audit("autonomiq-pro", "live_entry_rejected", {"trade_id": trade_id, "detail": detail})
+        self.store.add_alert("warning", f"AUTONOMIQ {symbol} entry rejected: {detail}", symbol)
+        logger.warning("AUTONOMIQ PRO %s entry rejected: %s", symbol, detail)
+        return {"status": "REJECTED", "trade_id": trade_id, "detail": detail}
 
     def _risk_state(self, day: str, live_prices: dict[int, float] | None = None
                     ) -> tuple[dict[str, float], list[Exposure], list[Exposure], int]:
@@ -361,6 +400,26 @@ class LiveOrderExecutor:
         async with self._lock:
             await asyncio.to_thread(self._manage_sync, cfg, now, square_off)
 
+    def quote_mark(self, trade: dict, cfg: AutonomiqConfig, now: datetime) -> dict | None:
+        if (trade["status"] in {"CLOSED", "UNFILLED", "REJECTED", "RECONCILIATION_REQUIRED"}
+                or int(trade.get("entry_filled") or 0) <= int(trade.get("exit_filled") or 0)
+                or float(trade.get("entry_price") or 0) <= 0):
+            return None
+        quote = self.collector.cached_option_quote(trade["exchange"], trade["tradingsymbol"], now)
+        if quote is None:
+            return None
+        at = parse_ts(quote.get("timestamp"))
+        bid = _best_price((quote.get("depth") or {}).get("buy"))
+        if at is None or not -3 <= (now - at).total_seconds() <= min(5, cfg.max_option_quote_age_seconds) or bid <= 0:
+            return None
+        return _position_mark(trade, bid, at, cfg.estimated_round_trip_cost_rupees)
+
+    def mark_positions(self, cfg: AutonomiqConfig, now: datetime) -> None:
+        for trade in self.store.open_live_trades(limit=10000):
+            mark = self.quote_mark(trade, cfg, now)
+            if mark is not None:
+                self.store.update_live_trade(trade["id"], **mark)
+
     def _manage_sync(self, cfg: AutonomiqConfig, now: datetime, square_off) -> None:
         trades = self.store.open_live_trades(limit=10000)
         if not trades:
@@ -391,6 +450,20 @@ class LiveOrderExecutor:
                       cfg: AutonomiqConfig, now: datetime, square_off) -> None:
         now = datetime.now(IST)
         entry = _find_order(orders, trade.get("entry_order_id"), trade["tag"] + "E")
+        denial = str(trade.get("error") or "")
+        if (not entry and trade["status"] == "ENTRY_UNKNOWN"
+                and trade["day"] == now.date().isoformat()
+                and not trade.get("entry_order_id") and not int(trade.get("entry_filled") or 0)
+                and not int(trade.get("exit_filled") or 0)
+                and denial.startswith("Entry result uncertain (PermissionException: IP (")
+                and "is not allowed to place orders for this app" in denial
+                and not any(str(order.get("tag") or "").startswith(trade["tag"]) for order in orders.values())
+                and not any(p.get("exchange") == trade["exchange"]
+                            and p.get("tradingsymbol") == trade["tradingsymbol"]
+                            and int(p.get("quantity") or 0) != 0 for p in positions)):
+            detail = denial.removeprefix("Entry result uncertain (").removesuffix("); reconcile before retry")
+            self._reject_entry(trade["id"], trade["symbol"], f"Reconciled Zerodha IP refusal: {detail}", now)
+            return
         if entry:
             entry_id = str(entry["order_id"])
             filled = int(entry.get("filled_quantity") or 0)
@@ -405,6 +478,9 @@ class LiveOrderExecutor:
                 if avg > 0:
                     fields["entry_price"] = avg
                     fields["opened_at"] = str(entry.get("order_timestamp") or now.isoformat())
+                    if trade.get("risk_model") == "HYBRID_V1" and filled and avg > float(trade["stop_loss"]):
+                        fields["target1"], fields["target2"] = live_targets(
+                            avg, float(trade["stop_loss"]), filled, cfg)
                 if filled and status in TERMINAL_ORDERS:
                     fields["status"] = "PROTECTION_PENDING"
                 elif filled and status not in TERMINAL_ORDERS:
@@ -427,7 +503,33 @@ class LiveOrderExecutor:
                         logger.exception("AUTONOMIQ PRO could not cancel the unfilled entry remainder")
                     return
 
-        if trade["status"] in TERMINAL_TRADES or trade["status"] in {"ENTRY_UNKNOWN", "RECONCILIATION_REQUIRED"}:
+        if trade["status"] in TERMINAL_TRADES or trade["status"] == "ENTRY_UNKNOWN":
+            return
+        if trade["status"] == "RECONCILIATION_REQUIRED":
+            # Orders and positions are separate snapshots; reconcile proven owned fills without sending orders.
+            for field, tag in (
+                ("exit_order_id", _exit_tag(trade) if int(trade.get("exit_attempt") or 0) else _protection_tag(trade)),
+                ("protection_order_id", _protection_tag(trade)),
+            ):
+                order_id = str(trade.get(field) or "")
+                order = orders.get(order_id)
+                if not order:
+                    continue
+                filled = int(order.get("filled_quantity") or 0)
+                tracked = int(trade.get("exit_order_filled") or 0) if order_id == str(trade.get("exit_order_id") or "") else 0
+                remaining = int(trade.get("entry_filled") or 0) - int(trade.get("exit_filled") or 0)
+                if (order.get("tag") != tag or order.get("exchange") != trade["exchange"]
+                        or order.get("tradingsymbol") != trade["tradingsymbol"]
+                        or order.get("transaction_type") != "SELL"
+                        or not 0 < filled <= int(order.get("quantity") or 0) <= int(trade["entry_filled"])
+                        or not 0 < filled - tracked <= remaining
+                        or float(order.get("average_price") or 0) <= 0):
+                    continue
+                self._record_exit(trade, order, now, cfg)
+                if self.store.live_trade(trade["id"])["status"] != "CLOSED":
+                    self.store.update_live_trade(
+                        trade["id"], status="RECONCILIATION_REQUIRED", error=trade.get("error"))
+                break
             return
         if trade["status"] in {"EXIT_SUBMITTING", "EXIT_UNKNOWN"}:
             exit_order = _find_order(orders, trade.get("exit_order_id"), _exit_tag(trade))
@@ -487,6 +589,11 @@ class LiveOrderExecutor:
             trade["status"] = status
 
         if trade["status"] == "PROTECTION_PENDING":
+            if trade.get("risk_model") == "HYBRID_V1" and float(trade["stop_loss"]) >= float(trade["entry_price"]):
+                self.store.update_live_trade(trade["id"], status="PROTECTION_FAILED",
+                                            error="Fill is at or below structural stop; emergency exit required")
+                self._submit_emergency_exit(kite, trade, cfg, now)
+                return
             if protective and _order_status(protective) not in TERMINAL_ORDERS:
                 self.store.update_live_trade(trade["id"], status="OPEN",
                                             protection_order_id=str(protective["order_id"]),
@@ -514,6 +621,8 @@ class LiveOrderExecutor:
                         transaction_type="SELL", quantity=owned, product="MIS", order_type="SL",
                         price=limit, trigger_price=trigger, validity="DAY", tag=tag,
                     )
+                    if not order_id:
+                        raise RuntimeError("Broker did not return a protective order ID")
                 except Exception as exc:
                     self.store.update_live_trade(
                         trade["id"], status="PROTECTION_UNKNOWN",
@@ -560,7 +669,14 @@ class LiveOrderExecutor:
 
         qkey = f"{trade['exchange']}:{trade['tradingsymbol']}"
         try:
-            quote = kite.quote([qkey]).get(qkey) or {}
+            cached_mark = self.quote_mark(trade, cfg, datetime.now(IST))
+            if cached_mark is None:
+                quote = kite.quote([qkey]).get(qkey) or {}
+                quote_at = parse_ts(quote.get("timestamp"))
+                bid = _best_price((quote.get("depth") or {}).get("buy"))
+            else:
+                quote_at = parse_ts(cached_mark["last_quote_at"])
+                bid = cached_mark["last_price"]
         except Exception as exc:
             message = f"Position quote failed ({type(exc).__name__}); existing protection remains active"
             self.store.update_live_trade(trade["id"], error=message)
@@ -569,11 +685,13 @@ class LiveOrderExecutor:
                                      trade["symbol"])
             logger.exception("AUTONOMIQ PRO position quote failed")
             return
-        quote_at = parse_ts(quote.get("timestamp"))
         age = (datetime.now(IST) - quote_at).total_seconds() if quote_at else None
-        bid = _best_price((quote.get("depth") or {}).get("buy"))
-        if age is None or age < -3 or age > min(5, cfg.max_option_quote_age_seconds) or bid <= 0:
+        if quote_at is None or age is None or age < -3 or age > min(5, cfg.max_option_quote_age_seconds) or bid <= 0:
             return
+        self.store.update_live_trade(
+            trade["id"], **_position_mark(trade, bid, quote_at, cfg.estimated_round_trip_cost_rupees),
+            last_broker_sync=now.isoformat(),
+        )
         entry_price = float(trade.get("entry_price") or trade["entry"])
         current_stop = float(trade.get("trailing_sl") or trade["stop_loss"])
         highest = max(float(trade.get("highest_bid") or bid), bid)
@@ -591,27 +709,39 @@ class LiveOrderExecutor:
         if close_reason:
             self._convert_protection_to_exit(kite, trade, protective, bid, cfg, close_reason, now)
             return
+        if trade.get("risk_model") == "HYBRID_V1" and bid <= current_stop:
+            self._convert_protection_to_exit(kite, trade, protective, bid, cfg, "TRAILING_STOP", now)
+            return
 
+        option_atr = max(float(trade["risk"]) / 2, TICK_SIZE)
+        structural_stop = current_stop
+        if trade.get("risk_model") == "HYBRID_V1":
+            try:
+                _, candles = self.collector.execution_candles(
+                    trade["symbol"], trade["exchange"], trade["tradingsymbol"], datetime.now(IST))
+                option_atr = measured_atr(candles)
+                structural_stop = _floor_tick(price_structure(candles)["support"] - .2 * option_atr, TICK_SIZE)
+            except (KiteException, ValueError, KeyError) as exc:
+                message = f"Hybrid trailing data unavailable; existing stop retained ({type(exc).__name__})"
+                logger.warning("AUTONOMIQ PRO trailing history unavailable for %s: %s", trade["symbol"], exc)
+                self.store.update_live_trade(trade["id"], error=message)
+                if trade.get("error") != message:
+                    self.store.add_alert("warning", message, trade["symbol"])
+                return
         decision = trailing_stop(
             entry=entry_price, initial_stop=float(trade["stop_loss"]), current_stop=current_stop,
-            highest_bid=highest, current_bid=bid, option_atr=max(float(trade["risk"]) / 2, TICK_SIZE),
+            highest_bid=highest, current_bid=bid, option_atr=option_atr,
             quantity=owned, estimated_round_trip_cost=cfg.estimated_round_trip_cost_rupees,
             estimated_exit_slippage=entry_price * owned * cfg.max_exit_slippage_pct / 100,
             tick_size=TICK_SIZE,
         )
         new_stop = decision.stop
+        if decision.activated:
+            new_stop = max(new_stop, structural_stop)
         if bid >= target1:
-            new_stop = max(new_stop, _ceil_tick(entry_price + cfg.estimated_round_trip_cost_rupees / owned,
-                                                TICK_SIZE))
-        exit_filled = int(trade.get("exit_filled") or 0)
-        exit_price = float(trade.get("exit_price") or 0)
-        estimated_pnl = ((exit_price - entry_price) * exit_filled
-                         + (bid - entry_price) * owned - cfg.estimated_round_trip_cost_rupees)
-        self.store.update_live_trade(
-            trade["id"], last_price=bid, last_quote_at=quote_at.isoformat(), highest_bid=highest,
-            pnl=round(estimated_pnl, 2), fees=cfg.estimated_round_trip_cost_rupees,
-            last_broker_sync=now.isoformat(),
-        )
+            slippage = entry_price * cfg.max_exit_slippage_pct / 100 if trade.get("risk_model") == "HYBRID_V1" else 0
+            new_stop = max(new_stop, _ceil_tick(
+                entry_price + cfg.estimated_round_trip_cost_rupees / owned + slippage, TICK_SIZE))
         if new_stop >= bid:
             self._convert_protection_to_exit(kite, trade, protective, bid, cfg, "TRAILING_STOP", now)
         elif new_stop > current_stop + TICK_SIZE / 2:
@@ -757,8 +887,10 @@ class LiveOrderExecutor:
             "exit_order_filled": filled, "exit_order_value": order_value, "last_broker_sync": now.isoformat(),
         }
         if is_closed:
-            fields.update(status="CLOSED", closed_at=now.isoformat(), exit_reason=trade.get("close_requested") or
-                          ("STOP_LOSS" if _order_type(order) == "SL" else "EXIT"))
+            fields.update(status="CLOSED", closed_at=now.isoformat(), error=None,
+                          exit_reason=trade.get("close_requested") or
+                          ("STOP_LOSS" if _order_type(order) == "SL"
+                           or order_id == str(trade.get("protection_order_id") or "") else "EXIT"))
         else:
             if _order_status(order) in TERMINAL_ORDERS:
                 fields.update(status="PROTECTION_PENDING", protection_order_id=None,
@@ -808,6 +940,19 @@ class LiveOrderExecutor:
                 self.store.update_live_trade(trade["id"], cancel_requested=True)
                 self.store.audit("autonomiq-pro", "entry_cancel_requested",
                                  {"trade_id": trade["id"], "order_id": str(order["order_id"])})
+
+
+def _position_mark(trade: dict, bid: float, at: datetime, fees: float) -> dict:
+    entry = float(trade.get("entry_price") or trade["entry"])
+    exited = int(trade.get("exit_filled") or 0)
+    remaining = max(0, int(trade.get("entry_filled") or 0) - exited)
+    pnl = ((float(trade.get("exit_price") or 0) - entry) * exited
+           + (bid - entry) * remaining - fees)
+    return {
+        "last_price": bid, "last_quote_at": at.isoformat(),
+        "highest_bid": max(float(trade.get("highest_bid") or bid), bid),
+        "pnl": round(pnl, 2), "fees": fees,
+    }
 
 
 def _find_order(orders: dict[str, dict], order_id: Any, tag: str) -> dict | None:

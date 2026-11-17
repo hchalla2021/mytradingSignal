@@ -484,6 +484,8 @@ class MarketFeedService:
     def _on_order_update(self, ws, update):
         from services.aqte_live import get_live_service
         get_live_service().broker_update(update)
+        from services.autonomiq_pro.orchestrator import get_orchestrator
+        get_orchestrator().broker_update(update)
 
     def _on_ticks(self, ws, ticks):
         from services.aqte_service import get_aqte_service

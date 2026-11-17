@@ -5,11 +5,94 @@ This module is the final authority: AI output can never bypass these checks.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, time
 from typing import Any
 
+from . import indicators as ind
+
 TICK = 0.05
 REENTRY_COOLDOWN_S = 15 * 60
+
+
+def price_structure(candles: list[dict[str, Any]]) -> dict[str, Any]:
+    recent = candles[-20:]
+    if len(recent) < 5:
+        raise ValueError("Completed candle structure is unavailable")
+    lows, highs = [], []
+    for i in range(2, len(recent) - 2):
+        neighbours = recent[i - 2:i] + recent[i + 1:i + 3]
+        if all(recent[i]["low"] < c["low"] for c in neighbours):
+            lows.append(recent[i]["low"])
+        if all(recent[i]["high"] > c["high"] for c in neighbours):
+            highs.append(recent[i]["high"])
+    return {
+        "support": min(min(c["low"] for c in recent[-3:]), lows[-1] if lows else recent[-1]["low"]),
+        "resistance": max(max(c["high"] for c in recent[-3:]), highs[-1] if highs else recent[-1]["high"]),
+        "swing_lows": lows, "swing_highs": highs,
+        "previous_candle": {k: recent[-1][k] for k in ("open", "high", "low", "close")},
+    }
+
+
+def live_targets(entry: float, stop: float, quantity: int, cfg: Any, tick_size: float = TICK) -> tuple[float, float]:
+    costs = cfg.estimated_round_trip_cost_rupees / quantity + entry * cfg.max_exit_slippage_pct / 100
+    risk = entry - stop + costs
+    targets = [round(math.ceil((entry + costs + multiple * risk) / tick_size - 1e-10) * tick_size, 8)
+               for multiple in (1, max(2, cfg.min_risk_reward))]
+    return targets[0], targets[1]
+
+
+def measured_atr(candles: list[dict[str, Any]]) -> float:
+    if len(candles) < 14:
+        raise ValueError("At least 14 completed candles are required for hybrid risk")
+    for candle in candles:
+        o, h, low, c = (candle[k] for k in ("open", "high", "low", "close"))
+        if not all(math.isfinite(v) and v > 0 for v in (o, h, low, c)) or not low <= min(o, c) <= max(o, c) <= h:
+            raise ValueError("Invalid OHLC data for hybrid risk")
+    value = ind.atr(candles)
+    if value is None or not math.isfinite(value) or value <= 0:
+        raise ValueError("Measured candle ATR is unavailable")
+    return value
+
+
+def hybrid_levels(*, entry: float, bid: float, quantity: int, delta: float, option_type: str,
+                  index_candles: list[dict[str, Any]], option_candles: list[dict[str, Any]], cfg: Any,
+                  tick_size: float = TICK) -> dict[str, float]:
+    """Conservative premium stop with completed-candle invalidation and net-R targets."""
+    if (option_type not in ("CE", "PE") or not math.isfinite(delta) or not 0 < abs(delta) <= 1
+            or not math.isfinite(entry) or not math.isfinite(bid) or not 0 < bid <= entry
+            or delta * (1 if option_type == "CE" else -1) <= 0
+            or quantity <= 0 or not math.isfinite(tick_size) or tick_size <= 0):
+        raise ValueError("Invalid quote or contract inputs for hybrid risk")
+    option_atr, index_atr = measured_atr(option_candles), measured_atr(index_candles)
+    option, underlying = price_structure(option_candles), price_structure(index_candles)
+    reference = index_candles[-1]["close"]
+    buffer = max(option_atr * .2, 2 * (entry - bid), 2 * tick_size)
+    invalidation = (reference - underlying["support"] if option_type == "CE"
+                    else underlying["resistance"] - reference) + .2 * index_atr
+    distance = max(entry - option["support"] + buffer, 1.5 * option_atr, abs(delta) * invalidation)
+    stop = round(math.floor((entry - distance) / tick_size + 1e-10) * tick_size, 8)
+    if not 0 < stop < bid:
+        raise ValueError("Structural stop is invalid or already breached")
+    target1, target2 = live_targets(entry, stop, quantity, cfg, tick_size)
+    barriers = [level - entry for level in option["swing_highs"] if level > entry]
+    prior = [c for c in index_candles if c["date"][:10] < index_candles[-1]["date"][:10]]
+    previous_day = prior[-1]["date"][:10] if prior else None
+    prior_session = [c for c in prior if c["date"][:10] == previous_day]
+    if option_type == "CE":
+        levels = [*underlying["swing_highs"]]
+        if prior_session:
+            levels.append(max(c["high"] for c in prior_session))
+        barriers.extend((level - reference) * abs(delta) for level in levels if level > reference)
+    else:
+        levels = [*underlying["swing_lows"]]
+        if prior_session:
+            levels.append(min(c["low"] for c in prior_session))
+        barriers.extend((reference - level) * abs(delta) for level in levels if level < reference)
+    if barriers and min(barriers) < target2 - entry + buffer:
+        raise ValueError("Insufficient room to the next candle resistance/support for cost-aware T2")
+    return {"stop_loss": stop, "target1": target1, "target2": target2,
+            "risk": round(entry - stop, 8), "option_atr": option_atr}
 
 
 def tick(value: float) -> float:
@@ -92,8 +175,12 @@ def validate(plan: dict, *, cfg: Any, now: datetime, session: dict, spot: dict, 
     check("Stop-loss structure valid", sl_valid,
           f"SL {plan['stop_loss']} < entry {plan['entry']} < T1 {plan['target1']} < T2 {plan['target2']}")
     check("Risk/reward", plan["risk_reward"] >= cfg.min_risk_reward, f"{plan['risk_reward']} ≥ {cfg.min_risk_reward}")
-    check("Risk per trade", plan["risk_rupees"] <= cfg.max_risk_per_trade_rupees,
-          f"₹{plan['risk_rupees']:,.0f} ≤ ₹{cfg.max_risk_per_trade_rupees:,.0f}")
+    risk_within_limit = plan["risk_rupees"] <= cfg.max_risk_per_trade_rupees
+    quantity = plan["lot_size"] * plan["lots"]
+    check("Risk per trade", risk_within_limit,
+          f"Stop risk ₹{plan['risk_rupees']:,.2f} {'within' if risk_within_limit else 'exceeds'} "
+          f"₹{cfg.max_risk_per_trade_rupees:,.2f} limit "
+          f"({quantity} units x {plan['entry'] - plan['stop_loss']:.2f} stop points; before fees/slippage)")
     duplicate = any(t["symbol"] == plan["symbol"] for t in open_trades)
     check("No duplicate position", not duplicate, "Open position already exists" if duplicate else "")
     check("Position limit", len(open_trades) < cfg.max_open_positions,
