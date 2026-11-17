@@ -92,7 +92,7 @@ class AutonomiqOrchestrator:
         self.last_loop_at: datetime | None = None
         self.started_at: datetime | None = None
         self.quote_failures = 0
-        self._last_actions: dict[str, str] = {}
+        self._last_actions: dict[str, tuple[str, str, str]] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────
     async def start(self) -> None:
@@ -344,13 +344,21 @@ class AutonomiqOrchestrator:
 
     def _alert_on_change(self, symbol: str, decision: dict) -> None:
         action = decision["action"]
-        if self._last_actions.get(symbol) == action:
+        execution = decision.get("execution") or {}
+        is_entry = action in ("BUY_CE", "BUY_PE")
+        status = execution.get("status", "NOT_REQUESTED") if is_entry else ""
+        detail = execution.get("detail", "") if is_entry else ""
+        key = (action, status, detail)
+        if self._last_actions.get(symbol) == key:
             return
-        self._last_actions[symbol] = action
-        level = "success" if action in ("BUY_CE", "BUY_PE") else "warning" if action == "WAIT" else "info"
+        self._last_actions[symbol] = key
+        level = "warning" if action == "WAIT" else "info"
         text = action.replace("_", " ")
+        if is_entry:
+            level = "error" if status == "ENTRY_UNKNOWN" else "info" if status == "ENTRY_PENDING" else "warning"
+            text = f"{text} · {status.replace('_', ' ')}"
         self.store.add_alert(level, f"{symbol} – {text} ({decision.get('strength', 'Low')}): "
-                                    f"{(decision.get('reasoning') or '')[:110]}", symbol)
+                                    f"{detail or (decision.get('reasoning') or '')[:110]}", symbol)
 
     # ── paper position management ────────────────────────────────────
     async def manage_positions(self, now: datetime, force_reason: str | None = None) -> None:
@@ -447,7 +455,7 @@ class AutonomiqOrchestrator:
             key: trade.get(key) for key in (
                 "id", "created_at", "opened_at", "closed_at", "symbol", "exchange", "tradingsymbol",
                 "option_type", "quantity", "entry", "entry_price", "stop_loss", "trailing_sl", "target1",
-                "target2", "last_price", "exit_price", "exit_reason", "pnl", "risk_rupees", "status",
+                "target2", "last_price", "exit_price", "exit_reason", "pnl", "risk_rupees", "status", "error",
             )
         } for trade in live_rows]
         return {

@@ -35,6 +35,11 @@ or stale data, AI WAIT, exhausted budgets, and contract/risk checks can all prev
 Market movement alone does not establish a qualifying signal, and model quality does
 not guarantee profitable or frequent trades.
 
+A BUY in decision history is a strategy candidate, not proof of an order or fill.
+Its execution status and reason are shown alongside it. Risk-blocked candidates
+display WAIT on the live card, and alerts distinguish BLOCKED, ENTRY PENDING and
+uncertain broker outcomes instead of reporting every BUY candidate as success.
+
 The Live Trading tab shows the last recorded AI request's actual model, time and status,
 the next slot, quant score/threshold, and failed risk checks. AI Engine ACTIVE means the
 client is available, not that the last scheduled request succeeded. Manual refresh uses
@@ -71,6 +76,10 @@ token limit increases potential API spending and is an explicit operator decisio
   confirmation and an authenticated owner control request, plus an active engine,
   configured AI, and successful Zerodha account preflight. Turning it OFF is immediate
   and blocks new entries while owned positions continue to be managed.
+- An expired or invalid Zerodha session blocks ON and returns an explicit reconnect
+  error. Use the dashboard LOGIN to authorize Zerodha again, then retry the switch.
+  A connected market feed alone does not confirm that broker account/order access
+  is valid; failed preflight never enables live entries.
 - Local/development analysis never submits real orders. The live toggle is unavailable
   there, and paper trading is disabled.
 - An entry additionally requires an active entry session, AI/quant BUY agreement, a valid
@@ -79,11 +88,31 @@ token limit increases potential API spending and is an explicit operator decisio
 - Entries use marketable LIMIT IOC orders. A broker acknowledgement is not a fill; the
   backend reconciles order history and positions before treating an entry as filled.
   Re-observing a completed entry must not reset protection recovery or an exit state.
+- A rejected or cancelled zero-fill IOC entry is reconciled to REJECTED or UNFILLED,
+  releases its pending-position reservation, and is not automatically resubmitted.
+  Broker rejection reasons appear in alerts and the Trades tab. Broker precheck errors
+  are recorded per index without discarding the other indices' decisions; uncertain
+  submission results remain ENTRY_UNKNOWN and block retries pending reconciliation.
 - AUTONOMIQ tags and manages only its own orders. If broker positions do not match its
   ledger, it stops modifying that contract and raises an alert for reconciliation.
 - Switching live entries OFF blocks new submissions and attempts to cancel pending
   AUTONOMIQ entry orders; it continues managing AUTONOMIQ-owned open positions. The kill
   switch blocks entries and requests exits for owned positions.
+
+### Zerodha IP and trigger-price troubleshooting
+
+Both AQTE and AUTONOMIQ PRO call KiteConnect `place_order` for BUY LIMIT IOC entries
+and submit a SELL SL order with `trigger_price` after an entry fill. AUTONOMIQ does
+not place a pending stop-entry BUY order: its trigger price is the protective stop.
+An IOC entry can be cancelled unfilled if its limit cannot execute.
+
+`AQTE_LIVE_STATIC_IP` belongs to AQTE's outbound-IP preflight; AUTONOMIQ does not
+read it. Writing an IP in an environment file does not configure network egress or
+register that IP with Zerodha. The actual production server's public outbound IP must
+be allowed for the Kite app whose API key is used by AUTONOMIQ. Successful quotes,
+profile access or a connected feed alone do not prove order-placement permission.
+Check the execution detail and Zerodha order book for the broker's actual response;
+do not increase risk limits or repeatedly retry an uncertain order to test connectivity.
 
 ## Risk and reporting
 

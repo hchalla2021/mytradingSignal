@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 from unittest import mock
 
 import httpx
+from kiteconnect.exceptions import PermissionException, TokenException
 
 from services.autonomiq_pro import agents, indicators as ind
 from services.autonomiq_pro.ai_client import AIClient, AIUnavailable
@@ -298,6 +299,158 @@ class StoreTests(unittest.TestCase):
 
 
 class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
+    def test_acknowledged_unfilled_terminal_entry_is_reconciled(self):
+        for status, expected in (("REJECTED", "REJECTED"), ("CANCELLED", "UNFILLED")):
+            with self.subTest(status=status):
+                executor, kite, plan = self.entry_fixture()
+                trade_id = executor.store.create_live_trade({
+                    "signal_key": status, "tag": "APRO1234567890", "day": DAY, "account_id": "owner",
+                    **plan, "quantity": plan["lot_size"],
+                })
+                executor.store.update_live_trade(trade_id, status="ENTRY_PENDING", entry_order_id="entry-1")
+                order = {"order_id": "entry-1", "status": status, "filled_quantity": 0,
+                         "status_message": "Order not permitted from this IP"}
+                executor._manage_trade(kite, executor.store.live_trade(trade_id), {"entry-1": order},
+                                       [], CFG, NOW, CFG.square_off)
+                self.assertEqual(executor.store.live_trade(trade_id)["status"], expected)
+                self.assertEqual(executor.store.open_live_trades(), [])
+                if status == "REJECTED":
+                    self.assertIn("this IP", executor.store.live_trade(trade_id)["error"])
+                    self.assertIn("this IP", executor.store.alerts(1)[0]["message"])
+                executor._manage_trade(kite, executor.store.live_trade(trade_id), {"entry-1": order},
+                                       [], CFG, NOW, CFG.square_off)
+                self.assertEqual(len(executor.store.alerts()), 1)
+                kite.place_order.assert_not_called()
+
+    def test_submit_error_keeps_broker_reason_without_retrying_uncertain_entry(self):
+        executor, kite, plan = self.entry_fixture()
+        kite.quote.return_value = {f"NFO:{plan['tradingsymbol']}": {
+            "timestamp": NOW, "depth": {"buy": [{"price": 99.5}], "sell": [{"price": 100}]},
+        }}
+        kite.place_order.side_effect = PermissionException("Order access not permitted from this IP")
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            result = executor._submit_entry_sync(CFG, "NIFTY", {"action": "BUY_CE"}, plan, 1, NOW)
+            retry = executor._submit_entry_sync(CFG, "NIFTY", {"action": "BUY_CE"}, plan, 1, NOW)
+        self.assertEqual(result["status"], "ENTRY_UNKNOWN")
+        self.assertIn("this IP", result["detail"])
+        self.assertIn("this IP", executor.store.open_live_trades()[0]["error"])
+        self.assertEqual(retry["status"], "BLOCKED")
+        kite.place_order.assert_called_once()
+
+    async def test_risk_rejection_reports_failed_check_without_broker_access(self):
+        executor, kite, plan = self.entry_fixture()
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            result = await executor.submit_entry(
+                cfg=AutonomiqConfig(live_execution_allowed=True), session=session_state(CFG, NOW),
+                symbol="NIFTY", decision={"action": "BUY_CE", "source": "ai+quant", "risk": {
+                    "approved": False, "checks": [
+                        {"name": "Risk per trade", "passed": False, "detail": "1282 > 1000"},
+                        {"name": "Spot fresh", "passed": True, "detail": "1s"},
+                    ]}}, plan=plan, cycle_id=1, now=NOW)
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["detail"], "Risk per trade: 1282 > 1000")
+        kite.profile.assert_not_called()
+        kite.place_order.assert_not_called()
+
+    async def test_broker_precheck_failure_is_an_explicit_entry_result(self):
+        executor, kite, plan = self.entry_fixture()
+        kite.profile.side_effect = PermissionException("Order access not permitted from this IP")
+        with mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as dt:
+            dt.now.return_value = NOW
+            result = await executor.submit_entry(
+                cfg=AutonomiqConfig(live_execution_allowed=True), session=session_state(CFG, NOW),
+                symbol="NIFTY", decision={"action": "BUY_CE", "source": "ai+quant", "risk": {"approved": True}},
+                plan=plan, cycle_id=1, now=NOW)
+        self.assertEqual(result["status"], "BROKER_ERROR")
+        self.assertIn("this IP", result["detail"])
+        self.assertEqual(executor.store.open_live_trades(), [])
+        kite.place_order.assert_not_called()
+
+    async def test_scheduled_approved_buy_submits_entry_then_broker_stop_trigger(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        executor, kite, plan = self.entry_fixture()
+        collector = executor.collector
+        collector.spot = mock.AsyncMock(return_value={"price": 22500, "age_s": 1})
+        collector.collect_sync.side_effect = lambda symbol, *args: {
+            "symbol": symbol, "errors": [], "candles": {"5m": [1], "15m": [1]},
+            "options": chain(), "futures": None,
+        }
+        kite.quote.return_value = {f"NFO:{plan['tradingsymbol']}": {
+            "timestamp": NOW, "depth": {"buy": [{"price": 99.5}], "sell": [{"price": 100}]},
+        }}
+        ai = mock.Mock()
+        ai.status.return_value = "ACTIVE"
+        ai.complete_json = mock.AsyncMock(return_value={
+            "indices": {"NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"}}})
+        engine = AutonomiqOrchestrator(executor.store, collector, ai)
+        engine.cfg = AutonomiqConfig(ai_enabled=True, api_key="test-key", live_execution_allowed=True)
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as odt, \
+                mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as edt, \
+                mock.patch.object(agents.MarketAnalysisAgent, "run", return_value={"atr_5m": 5}), \
+                mock.patch.object(agents.QuantResearchAgent, "run", side_effect=lambda analysis, data: {
+                    "score": 80 if data["symbol"] == "NIFTY" else 10, "bias": "BULLISH",
+                    "flags": [], "factors": [], "pcr": 1, "atm_iv": 14,
+                }):
+            odt.now.return_value = edt.now.return_value = NOW
+            payload = await engine.run_cycle("SCHEDULED")
+            signal = payload["indices"]["NIFTY"]["signal"]
+            self.assertTrue(signal["risk"]["approved"])
+            self.assertEqual(signal["execution"]["status"], "ENTRY_PENDING")
+            entry_args = kite.place_order.call_args.kwargs
+            self.assertEqual((entry_args["transaction_type"], entry_args["order_type"], entry_args["validity"]),
+                             ("BUY", "LIMIT", "IOC"))
+            self.assertEqual((entry_args["quantity"], entry_args["price"]), (65, 100))
+            kite.orders.return_value = [{
+                "order_id": "entry-1", "status": "COMPLETE", "filled_quantity": 65, "average_price": 100,
+                "tag": entry_args["tag"],
+            }]
+            kite.positions.return_value = {"net": [{
+                "exchange": "NFO", "tradingsymbol": plan["tradingsymbol"], "quantity": 65,
+            }]}
+            kite.place_order.return_value = "stop-1"
+            await engine.live_executor.reconcile_and_manage(engine.cfg, NOW, engine.cfg.square_off)
+        self.assertEqual(ai.complete_json.await_count, 1)
+        self.assertEqual(kite.place_order.call_count, 2)
+        stop_args = kite.place_order.call_args.kwargs
+        self.assertEqual((stop_args["transaction_type"], stop_args["order_type"]), ("SELL", "SL"))
+        self.assertEqual((stop_args["quantity"], stop_args["trigger_price"]), (65, 90))
+        self.assertLess(stop_args["price"], stop_args["trigger_price"])
+        self.assertEqual(executor.store.open_live_trades()[0]["protection_order_id"], "stop-1")
+
+    async def test_expired_broker_session_returns_reconnect_error_and_keeps_live_off(self):
+        from fastapi import FastAPI
+        from routers import autonomiq_pro
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        executor, kite, _ = self.entry_fixture()
+        executor.store.set_state("live_trading_enabled", False)
+        ai = mock.Mock()
+        ai.status.return_value = "ACTIVE"
+        engine = AutonomiqOrchestrator(executor.store, executor.collector, ai)
+        engine.live_executor = executor
+        engine.cfg = AutonomiqConfig(ai_enabled=True, api_key="test-key", live_execution_allowed=True)
+        app = FastAPI()
+        app.include_router(autonomiq_pro.router)
+        app.dependency_overrides[autonomiq_pro.owner] = lambda: "owner"
+        for stage in ("profile", "orders"):
+            with self.subTest(stage=stage):
+                kite.profile.side_effect = TokenException("Expired token") if stage == "profile" else None
+                kite.orders.side_effect = TokenException("Expired token") if stage == "orders" else None
+                with mock.patch.object(autonomiq_pro, "_service", return_value=engine):
+                    async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test",
+                    ) as client:
+                        response = await client.post("/api/autonomiq-pro/control", json={
+                            "live_trading_enabled": True, "confirm_live": "ENABLE_AUTONOMIQ_LIVE_TRADING",
+                        })
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("Zerodha session expired", response.json()["detail"])
+                self.assertFalse(executor.store.get_state("live_trading_enabled", False))
+                kite.place_order.assert_not_called()
+
     def entry_fixture(self):
         store = memory_store()
         self.addCleanup(store.close)
@@ -520,6 +673,29 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    def test_buy_alerts_and_history_distinguish_blocked_candidates_from_submissions(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        store = memory_store()
+        self.addCleanup(store.close)
+        engine = AutonomiqOrchestrator(store, collector=mock.Mock())
+        decision = {"symbol": "SENSEX", "action": "BUY_CE", "reasoning": "Aligned trend",
+                    "risk": {"approved": False}, "execution": {
+                        "status": "BLOCKED", "detail": "Risk per trade: 1282 > 1000"}}
+        engine._alert_on_change("SENSEX", decision)
+        engine._alert_on_change("SENSEX", decision)
+        self.assertEqual(len(store.alerts()), 1)
+        self.assertEqual(store.alerts(1)[0]["level"], "warning")
+        self.assertIn("BUY CE · BLOCKED", store.alerts(1)[0]["message"])
+        self.assertIn("1282 > 1000", store.alerts(1)[0]["message"])
+        store.add_decision(store.start_cycle("SCHEDULED"), DAY, decision)
+        self.assertEqual(store.decisions(1)[0]["execution"], decision["execution"])
+        decision["execution"] = {"status": "ENTRY_PENDING", "detail": "Fill is not confirmed"}
+        engine._alert_on_change("SENSEX", decision)
+        self.assertEqual(len(store.alerts()), 2)
+        self.assertEqual(store.alerts(1)[0]["level"], "info")
+        self.assertIn("ENTRY PENDING", store.alerts(1)[0]["message"])
+
     async def test_risk_validation_uses_live_losses_trade_count_and_cooldown(self):
         from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
 

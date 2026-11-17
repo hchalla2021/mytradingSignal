@@ -49,7 +49,7 @@ interface Snapshot {
     market_alert: { tone: string; title: string; detail: string }; indices: Record<Sym, IndexCycle> } | null;
   alerts: { id: number; created_at: string; level: string; symbol: string | null; message: string }[];
   decisions: { id: number; created_at: string; symbol: string; action: Action; strength: string; score: number;
-    approved: number; reasoning: string; contract: string | null }[];
+    approved: number; reasoning: string; contract: string | null; execution?: Signal['execution'] | null }[];
   live_trades: LiveTrade[];
   live_performance: { trades: number; pnl: number; wins: number;
     today: { trades: number; realized: number; wins: number; losses: number } };
@@ -62,7 +62,7 @@ interface LiveTrade {
   quantity: number; entry: number; entry_price: number | null; stop_loss: number; trailing_sl: number;
   target1: number; target2: number; last_price: number | null; pnl: number | null;
   exit_price: number | null; exit_reason: string | null; created_at: string; opened_at: string | null;
-  closed_at: string | null; risk_rupees: number;
+  closed_at: string | null; risk_rupees: number; error?: string | null;
 }
 interface Usage { calls: number; total_tokens: number; cost_usd: number; failures: number }
 
@@ -179,6 +179,9 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
   const [open, setOpen] = useState(false);
   const signal = cycle?.signal;
   const isBuy = signal?.action === 'BUY_CE' || signal?.action === 'BUY_PE';
+  const execution = signal?.execution;
+  const entryBlocked = signal?.risk?.approved === false ||
+    (execution != null && ['BLOCKED', 'BROKER_ERROR', 'ENTRY_UNKNOWN', 'DUPLICATE'].includes(execution.status));
   const quoteAge = signal?.plan?.quote.trade_age_s;
   const signalAt = signal ? Date.parse(signal.timestamp) : NaN;
   const quoteAt = typeof quoteAge === 'number' && Number.isFinite(quoteAge) ? signalAt - quoteAge * 1000 : NaN;
@@ -187,7 +190,7 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
   const spotAgeMs = typeof spot?.age_s === 'number' ? spot.age_s * 1000 + elapsedMs : NaN;
   const spotCurrent = !!spot?.fresh && typeof maxSpotAge === 'number' && Number.isFinite(maxSpotAge) &&
     maxSpotAge > 0 && Number.isFinite(spotAgeMs) && spotAgeMs >= -3000 && spotAgeMs <= maxSpotAge * 1000;
-  const proposal = isBuy && snap?.session.phase === 'ACTIVE' && snap.config.enabled === true && snap.runtime.engine_enabled &&
+  const proposal = isBuy && !entryBlocked && snap?.session.phase === 'ACTIVE' && snap.config.enabled === true && snap.runtime.engine_enabled &&
     !snap.runtime.kill_switch && spotCurrent && quoteIsFresh(quoteAt, snap, current, elapsedMs)
     ? signal?.plan : null;
   const action: Action = isBuy && !proposal ? 'WAIT' : signal?.action ?? 'NO_TRADE';
@@ -204,7 +207,6 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
   const trailPercent = trailPoints != null && entry ? trailPoints * 100 / entry : null;
   const failedChecks = signal?.risk?.checks.filter((check) => !check.passed) ?? [];
   const quantThreshold = num(typeof snap?.config.min_signal_score === 'number' ? snap.config.min_signal_score : null, 0);
-  const execution = signal?.execution;
 
   return (
     <div aria-label={`${sym} trade card`} className={`flex min-w-0 flex-col rounded-2xl border ${style.ring} bg-slate-900/70 p-4`}>
@@ -229,7 +231,9 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
       <div className="mt-3 min-h-[2.25rem] text-[14px] text-slate-300">
         {trade ? (
           <>
-            <div className="font-bold text-emerald-300">AUTONOMIQ LIVE · {trade.status.replace(/_/g, ' ')}</div>
+            <div className={`font-bold ${trade.status === 'OPEN' ? 'text-emerald-300' : 'text-amber-300'}`}>
+              AUTONOMIQ LIVE · {trade.status.replace(/_/g, ' ')}
+            </div>
             <div className="break-all font-semibold text-white">{trade.tradingsymbol}</div>
           </>
         ) : proposal ? (
@@ -243,7 +247,8 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
             <div className="break-all font-semibold text-white">{proposal.tradingsymbol}</div>
           </>
         ) : (
-          <div>{isBuy ? 'Previous signal expired or unavailable; waiting for fresh data.' :
+          <div>{isBuy && entryBlocked ? 'ENTRY NOT CONFIRMED · check execution details below.' :
+            isBuy ? 'Previous signal expired or unavailable; waiting for fresh data.' :
             cycle ? 'No valid entry right now.' : 'Waiting for the first analysis.'}</div>
         )}
       </div>
@@ -280,6 +285,7 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
           execution?.detail || (proposal ? 'Prices are indicative; no live order has been placed.' :
             'No AUTONOMIQ live position is open.')}
       </div>
+      {trade?.error && <p role="status" className="mt-2 break-words text-[12px] text-amber-300">{trade.error}</p>}
 
       <p className="mt-3 text-[14px] leading-relaxed text-slate-300">{signal?.reasoning ?? '—'}</p>
       {cycle && <div className="mt-2 text-[12px] text-slate-400">
@@ -348,7 +354,9 @@ function LiveTradeTable({ trades, production }: { trades: LiveTrade[]; productio
             <tr key={trade.id} className="text-slate-200">
               <td className="px-3 py-2">{clock(trade.opened_at ?? trade.created_at)}</td>
               <td className="px-3 py-2">{trade.symbol}<div className="text-slate-400">{trade.tradingsymbol}</div></td>
-              <td className="px-3 py-2">{trade.status.replace(/_/g, ' ')}</td>
+              <td className="px-3 py-2">{trade.status.replace(/_/g, ' ')}
+                {trade.error && <div className="max-w-sm break-words text-amber-300">{trade.error}</div>}
+              </td>
               <td className="px-3 py-2">{trade.quantity}</td>
               <td className="px-3 py-2">{inr(trade.entry_price ?? trade.entry)}</td>
               <td className="px-3 py-2">{inr(trade.stop_loss)} / {inr(trade.trailing_sl)}</td>
@@ -580,11 +588,13 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
                 <h4 className="mb-1 mt-4 text-[12px] font-bold uppercase tracking-wide text-slate-400">Recent AI decisions</h4>
                 <div role="region" aria-label="Recent AI decisions, scroll horizontally for full details" tabIndex={0} className="min-w-0 overflow-x-auto">
                   <ul className="w-max min-w-full divide-y divide-slate-800">
-                    {(snap?.decisions ?? []).slice(0, showAllDecisions ? undefined : 5).map((d) => (
-                      <ActivityRow key={d.id} at={d.created_at} symbol={d.symbol}
-                        action={ACTION_STYLE[d.action]?.label ?? d.action}
-                        actionTone={ACTION_STYLE[d.action]?.text ?? 'text-slate-300'} detail={d.reasoning} />
-                    ))}
+                    {(snap?.decisions ?? []).slice(0, showAllDecisions ? undefined : 5).map((d) => {
+                      const entry = d.action === 'BUY_CE' || d.action === 'BUY_PE';
+                      return <ActivityRow key={d.id} at={d.created_at} symbol={d.symbol}
+                        action={`${ACTION_STYLE[d.action]?.label ?? d.action}${entry && d.execution ? ` · ${d.execution.status.replace(/_/g, ' ')}` : ''}`}
+                        actionTone={entry && d.execution ? 'text-amber-300' : ACTION_STYLE[d.action]?.text ?? 'text-slate-300'}
+                        detail={entry && d.execution?.detail ? `${d.reasoning} · ${d.execution.detail}` : d.reasoning} />;
+                    })}
                     {!snap?.decisions.length && <li className="py-2 text-[14px] text-slate-400">No decisions yet.</li>}
                   </ul>
                 </div>

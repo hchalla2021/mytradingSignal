@@ -10,6 +10,8 @@ from datetime import datetime
 from uuid import uuid4
 from typing import Any
 
+from kiteconnect.exceptions import KiteException, TokenException
+
 from .config import AutonomiqConfig
 from .live_risk import EntryRisk, Exposure, entry_rejections
 from .market_data import IST, parse_ts
@@ -59,14 +61,21 @@ class LiveOrderExecutor:
                 self.store.add_alert("error", "Live entries are OFF; pending entry cancellation needs broker reconciliation")
 
     def _preflight_sync(self) -> dict:
-        kite = self.collector.gateway.client()
-        profile = kite.profile()
-        account_id = str(profile.get("user_id") or "")
-        if not account_id:
-            raise LiveExecutionBlocked("Zerodha account identity is unavailable")
-        kite.orders()
-        kite.positions()
-        kite.margins("equity")
+        try:
+            kite = self.collector.gateway.client()
+            profile = kite.profile()
+            account_id = str(profile.get("user_id") or "")
+            if not account_id:
+                raise LiveExecutionBlocked("Zerodha account identity is unavailable")
+            kite.orders()
+            kite.positions()
+            kite.margins("equity")
+        except TokenException as exc:
+            logger.warning("AUTONOMIQ PRO broker preflight blocked: Zerodha session expired or invalid")
+            raise LiveExecutionBlocked(
+                "Zerodha session expired or invalid. Use the dashboard LOGIN to reconnect "
+                "to Zerodha, then enable live trading again."
+            ) from exc
         return {"account_id": account_id}
 
     async def submit_entry(
@@ -95,10 +104,18 @@ class LiveOrderExecutor:
             if decision.get("action") not in ("BUY_CE", "BUY_PE") or decision.get("source") != "ai+quant":
                 return {"status": "BLOCKED", "detail": "A reconciled AI and quant BUY decision is required"}
             if not (decision.get("risk") or {}).get("approved"):
-                return {"status": "BLOCKED", "detail": "AUTONOMIQ risk validation did not approve this entry"}
-            return await asyncio.to_thread(
-                self._submit_entry_sync, cfg, symbol, decision, plan, cycle_id, now,
-            )
+                failed = [f"{check['name']}: {check.get('detail') or 'Not passed'}"
+                          for check in (decision.get("risk") or {}).get("checks", []) if not check["passed"]]
+                return {"status": "BLOCKED", "detail": "; ".join(failed)
+                        or "AUTONOMIQ risk validation did not approve this entry"}
+            try:
+                return await asyncio.to_thread(
+                    self._submit_entry_sync, cfg, symbol, decision, plan, cycle_id, now,
+                )
+            except KiteException as exc:
+                logger.exception("AUTONOMIQ PRO broker entry precheck failed for %s", symbol)
+                return {"status": "BROKER_ERROR",
+                        "detail": f"Zerodha entry precheck failed ({type(exc).__name__}): {str(exc)[:300]}"}
 
     def _submit_entry_sync(
         self, cfg: AutonomiqConfig, symbol: str, decision: dict, plan: dict, cycle_id: int, now: datetime,
@@ -254,13 +271,15 @@ class LiveOrderExecutor:
             if not order_id:
                 raise RuntimeError("Broker did not return an order ID")
         except Exception as exc:
+            detail = f"{type(exc).__name__}: {str(exc)[:300]}" if isinstance(exc, KiteException) else type(exc).__name__
+            message = f"Entry result uncertain ({detail}); reconcile before retry"
             self.store.update_live_trade(
-                trade_id, status="ENTRY_UNKNOWN", error=f"Entry result uncertain ({type(exc).__name__}); reconcile before retry",
+                trade_id, status="ENTRY_UNKNOWN", error=message,
             )
             self.store.audit("autonomiq-pro", "live_entry_unknown", {"trade_id": trade_id, "error": type(exc).__name__})
             logger.exception("AUTONOMIQ PRO entry outcome uncertain; automatic resubmission prohibited")
             return {"status": "ENTRY_UNKNOWN", "trade_id": trade_id,
-                    "detail": "Broker result is uncertain; AUTONOMIQ will not resubmit automatically"}
+                    "detail": f"{message}; AUTONOMIQ will not resubmit automatically"}
         self.store.update_live_trade(trade_id, status="ENTRY_PENDING", entry_order_id=str(order_id),
                                      expected_order_type="LIMIT", expected_price=entry)
         self.store.audit("autonomiq-pro", "live_entry_submitted", {
@@ -379,7 +398,7 @@ class LiveOrderExecutor:
             status = _order_status(entry)
             if (entry_id != trade.get("entry_order_id")
                     or filled != int(trade.get("entry_filled") or 0)
-                    or (filled and status in TERMINAL_ORDERS and trade["status"] in {
+                    or (status in TERMINAL_ORDERS and trade["status"] in {
                         "ENTRY_PENDING", "ENTRY_SUBMITTING", "ENTRY_UNKNOWN",
                     })):
                 fields = {"entry_order_id": entry_id, "entry_filled": filled, "last_broker_sync": now.isoformat()}
@@ -397,6 +416,10 @@ class LiveOrderExecutor:
                     fields["status"] = "UNFILLED"
                 self.store.update_live_trade(trade["id"], **fields)
                 trade.update(fields)
+                if fields.get("status") in {"REJECTED", "UNFILLED"}:
+                    detail = fields.get("error") or "IOC entry cancelled without a fill"
+                    self.store.add_alert("warning", f"AUTONOMIQ {trade['tradingsymbol']} "
+                                         f"{fields['status']}: {detail}", trade["symbol"])
                 if filled and status not in TERMINAL_ORDERS:
                     try:
                         kite.cancel_order(variety=entry.get("variety") or "regular", order_id=entry["order_id"])

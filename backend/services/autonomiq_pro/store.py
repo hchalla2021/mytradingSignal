@@ -200,6 +200,7 @@ class Store:
             payload = json.loads(row.pop("payload"))
             row["reasoning"] = payload.get("reasoning")
             row["contract"] = (payload.get("plan") or {}).get("tradingsymbol")
+            row["execution"] = payload.get("execution")
         return rows
 
     # ── AI usage ─────────────────────────────────────────────────────

@@ -203,6 +203,14 @@ test('a fresh proposal is indicative only and expires with its quote', () => {
   assert.match(body, /Live P&L \(pts \/ %\) —/);
   assert.match(body, /no live order has been placed/i);
 
+  for (const status of ['OFF', 'LIVE_DISABLED']) {
+    snap.cycle.indices.NIFTY.signal.execution = { status, detail: 'Analysis only; live entry disabled' };
+    body = card(render(snap));
+    assert.match(body, /ANALYSIS ONLY · NO LIVE ORDER/);
+    assert.match(body, /Entry \(Premium\) ₹100\.00/);
+  }
+  delete snap.cycle.indices.NIFTY.signal.execution;
+
   plan.quote.trade_age_s = 61;
   body = card(render(snap));
   assert.match(body, /WAIT/);
@@ -239,6 +247,53 @@ test('live diagnostics show actual AI request and failed risk checks', () => {
   assert.match(body, /entry needs ≥ \+60 CE \/ ≤ -60 PE and AI agreement/);
   assert.match(body, /Risk per trade : Estimated risk exceeds limit/);
   assert.doesNotMatch(body, /Entry window : Open/);
+});
+
+test('a risk-blocked BUY candidate is WAIT and history includes its execution blocker', () => {
+  const snap = snapshot();
+  snap.runtime.live_execution_allowed = snap.runtime.live_trading_enabled = true;
+  const execution = { status: 'BLOCKED', detail: 'Risk per trade: 1282 > 1000' };
+  snap.cycle = cycle({
+    action: 'BUY_CE', timestamp: at(0), source: 'ai+quant', reasoning: 'Aligned trend',
+    plan: { tradingsymbol: 'NIFTYTESTCE', entry: 100, quote: { trade_age_s: 1 } },
+    risk: { approved: false, checks: [{ name: 'Risk per trade', passed: false, detail: '1282 > 1000' }] },
+    execution,
+  });
+  snap.decisions = [{ id: 1, created_at: at(0), symbol: 'NIFTY', action: 'BUY_CE',
+    reasoning: 'Aligned trend', approved: 0, execution }];
+  const tree = render(snap);
+  const body = card(tree);
+  assert.match(body, /WAIT/);
+  assert.match(body, /ENTRY NOT CONFIRMED/);
+  assert.match(body, /Risk per trade: 1282 > 1000/);
+  assert.doesNotMatch(body, /LIVE ENTRY|Entry \(Premium\) ₹100/);
+  assert.match(text(tree), /BUY CE · BLOCKED/);
+});
+
+test('broker precheck and uncertain entry errors remain visible without advertising a BUY', () => {
+  for (const status of ['BROKER_ERROR', 'ENTRY_UNKNOWN']) {
+    const snap = snapshot();
+    snap.runtime.live_execution_allowed = snap.runtime.live_trading_enabled = true;
+    snap.cycle = cycle({
+      action: 'BUY_CE', timestamp: at(0), source: 'ai+quant',
+      risk: { approved: true, checks: [] },
+      plan: { entry: 100, quote: { trade_age_s: 1 } },
+      execution: { status, detail: 'Zerodha: order not permitted from this IP' },
+    });
+    const body = card(render(snap));
+    assert.match(body, /WAIT/);
+    assert.match(body, /not permitted from this IP/);
+    assert.doesNotMatch(body, /LIVE ENTRY|BUY CE/);
+  }
+});
+
+test('rejected broker order reasons survive in the Trades tab', () => {
+  const snap = snapshot();
+  snap.runtime.live_execution_allowed = true;
+  snap.live_trades = [paperTrade({ status: 'REJECTED', quantity: 65, error: 'Order not permitted from this IP' })];
+  const body = text(render(snap, { tab: 'trades' }));
+  assert.match(body, /REJECTED/);
+  assert.match(body, /Order not permitted from this IP/);
 });
 
 test('budget-blocked analysis cannot show ON merely because the AI client is ACTIVE', () => {
