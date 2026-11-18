@@ -330,6 +330,7 @@ class AutonomiqOrchestrator:
                     logger.warning("AUTONOMIQ PRO AI output cross-validation rejected: %s",
                                    "; ".join(validation_issues))
                     ai_state = "AI_OUTPUT_REJECTED"
+                    strategy = None
             except AIUnavailable as exc:
                 ai_state = str(exc)
         elif ai_state == "ACTIVE":
@@ -405,8 +406,11 @@ class AutonomiqOrchestrator:
                 execution = {"status": "LIVE_DISABLED", "detail": LIVE_EXECUTION_DISABLED_REASON}
             live_risk_checks = execution.pop("risk_checks", [])
             if live_risk_checks:
+                if "risk" not in signal:
+                    signal["risk"] = {"approved": False, "checks": []}
                 signal["risk"]["checks"].extend(live_risk_checks)
                 signal["risk"]["approved"] = all(check["passed"] for check in signal["risk"]["checks"])
+                signal["approval_status"] = "APPROVED" if signal["risk"]["approved"] else "RISK_BLOCKED"
             quant_action, _ = agents.quant_action(ctx, cfg.min_signal_score)
             decision = {"symbol": symbol, **signal, "quant_action": quant_action,
                         "ai_action": ai_sig["action"] if ai_sig else None,

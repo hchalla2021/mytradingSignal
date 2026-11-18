@@ -606,7 +606,11 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(args[-1]["autonomiq_live_positions"]), 1)
                     executor.store.update_live_trade(trade_id, status=status,
                                                      exit_filled=65 if status == "CLOSED" else 0)
-                    return {"indices": {"NIFTY": {"action": action, "conviction": 80, "reasoning": "Manage"}}}
+                    return {"indices": {
+                        "NIFTY": {"action": action, "conviction": 80, "reasoning": "Manage"},
+                        "BANKNIFTY": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+                        "SENSEX": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+                    }}
 
                 ai = mock.Mock()
                 ai.status.return_value = "ACTIVE"
@@ -884,7 +888,11 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
         ai = mock.Mock()
         ai.status.return_value = "ACTIVE"
         ai.complete_json = mock.AsyncMock(return_value={
-            "indices": {"NIFTY": {"action": "HOLD", "conviction": 80, "reasoning": "Manage position"}}})
+            "indices": {
+                "NIFTY": {"action": "HOLD", "conviction": 80, "reasoning": "Manage position"},
+                "BANKNIFTY": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+                "SENSEX": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+            }})
         engine = AutonomiqOrchestrator(executor.store, collector, ai)
         engine.cfg = AutonomiqConfig(ai_enabled=True, api_key="test-key", live_execution_allowed=True)
         with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as dt, \
@@ -945,7 +953,11 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
         ai = mock.Mock()
         ai.status.return_value = "ACTIVE"
         ai.complete_json = mock.AsyncMock(return_value={
-            "indices": {"NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"}}})
+            "indices": {
+                "NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"},
+                "BANKNIFTY": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+                "SENSEX": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+            }})
         engine = AutonomiqOrchestrator(executor.store, collector, ai)
         with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={}), \
                 mock.patch.dict(os.environ, {
@@ -1007,7 +1019,11 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
         ai = mock.Mock()
         ai.status.return_value = "ACTIVE"
         ai.complete_json = mock.AsyncMock(return_value={
-            "indices": {"NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"}}})
+            "indices": {
+                "NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"},
+                "BANKNIFTY": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+                "SENSEX": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+            }})
         engine = AutonomiqOrchestrator(executor.store, collector, ai)
         engine.cfg = AutonomiqConfig(
             ai_enabled=True, api_key="test-key", live_execution_allowed=True,
@@ -1585,7 +1601,11 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         ai = mock.Mock()
         ai.status.return_value = "ACTIVE"
         ai.complete_json = mock.AsyncMock(return_value={
-            "indices": {"NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"}}})
+            "indices": {
+                "NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "Aligned"},
+                "BANKNIFTY": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+                "SENSEX": {"action": "WAIT", "conviction": 0, "reasoning": "No setup"},
+            }})
         cfg = AutonomiqConfig(ai_enabled=True, live_execution_allowed=True, max_trades_per_day=1)
         engine = AutonomiqOrchestrator(store, collector, ai)
         engine.cfg = cfg
@@ -1893,8 +1913,11 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
         def handler(request):
             calls.append(json.loads(request.content))
             return anthropic_reply({"market_alert": {"tone": "BULLISH", "title": "t", "detail": "d"},
-                                    "summary": "s", "indices": {"NIFTY": {"action": "BUY_CE", "conviction": 80,
-                                                                          "reasoning": "r", "risks": []}}})
+                                    "summary": "s", "indices": {
+                                        "NIFTY": {"action": "BUY_CE", "conviction": 80, "reasoning": "r", "risks": []},
+                                        "BANKNIFTY": {"action": "WAIT", "conviction": 0, "reasoning": "No setup", "risks": []},
+                                        "SENSEX": {"action": "WAIT", "conviction": 0, "reasoning": "No setup", "risks": []},
+                                    }})
 
         def quant(analysis, data):
             score = 80.0 if data["symbol"] == "NIFTY" else 10.0
@@ -2020,6 +2043,7 @@ class SignalValidationTests(unittest.TestCase):
         self.assertEqual(checked["indices"]["SENSEX"]["action"], "WAIT")
         self.assertEqual(checked["indices"]["BANKNIFTY"]["action"], "BUY_PE")
         self.assertEqual(checked["market_alert"]["tone"], "CAUTION")
+
 
 
 class LiveRiskCalculationTests(unittest.TestCase):
