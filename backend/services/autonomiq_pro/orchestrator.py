@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 LOOP_SECONDS = 1
 BROKER_RECONCILE_SECONDS = 5
 CYCLE_TIMEOUT_S = 240
+QUANT_REFRESH_SECONDS = 30
 # Let Kite publish the just-closed candle before analysing it.
 CANDLE_SETTLE_S = 5
 def slot_start(now: datetime, minutes: float) -> datetime:
@@ -90,6 +91,7 @@ class AutonomiqOrchestrator:
         self._cycle_task: asyncio.Task | None = None
         self._cycle_lock = asyncio.Lock()
         self.next_run_at: datetime | None = None
+        self.quant_refresh_next_at: datetime | None = None
         self.last_cycle_at: datetime | None = None
         self.last_cycle_spots: dict[str, float] = {}
         self.last_error: str | None = None
@@ -187,6 +189,7 @@ class AutonomiqOrchestrator:
             return
         if not analysis_window_open(now, self.cfg, session):
             self.next_run_at = None
+            self.quant_refresh_next_at = None
             return
         if self.next_run_at is None:
             # At startup or after a restart, run the first check immediately when
@@ -199,6 +202,13 @@ class AutonomiqOrchestrator:
                 logger.info("AUTONOMIQ PRO AI slot already claimed; next scheduled run %s", self.next_run_at.isoformat())
             else:
                 self.trigger("SCHEDULED")
+
+        if self.quant_refresh_next_at is None:
+            self.quant_refresh_next_at = now + timedelta(seconds=QUANT_REFRESH_SECONDS)
+        if now >= self.quant_refresh_next_at:
+            self.quant_refresh_next_at = now + timedelta(seconds=QUANT_REFRESH_SECONDS)
+            if not (self._cycle_task and not self._cycle_task.done()):
+                self.trigger("QUANT_EVENT")
 
     def trigger(self, trigger: str) -> bool:
         if self._cycle_task and not self._cycle_task.done():
@@ -435,9 +445,14 @@ class AutonomiqOrchestrator:
         unavailable or stale inputs instead of silently skipping a cycle with no quant BUY.
         Entry limits block trade approval, not market analysis.
         """
-        if trigger != "SCHEDULED":
+        if trigger == "MANUAL":
+            return "SKIPPED_MANUAL_QUANT_ONLY", {}
+        if trigger == "QUANT_EVENT":
             if not analysis_window_open(now, cfg, session):
                 return "SKIPPED_OUTSIDE_WINDOW", {}
+            slot = slot_start(now, ANALYSIS_INTERVAL_MINUTES).isoformat()
+            if self.store.get_state("ai_slot") == slot:
+                return "SKIPPED_SLOT_ALREADY_ANALYZED", {}
             actionable = {}
             for symbol, ctx in contexts.items():
                 if agents.data_problems(ctx):
@@ -446,10 +461,7 @@ class AutonomiqOrchestrator:
                 if quant_action in ("BUY_CE", "BUY_PE"):
                     actionable[symbol] = ctx
             if not actionable:
-                return "SKIPPED_MANUAL_NO_QUANT_SETUP", {}
-            slot = slot_start(now, ANALYSIS_INTERVAL_MINUTES).isoformat()
-            if self.store.get_state("ai_slot") == slot:
-                return "SKIPPED_SLOT_ALREADY_ANALYZED", {}
+                return "SKIPPED_AUTOMATIC_NO_QUANT_SETUP", {}
             return None, actionable
         if not analysis_window_open(now, cfg, session):
             return "SKIPPED_OUTSIDE_WINDOW", {}
@@ -641,6 +653,7 @@ class AutonomiqOrchestrator:
             "ai_consecutive_failures": self.ai.consecutive_failures,
             "last_cycle_at": self.last_cycle_at.isoformat() if self.last_cycle_at else None,
             "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
+            "quant_refresh_next_at": self.quant_refresh_next_at.isoformat() if self.quant_refresh_next_at else None,
             "cycle_running": bool(self._cycle_task and not self._cycle_task.done()),
             "last_error": self.last_error,
             "live_execution": "AVAILABLE" if self.cfg.live_execution_allowed else "DISABLED_BY_CONFIG",

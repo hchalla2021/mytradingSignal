@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   Activity, AlertTriangle, BarChart3, Bell, Bot, Brain, Building2, CalendarDays,
-  ChevronRight, ChevronUp, Clock3, Cpu, Info, Lock, Play, Power, Settings, ShieldAlert, Star,
+  ChevronRight, ChevronUp, Clock3, Cpu, Info, Lock, Power, Settings, ShieldAlert, Star,
   Target, TrendingDown, TrendingUp, Wifi, WifiOff, Zap,
 } from 'lucide-react';
 import { API_CONFIG } from '@/lib/api-config';
@@ -235,7 +235,7 @@ function EntryGates({ sym, signal, snap, hasPosition = false }: {
       {`Approval state: ${approvalLabel}`}
     </p>}
     {signal?.source !== 'validation' && signal?.ai_action === null && quantBuy && <p className="mt-2 text-amber-200">
-      {`No AI adjudication in this 5-minute slot. Next eligible AI: ${clock(snap?.health.next_run_at)} IST. Refresh rechecks only the live quant setup.`}
+      {`No AI adjudication in this 5-minute slot. Automatic quant rechecks continue; next eligible AI: ${clock(snap?.health.next_run_at)} IST.`}
     </p>}
     {aiDeclined && quantBuy && <p className="mt-2 text-amber-200">
       AI declined this direction. Quant passed, but risk and broker submission are intentionally not reached.
@@ -505,7 +505,7 @@ function LiveTradeTable({ trades, liveAvailable, snap }: { trades: LiveTrade[]; 
         })}
       </div>
       {snap?.cycle?.trigger === 'MANUAL' && <p className="mt-3 text-amber-300">
-        Manual refresh rechecks quant now. A quant-passed setup can obtain one Claude confirmation in the current unused 5-minute slot; a used slot waits for the next eligible cycle.
+        Manual refresh is disabled. Quant refreshes automatically every 30 seconds and Claude is requested only when a setup passes in an unused 5-minute slot.
       </p>}
       <p className="mt-2 text-slate-400">Next scheduled analysis: {clock(snap?.health.next_run_at)} IST.
         After an entry fill, AUTONOMIQ submits broker-side SL protection and manages trailing updates.</p>
@@ -676,13 +676,6 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
             <span className="sm:hidden">{liveAvailable ? liveEnabled ? 'LIVE ON' : 'LIVE OFF' : 'LIVE ORDERS'}</span>
             <span className="hidden sm:inline">{liveAvailable ? liveEnabled ? 'LIVE TRADING ON' : 'LIVE TRADING OFF' : 'LIVE ORDERS'}</span>
           </span>
-          <button type="button" aria-label="Refresh and AI check" disabled={busy || !snap} onClick={() => act('/api/autonomiq-pro/analyze', undefined, 'Quant refresh started — AI check only if a quant setup passed')}
-            title="Re-runs live quant analysis now. If a quant setup passes and this 5-minute slot is unused, Claude Fable adjudicates it once; otherwise the next eligible slot handles it."
-            className="autonomiq-refresh-button inline-flex items-center justify-center gap-2 rounded-full border border-emerald-500 text-center font-bold text-emerald-100 disabled:opacity-50">
-            <Play className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" />
-            <span className="sm:hidden">Refresh · AI check</span>
-            <span className="hidden sm:inline">Refresh now · AI check</span>
-          </button>
         </div>
       </header>
 
@@ -835,7 +828,7 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
         {tab === 'analysis' && (
           <>
           <div aria-label="Analysis refresh cadence" className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 break-words text-[13px] text-slate-300">
-            <span>Rules refresh every 5 minutes, not on every tick. Point weights are fixed; measurements and rule states are recalculated.</span>
+            <span>Quant refreshes automatically every 30 seconds. Claude analysis runs only for quant-passed setups, once per 5-minute slot.</span>
             <span>Green quant scores are not entry approval. AI agreement, risk validation and broker checks are separate gates.</span>
             <span>{`Next cycle: ${clock(snap?.health.next_run_at)} IST`}</span>
           </div>

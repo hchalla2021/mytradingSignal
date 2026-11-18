@@ -1782,6 +1782,31 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
             await engine._cycle_task
             cycle.assert_awaited_once_with("SCHEDULED")
 
+    async def test_automatic_quant_event_runs_every_thirty_seconds(self):
+        class FixedDateTime(datetime):
+            current = None
+
+            @classmethod
+            def now(cls, tz=None):
+                return cls.current
+
+        engine = self.engine()
+        engine.quant_refresh_next_at = None
+        engine.next_run_at = IST.localize(datetime(2026, 3, 10, 9, 25))
+        with mock.patch("services.autonomiq_pro.orchestrator.datetime", FixedDateTime), \
+                mock.patch("services.autonomiq_pro.orchestrator.load_config", return_value=CFG), \
+                mock.patch.object(engine, "_guarded_cycle", new=mock.AsyncMock()) as cycle:
+            FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 20))
+            await engine._tick()
+            self.assertEqual(engine.quant_refresh_next_at,
+                             IST.localize(datetime(2026, 3, 10, 9, 20, 30)))
+            cycle.assert_not_awaited()
+
+            FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 20, 30))
+            await engine._tick()
+            await engine._cycle_task
+            cycle.assert_awaited_once_with("QUANT_EVENT")
+
     async def test_scheduler_waits_until_entry_session_and_repeats_every_five_minutes(self):
         class FixedDateTime(datetime):
             current = None
@@ -1820,11 +1845,11 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
         engine = self.engine()
         setup = {"NIFTY": self.ctx(), "BANKNIFTY": self.ctx(score=10), "SENSEX": self.ctx(fresh=False)}
         self.assertEqual(self.gate(engine, {"NIFTY": self.ctx(score=10)}, "MANUAL")[0],
-                         "SKIPPED_MANUAL_NO_QUANT_SETUP")
+                         "SKIPPED_MANUAL_QUANT_ONLY")
         self.assertEqual(self.gate(engine, setup, "MANUAL"),
-                         (None, {"NIFTY": setup["NIFTY"]}))
+                         ("SKIPPED_MANUAL_QUANT_ONLY", {}))
         engine.store.set_state("ai_slot", slot_start(NOW, CFG.analysis_interval_minutes).isoformat())
-        self.assertEqual(self.gate(engine, setup, "MANUAL")[0], "SKIPPED_SLOT_ALREADY_ANALYZED")
+        self.assertEqual(self.gate(engine, setup, "QUANT_EVENT")[0], "SKIPPED_SLOT_ALREADY_ANALYZED")
         engine.store.set_state("ai_slot", "")
         self.assertEqual(list(self.gate(engine, {"NIFTY": self.ctx(score=10)})[1]), ["NIFTY"])
         self.assertEqual(list(self.gate(engine, {"NIFTY": self.ctx(fresh=False)})[1]), ["NIFTY"])

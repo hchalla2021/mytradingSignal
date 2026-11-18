@@ -114,7 +114,7 @@ function card(tree, symbol = 'NIFTY') {
   return text(result).replace(/\s+/g, ' ');
 }
 
-test('header labels config-disabled execution LIVE ORDERS and retains the no-AI refresh', () => {
+test('header labels config-disabled execution LIVE ORDERS and has no manual refresh control', () => {
   for (const marketOpen of [true, false]) {
     const snap = snapshot();
     snap.session.market_open = marketOpen;
@@ -128,12 +128,7 @@ test('header labels config-disabled execution LIVE ORDERS and retains the no-AI 
     assert.match(text(warning), /LIVE ORDERS/);
     assert.match(warning.props.className, /border-emerald-500/);
     assert.doesNotMatch(body, /MARKET (OPEN|CLOSED)/);
-    const refresh = nodes(header).find(node => node.type === 'button' && text(node).includes('Refresh now'));
-    assert.ok(refresh);
-    assert.equal(refresh.props.disabled, false);
-    assert.equal(refresh.props['aria-label'], 'Refresh and AI check');
-    assert.match(text(refresh), /Refresh · AI check/);
-    assert.match(refresh.props.title, /quant setup passes/);
+    assert.doesNotMatch(body, /Refresh now|Refresh · AI check/);
   }
 });
 
@@ -173,7 +168,6 @@ test('green quant score shows missing AI and retains the scheduled WAIT after ma
     assert.match(body, /Broker NOT REQUESTED/);
     assert.match(body, /Approval state: WAIT · AI REVIEW/);
     assert.match(body, /No AI adjudication in this 5-minute slot/);
-    assert.match(body, /Next eligible AI: 11:05:00 IST/);
     assert.match(body, /Last scheduled result · 10:58:00 IST: WAIT/);
     assert.match(body, /Extended; await a pullback/);
     assert.match(body, /Historical result only; not approval/);
@@ -426,7 +420,7 @@ test('empty Trades tab explains recorded WAIT decisions instead of implying a br
   assert.match(text(decisions), /NOT REQUESTED/);
   assert.match(text(decisions), /Awaiting AI confirmation/);
   const body = text(tree).replace(/\s+/g, ' ');
-  assert.match(body, /Manual refresh rechecks quant now/);
+  assert.match(body, /Manual refresh is disabled/);
   assert.match(body, /Next scheduled analysis: 11:05:00 IST/);
   assert.match(body, /Live Trading ON alone does not submit an order/);
 });
@@ -490,7 +484,7 @@ test('analysis shows snapshot times and updates measurements without changing ru
   assert.match(text(rules), /Last computed: 11:00:00 IST/);
   assert.match(text(rules), /60m trend up \+ 15/);
   const cadence = nodes(tree).find(node => node.props?.['aria-label'] === 'Analysis refresh cadence');
-  assert.match(text(cadence), /every 5 minutes, not on every tick/);
+  assert.match(text(cadence), /Quant refreshes automatically every 30 seconds/);
   assert.match(text(cadence), /Next cycle: 11:05:00 IST/);
 
   index.futures.vwap = 25290.25;
