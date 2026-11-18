@@ -31,6 +31,7 @@ from services.aqte_engines import EngineConfig, rank_key, veto_reason
 from services.aqte_runtime import Latencies
 from services.aqte_execution_history import bootstrap_executions, capture_context, save_execution
 from services.quantedge_pro import build_candidate
+from services.quantedge_hybrid import QuantEdgeHybridOrchestrator
 from services.expiryedge_algos import (
     ALGO_KEYS as EXPIRYEDGE_ALGOS, RETIRED_ALGO_KEYS as RETIRED_EXPIRYEDGE_ALGOS,
     ALGO_NAMES as EXPIRYEDGE_NAMES, ALGOS as EXPIRYEDGE_CATALOG,
@@ -230,6 +231,7 @@ class AQTELiveService:
         self.expiryedge_ai_failures = 0
         self.expiryedge_ai_next_activation = 0.0
         self.quantedge_next_activation = 0.0
+        self.quantedge_hybrid = QuantEdgeHybridOrchestrator()
         self.proposals = {}
         self.check = None
         self.error = None
@@ -1238,6 +1240,7 @@ class AQTELiveService:
                 except (KeyError, TypeError, ValueError) as exc:
                     signals[symbol] = {"decision": "WAIT", "reason": f"Signal unavailable ({type(exc).__name__})"}
             active = self.state.get("active")
+            hybrid = self.quantedge_hybrid.status(now)
             return {
                 "generated_at": now,
                 "ready": self.ready,
@@ -1251,6 +1254,7 @@ class AQTELiveService:
                 "daily_trades": len(entries),
                 "daily_pnl": round(sum(trade["net_pnl"] for trade in trades), 2),
                 "active": copy.deepcopy(active) if active and active.get("owner") == "QUANTEDGE" else None,
+                "hybrid_ai": hybrid,
                 "error": qep.get("error"),
                 "signals": signals,
             }
@@ -1328,8 +1332,10 @@ class AQTELiveService:
                 return
             qualified = []
             present = set()
+            candidates_by_symbol = {}
             for symbol in SYMBOLS:
                 candidate = self.quantedge_candidate(symbol, set())
+                candidates_by_symbol[symbol] = candidate
                 setup_key = candidate.get("setup_key")
                 if candidate.get("side") in ("CE", "PE") and setup_key:
                     present.add(setup_key)
@@ -1345,6 +1351,7 @@ class AQTELiveService:
                 rank = (candidate["signal_at"], metrics["volume_ratio"], metrics["body_ratio"],
                         -candidate["spread_fraction"], -candidate["risk"])
                 qualified.append((rank, symbol, candidate))
+            self.quantedge_hybrid.market_context(candidates_by_symbol, now)
             for key, previous in list(self.opportunities.items()):
                 if previous.get("owner") == "QUANTEDGE" and key not in present and previous.get("state") in (
                     "REJECTED", "MISSED"
@@ -1360,9 +1367,21 @@ class AQTELiveService:
             busy = self.book(self.broker())["busy"]
             for _, symbol, candidate in sorted(qualified, key=lambda item: item[0], reverse=True):
                 setup_key = candidate["setup_key"]
+                approved = self.quantedge_hybrid.submit(
+                    candidate,
+                    now,
+                    revalidate=lambda fresh, at, symbol=symbol: self.quantedge_candidate(symbol, set()),
+                )
+                if not approved.get("approved"):
+                    self.record_quantedge_opportunity(
+                        candidate,
+                        "PENDING" if approved.get("state") == "PENDING" else "REJECTED",
+                        approved.get("reason") or "Awaiting lightweight AI approval",
+                    )
+                    continue
                 self.publish_quantedge_event(
                     "SIGNAL_GENERATED",
-                    f'{symbol} {candidate["decision"]} breakout qualified; checking live execution gates',
+                    f'{symbol} {candidate["decision"]} breakout qualified and AI-approved; checking live execution gates',
                     "success", setup_key, symbol,
                 )
                 try:

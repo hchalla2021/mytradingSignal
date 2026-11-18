@@ -19,6 +19,7 @@ asyncpg==0.30.0
 # HTTP Clients
 httpx==0.28.1
 requests==2.32.3
+redis==5.2.1
 pyotp==2.9.0
 
 # WebSockets

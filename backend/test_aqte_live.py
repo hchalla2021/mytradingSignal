@@ -1136,6 +1136,9 @@ class LiveTests(unittest.TestCase):
                 "spread_fraction": 0.01, "risk": 100,
             }
         with (patch.object(self.live, "quantedge_candidate", side_effect=lambda symbol, busy: candidates[symbol]),
+              patch.object(self.live.quantedge_hybrid, "submit", side_effect=lambda candidate, now, revalidate: {
+                  "approved": True, "setup_key": candidate["setup_key"], "candidate": candidate,
+              }),
               patch.object(self.live, "quantedge_activate", return_value=True),
               patch.object(self.live, "quantedge_proposal", return_value={"id": "qep-proposal"}) as proposal,
               patch.object(self.live, "confirm") as confirm,

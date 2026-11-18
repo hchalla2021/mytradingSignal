@@ -68,6 +68,43 @@ class CacheService:
     
     def __init__(self):
         self.connected = True
+        self._redis_sync = None
+        try:
+            url = os.getenv("REDIS_URL") or settings.redis_url
+            if url:
+                import redis
+                self._redis_sync = redis.Redis.from_url(url, decode_responses=True)
+                self._redis_sync.ping()
+        except Exception:
+            self._redis_sync = None
+
+    def get_sync(self, key: str) -> Optional[Dict[str, Any]]:
+        if self._redis_sync is not None:
+            try:
+                raw = self._redis_sync.get(key)
+                return json.loads(raw) if raw else None
+            except Exception:
+                pass
+        cached = _SHARED_CACHE.get(key)
+        if not cached:
+            return None
+        value, expire_at = cached
+        if time.time() >= expire_at:
+            _SHARED_CACHE.pop(key, None)
+            return None
+        try:
+            return json.loads(value)
+        except Exception:
+            return None
+
+    def set_sync(self, key: str, value: Dict[str, Any], expire: int = 60):
+        payload = json.dumps(value)
+        if self._redis_sync is not None:
+            try:
+                self._redis_sync.setex(key, expire, payload)
+            except Exception:
+                pass
+        _SHARED_CACHE[key] = (payload, time.time() + expire)
     
     @property
     def _memory_cache(self) -> Dict[str, Tuple[str, float]]:

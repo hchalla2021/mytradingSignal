@@ -45,6 +45,18 @@ type QepStatus = {
   active: QepTrade | null;
   error: string | null;
   signals: Record<string, QepSignal>;
+  hybrid_ai?: {
+    enabled: boolean;
+    model: string;
+    busy: boolean;
+    pending: number;
+    deduplicated: number;
+    ai_slot: string | null;
+    last_ai_at: number | null;
+    last_error: string | null;
+    daily_calls: number;
+    daily_cost_usd: number;
+  };
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -144,6 +156,17 @@ function isQepStatus(value: unknown): value is QepStatus {
     typeof active.quantity === 'number' && Number.isInteger(active.quantity) &&
     typeof active.entry_price === 'number' && Number.isFinite(active.entry_price));
   const signalsValid = isRecord(status.signals) && Object.values(status.signals).every(isQepSignal);
+  if (status.hybrid_ai !== undefined && (!isRecord(status.hybrid_ai) ||
+      typeof status.hybrid_ai.enabled !== 'boolean' ||
+      typeof status.hybrid_ai.model !== 'string' ||
+      typeof status.hybrid_ai.busy !== 'boolean' ||
+      typeof status.hybrid_ai.pending !== 'number' ||
+      typeof status.hybrid_ai.deduplicated !== 'number' ||
+      (status.hybrid_ai.ai_slot !== null && typeof status.hybrid_ai.ai_slot !== 'string') ||
+      (status.hybrid_ai.last_ai_at !== null && typeof status.hybrid_ai.last_ai_at !== 'number') ||
+      (status.hybrid_ai.last_error !== null && typeof status.hybrid_ai.last_error !== 'string') ||
+      typeof status.hybrid_ai.daily_calls !== 'number' ||
+      typeof status.hybrid_ai.daily_cost_usd !== 'number')) return false;
   return typeof status.generated_at === 'number' && Number.isFinite(status.generated_at) &&
     typeof status.ready === 'boolean' &&
     typeof status.enabled === 'boolean' && typeof status.armed === 'boolean' &&
@@ -492,6 +515,14 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
               Risk {money(live?.risk_per_trade)}/trade · Daily loss {money(live?.daily_loss_limit)} ·
               {` ${live?.daily_trades ?? 0}/${live?.max_trades ?? 0} trades`}
             </span>
+            {live?.hybrid_ai && (
+              <span className="text-xs text-slate-400">
+                Hybrid AI: {live.hybrid_ai.enabled ? 'ON' : 'OFF'} ·
+                {` ${live.hybrid_ai.pending} pending · ${live.hybrid_ai.daily_calls} calls today · `}
+                <span className="text-cyan-300">${live.hybrid_ai.daily_cost_usd.toFixed(4)}</span>
+                {live.hybrid_ai.last_error ? ` · ${live.hybrid_ai.last_error}` : ''}
+              </span>
+            )}
           </div>
           {(operationError || statusError || live?.error) && <p role="alert" className="mt-3 text-sm text-rose-300">
             {quantEdgeErrorText(operationError ?? statusError ?? live?.error)}
