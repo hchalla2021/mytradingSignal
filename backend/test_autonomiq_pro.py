@@ -64,7 +64,7 @@ class ConfigTests(unittest.TestCase):
         defaults = AutonomiqConfig()
         fields = ("max_risk_per_trade_rupees", "max_trades_per_day",
                   "max_open_positions", "daily_loss_limit_rupees", "index_daily_loss_limit_rupees")
-        expected = (1000, 5, 3, 3000, 1000)
+        expected = (3500, 5, 3, 3500, 3500)
         self.assertEqual(tuple(getattr(defaults, field) for field in fields), expected)
         self.assertEqual(tuple(getattr(cfg, field) for field in fields), expected)
         self.assertEqual(tuple(cfg.public()[field] for field in fields), expected)
@@ -117,7 +117,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(cfg.public()["live_execution_allowed"], expected)
 
     def test_index_daily_budget_override_is_explicit_and_invalid_values_fail_closed(self):
-        for mode, value, expected in (("local", "2000", 2000), ("production", None, 1000)):
+        for mode, value, expected in (("local", "2000", 2000), ("production", None, 3500)):
             with self.subTest(mode=mode):
                 env = {"AUTONOMIQ_PRO_DEPLOYMENT_MODE": mode, "AUTONOMIQ_PRO_MAX_RISK_PER_TRADE_RUPEES": "2000"}
                 if value is not None:

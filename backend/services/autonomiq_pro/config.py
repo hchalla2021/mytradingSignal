@@ -97,9 +97,9 @@ class AutonomiqConfig:
     estimated_round_trip_cost_rupees: float = 150
     max_open_positions: int = 3
     max_trades_per_day: int = 5
-    daily_loss_limit_rupees: float = 3000
-    max_risk_per_trade_rupees: float = 1000
-    index_daily_loss_limit_rupees: float = 1000
+    daily_loss_limit_rupees: float = 3500
+    max_risk_per_trade_rupees: float = 3500
+    index_daily_loss_limit_rupees: float = 3500
 
     @property
     def ai_configured(self) -> bool:
@@ -164,7 +164,7 @@ def load_config() -> AutonomiqConfig:
     holidays = frozenset(day.strip() for day in (g("EXTRA_HOLIDAYS") or "").split(",") if day.strip())
     budget_error = "AUTONOMIQ_PRO_INDEX_DAILY_LOSS_LIMIT_RUPEES must be finite and non-negative"
     try:
-        index_daily_loss_limit = float(g("INDEX_DAILY_LOSS_LIMIT_RUPEES") or "1000")
+        index_daily_loss_limit = float(g("INDEX_DAILY_LOSS_LIMIT_RUPEES") or "3500")
     except ValueError as exc:
         raise ValueError(budget_error) from exc
     if not math.isfinite(index_daily_loss_limit) or index_daily_loss_limit < 0:
@@ -208,7 +208,7 @@ def load_config() -> AutonomiqConfig:
         estimated_round_trip_cost_rupees=_num(g("ESTIMATED_ROUND_TRIP_COST_RUPEES"), 150, 0, 1000),
         max_open_positions=int(_num(g("MAX_OPEN_POSITIONS"), 3, 1, 3)),
         max_trades_per_day=int(_num(g("MAX_TRADES_PER_DAY"), 5, 1, 50)),
-        daily_loss_limit_rupees=_num(g("DAILY_LOSS_LIMIT_RUPEES"), 3000, 0, 10_000_000),
-        max_risk_per_trade_rupees=_num(g("MAX_RISK_PER_TRADE_RUPEES"), 1000, 0, 10_000_000),
+        daily_loss_limit_rupees=_num(g("DAILY_LOSS_LIMIT_RUPEES"), 3500, 0, 10_000_000),
+        max_risk_per_trade_rupees=_num(g("MAX_RISK_PER_TRADE_RUPEES"), 3500, 0, 10_000_000),
         index_daily_loss_limit_rupees=index_daily_loss_limit,
     )
