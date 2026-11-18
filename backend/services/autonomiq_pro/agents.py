@@ -292,14 +292,17 @@ class SignalValidationAgent:
             if not problems and ai and ai["action"] == "EXIT":
                 return {"action": "EXIT", "score": quant["score"], "strength": _strength(ai["conviction"]),
                         "reasoning": ai["reasoning"] or "AI recommends exiting the AUTONOMIQ position",
-                        "source": "ai+quant", "conviction": ai["conviction"]}
+                        "source": "ai+quant", "conviction": ai["conviction"],
+                        "approval_status": "POSITION_MANAGEMENT"}
             return {"action": "HOLD", "score": quant["score"], "strength": "Low",
                     "reasoning": ("; ".join(problems) + "; " if problems else "")
                     + "Existing AUTONOMIQ position remains under broker-stop and Python risk management.",
-                    "source": "risk-management", "conviction": 0}
+                    "source": "risk-management", "conviction": 0,
+                    "approval_status": "POSITION_MANAGEMENT"}
         if problems:
             return {"action": "NO_TRADE", "score": quant["score"], "strength": "Low",
-                    "reasoning": "; ".join(problems), "source": "validation", "conviction": 0}
+                    "reasoning": "; ".join(problems), "source": "validation", "conviction": 0,
+                    "approval_status": "DATA_UNAVAILABLE"}
 
         score = quant["score"]
         quant_action_, quant_note = quant_action(ctx, min_score)
@@ -307,28 +310,34 @@ class SignalValidationAgent:
         if ai is None:
             if require_ai and quant_action_ in ("BUY_CE", "BUY_PE"):
                 return {"action": "WAIT", "score": score, "strength": _strength(abs(score)), "conviction": abs(score),
-                        "reasoning": f"{quant_note}. Awaiting AI confirmation ({ai_state}).", "source": "quant"}
+                        "reasoning": f"{quant_note}. Awaiting AI confirmation ({ai_state}).", "source": "quant",
+                        "approval_status": "PENDING_AI"}
             return {"action": quant_action_, "score": score, "strength": _strength(abs(score)),
                     "conviction": abs(score),
                     "reasoning": (f"{quant_note}. AI confirmation unavailable ({ai_state})."
                                   if require_ai else quant_note),
-                    "source": "quant"}
+                    "source": "quant",
+                    "approval_status": "PENDING_AI" if quant_action_ in ("BUY_CE", "BUY_PE") else "WAIT"}
 
         ai_action = ai["action"]
         conviction = round((abs(score) + ai["conviction"]) / 2, 1)
         if ai_action in ("HOLD", "EXIT"):
             return {"action": "WAIT", "score": score, "strength": _strength(conviction),
                     "conviction": conviction, "reasoning": "No AUTONOMIQ live position is open; no exit action applies.",
-                    "source": "ai+quant"}
+                    "source": "ai+quant", "approval_status": "AI_DECLINED"}
         if ai_action in ("WAIT", "NO_TRADE"):
             action, reason = ai_action, ai["reasoning"] or quant_note
+            approval_status = "AI_DECLINED" if quant_action_ in ("BUY_CE", "BUY_PE") else "WAIT"
         elif ai_action == quant_action_:
             action, reason = ai_action, f"{ai['reasoning']} {quant_note}.".strip()
+            approval_status = "PENDING_RISK"
         else:
             action = "WAIT"
             reason = f"AI suggested {ai_action.replace('_', ' ')} but quant engine disagrees ({quant_note})."
+            approval_status = "AI_DECLINED"
         return {"action": action, "score": score, "strength": _strength(conviction), "conviction": conviction,
-                "reasoning": reason, "risks": ai.get("risks", []), "source": "ai+quant"}
+                "reasoning": reason, "risks": ai.get("risks", []), "source": "ai+quant",
+                "approval_status": approval_status}
 
 
 def _strength(value: float) -> str:

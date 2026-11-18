@@ -379,6 +379,9 @@ class AutonomiqOrchestrator:
                     open_trades=self.store.open_live_trades(limit=10000),
                     day_stats=self.store.live_day_stats(decision_at.strftime("%Y-%m-%d")),
                     recent_trades=self.store.live_trades(limit=10000))
+                signal["approval_status"] = "APPROVED" if signal["risk"]["approved"] else "RISK_BLOCKED"
+            elif signal["action"] in ("BUY_CE", "BUY_PE") or signal.get("approval_status") == "PENDING_RISK":
+                signal["approval_status"] = "RISK_BLOCKED"
             execution = {"status": "NOT_REQUESTED", "detail": ""}
             if signal["action"] in ("BUY_CE", "BUY_PE") and cfg.live_execution_allowed:
                 execution = await self.live_executor.submit_entry(

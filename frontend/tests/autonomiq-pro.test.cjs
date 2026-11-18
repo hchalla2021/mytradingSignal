@@ -171,6 +171,7 @@ test('green quant score shows missing AI and retains the scheduled WAIT after ma
     assert.match(body, /AI NOT REQUESTED/);
     assert.match(body, /Risk NOT REACHED/);
     assert.match(body, /Broker NOT REQUESTED/);
+    assert.match(body, /Approval state: WAIT · AI REVIEW/);
     assert.match(body, /Refresh now does not request AI/);
     assert.match(body, /Next scheduled AI: 11:05:00 IST/);
     assert.match(body, /Last scheduled result · 10:58:00 IST: WAIT/);

@@ -24,6 +24,7 @@ interface Plan {
 interface Signal {
   action: Action; strength: string; conviction: number; score: number; reasoning: string; risks?: string[];
   quant_action?: Action; ai_action?: Action | null;
+  approval_status?: 'PENDING_AI' | 'AI_DECLINED' | 'PENDING_RISK' | 'RISK_BLOCKED' | 'APPROVED' | 'DATA_UNAVAILABLE' | 'POSITION_MANAGEMENT' | 'WAIT';
   source: string; plan?: Plan | null; risk?: { approved: boolean; checks: Check[] } | null;
   execution?: { status: string; detail: string }; timestamp: string;
 }
@@ -193,6 +194,19 @@ function EntryGates({ sym, signal, snap, hasPosition = false }: {
   const aiDeclined = !!signal?.ai_action && signal.ai_action !== 'NO_TRADE' &&
     (signal.ai_action === 'WAIT' || signal.ai_action === 'HOLD');
   const riskReached = aiAgrees;
+  const approvalStatus = signal?.approval_status
+    ?? (signal?.ai_action == null && quantBuy ? 'PENDING_AI'
+      : signal?.ai_action === 'WAIT' && quantBuy ? 'AI_DECLINED'
+        : signal?.risk ? signal.risk.approved ? 'APPROVED' : 'RISK_BLOCKED'
+          : undefined);
+  const approvalLabel = approvalStatus === 'PENDING_AI' ? 'WAIT · AI REVIEW'
+    : approvalStatus === 'AI_DECLINED' ? 'WAIT · AI DECLINED'
+      : approvalStatus === 'PENDING_RISK' ? 'WAIT · RISK CHECK'
+        : approvalStatus === 'RISK_BLOCKED' ? 'BLOCKED · RISK'
+          : approvalStatus === 'APPROVED' ? 'APPROVED'
+            : approvalStatus === 'DATA_UNAVAILABLE' ? 'WAIT · DATA'
+              : approvalStatus === 'POSITION_MANAGEMENT' ? 'POSITION CONTROL'
+                : null;
   const quantLabel = signal?.source === 'validation' ? 'DATA UNAVAILABLE'
     : signal?.quant_action ? `${quantBuy ? 'PASSED · ' : ''}${ACTION_STYLE[signal.quant_action].label}` : 'NOT RECORDED';
   const aiLabel = signal?.ai_action == null
@@ -217,6 +231,9 @@ function EntryGates({ sym, signal, snap, hasPosition = false }: {
         <dd className={`break-words font-semibold ${passed ? 'text-emerald-300' : 'text-amber-300'}`}>{value}</dd>
       </div>)}
     </dl>
+    {approvalLabel && <p className="mt-2 break-words font-semibold text-amber-200">
+      {`Approval state: ${approvalLabel}`}
+    </p>}
     {signal?.source !== 'validation' && signal?.ai_action === null && quantBuy && <p className="mt-2 text-amber-200">
       {`No new AI confirmation. Next scheduled AI: ${clock(snap?.health.next_run_at)} IST. Refresh now does not request AI.`}
     </p>}

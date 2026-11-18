@@ -1958,6 +1958,17 @@ class SignalValidationTests(unittest.TestCase):
                 self.assertIn(state, signal["reasoning"])
                 self.assertEqual(signal["source"], "quant")
 
+    def test_quant_pass_waits_for_explicit_ai_confirmation(self):
+        signal = agents.SignalValidationAgent().run(
+            "NIFTY", self.ctx(score=70), None, 60, True, "SKIPPED_SLOT_ALREADY_ANALYZED")
+        self.assertEqual(signal["action"], "WAIT")
+        self.assertEqual(signal["approval_status"], "PENDING_AI")
+
+        ai_wait = {"action": "WAIT", "conviction": 80, "reasoning": "Support bounce risk", "risks": ["Support"]}
+        declined = agents.SignalValidationAgent().run("NIFTY", self.ctx(score=70), ai_wait, 60, True, "ACTIVE")
+        self.assertEqual(declined["action"], "WAIT")
+        self.assertEqual(declined["approval_status"], "AI_DECLINED")
+
     def test_malformed_ai_action_degrades_to_wait(self):
         out = agents.normalize_strategy({"indices": {"nifty": {"action": "SELL EVERYTHING", "conviction": "x"}}})
         self.assertEqual(out["indices"]["NIFTY"]["action"], "WAIT")
