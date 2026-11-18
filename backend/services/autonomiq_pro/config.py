@@ -169,13 +169,14 @@ def load_config() -> AutonomiqConfig:
         raise ValueError(budget_error) from exc
     if not math.isfinite(index_daily_loss_limit) or index_daily_loss_limit < 0:
         raise ValueError(budget_error)
+    market_start = _clock(g("MARKET_START"), time(9, 20))
     return AutonomiqConfig(
         enabled=_bool(g("ENABLED"), True),
         ai_enabled=_bool(g("AI_ENABLED"), False),
         deployment_mode=deployment_mode,
         allow_local_live=allow_local_live,
         live_execution_allowed=live_execution_allowed,
-        analysis_start=ANALYSIS_START,
+        analysis_start=market_start,
         analysis_interval_minutes=ANALYSIS_INTERVAL_MINUTES,
         api_key=(g("ANTHROPIC_API_KEY") or "").strip(),
         primary_model=(g("PRIMARY_MODEL") or "claude-fable-5-2").strip(),
@@ -192,7 +193,7 @@ def load_config() -> AutonomiqConfig:
         require_ai_confirmation=_bool(g("REQUIRE_AI_CONFIRMATION"), True),
         auto_paper_trading=False,
         event_move_pct=_num(g("EVENT_MOVE_PCT"), 0.35, 0.05, 5),
-        market_start=_clock(g("MARKET_START"), time(9, 20)),
+        market_start=market_start,
         entry_cutoff=_clock(g("ENTRY_CUTOFF"), time(14, 45)),
         square_off=_clock(g("SQUARE_OFF"), time(15, 15)),
         market_end=_clock(g("MARKET_END"), time(15, 25)),

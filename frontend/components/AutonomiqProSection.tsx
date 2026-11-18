@@ -600,13 +600,16 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
   const analysisAIState = aiState === 'ACTIVE' ? cycle?.ai_state ?? aiState : aiState;
   const analysisOn = !!runtime?.engine_enabled && analysisAIState === 'ACTIVE';
   const lastAICall = snap?.ai_usage.recent?.[0];
-  const alertTone = cycle?.market_alert.tone ?? 'CAUTION';
+  const preOpen = snap?.session.phase === 'PRE_MARKET';
+  const alertTone = preOpen ? 'CAUTION' : (cycle?.market_alert.tone ?? 'CAUTION');
   const alertStyle = alertTone === 'BULLISH' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
     : alertTone === 'BEARISH' ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
       : 'border-amber-500/30 bg-amber-500/10 text-amber-200';
   const AlertIcon = alertTone === 'BULLISH' ? TrendingUp : alertTone === 'BEARISH' ? TrendingDown : AlertTriangle;
-  const alertTitle = cycle?.market_alert.title || 'Awaiting analysis';
-  const alertDetail = cycle?.market_alert.detail || 'AUTONOMIQ PRO analyses the market every few minutes during market hours.';
+  const alertTitle = preOpen ? 'Waiting for live market'
+    : (cycle?.market_alert.title || 'Awaiting analysis');
+  const alertDetail = preOpen ? 'Pre-open data is not trade analysis. Analysis starts at 09:20 IST.'
+    : (cycle?.market_alert.detail || 'AUTONOMIQ PRO analyses the market every few minutes during market hours.');
 
   const sinceReceived = receivedAt == null ? Infinity : displayNow - receivedAt;
   const elapsedMs = sinceReceived + responseDelay;

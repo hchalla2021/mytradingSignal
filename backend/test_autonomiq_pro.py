@@ -91,14 +91,14 @@ class ConfigTests(unittest.TestCase):
                 mock.patch.dict(os.environ, {"AUTONOMIQ_PRO_DEPLOYMENT_MODE": "production"}, clear=True):
             self.assertTrue(load_config().live_execution_allowed)
 
-    def test_analysis_schedule_is_fixed_at_nine_every_five_minutes(self):
+    def test_analysis_schedule_is_fixed_at_entry_start_every_five_minutes(self):
         env = {"AUTONOMIQ_PRO_ANALYSIS_START": "10:00", "AUTONOMIQ_PRO_ANALYSIS_INTERVAL": "1"}
         with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value=env), \
                 mock.patch.dict(os.environ, {}, clear=True):
             cfg = load_config()
-        self.assertEqual(cfg.analysis_start, time(9, 0))
+        self.assertEqual(cfg.analysis_start, time(9, 20))
         self.assertEqual(cfg.analysis_interval_minutes, 5)
-        self.assertEqual(cfg.public()["analysis_start"], "09:00")
+        self.assertEqual(cfg.public()["analysis_start"], "09:20")
         self.assertEqual(cfg.public()["analysis_end"], "15:20")
 
     def test_local_live_requires_explicit_opt_in_and_unknown_modes_stay_blocked(self):
@@ -138,9 +138,13 @@ class ConfigTests(unittest.TestCase):
     def test_analysis_runs_through_1520_but_entry_window_remains_separate(self):
         cfg = AutonomiqConfig()
         start = IST.localize(datetime.combine(NOW.date(), time(9, 0)))
+        pre_entry = IST.localize(datetime.combine(NOW.date(), time(9, 19, 59)))
+        entry_ready = IST.localize(datetime.combine(NOW.date(), time(9, 20)))
         manage_only = IST.localize(datetime.combine(NOW.date(), time(15, 20)))
         after_end = IST.localize(datetime.combine(NOW.date(), time(15, 25)))
-        self.assertTrue(analysis_window_open(start, cfg, session_state(cfg, start)))
+        self.assertFalse(analysis_window_open(start, cfg, session_state(cfg, start)))
+        self.assertFalse(analysis_window_open(pre_entry, cfg, session_state(cfg, pre_entry)))
+        self.assertTrue(analysis_window_open(entry_ready, cfg, session_state(cfg, entry_ready)))
         self.assertTrue(analysis_window_open(manage_only, cfg, session_state(cfg, manage_only)))
         self.assertFalse(analysis_window_open(after_end, cfg, session_state(cfg, after_end)))
 
@@ -255,6 +259,8 @@ class SessionTests(unittest.TestCase):
                 mock.patch.dict(os.environ, {}, clear=True):
             cfg = load_config()
         self.assertEqual(cfg.market_start, time(9, 20))
+        self.assertEqual(cfg.analysis_start, time(9, 20))
+        self.assertEqual(cfg.public()["analysis_start"], "09:20")
         self.assertEqual(cfg.entry_cutoff, time(14, 45))
         self.assertEqual(cfg.square_off, time(15, 15))
         plan = build_plan("NIFTY", "BUY_CE", chain(), atr_5m=20.0, cfg=cfg)
@@ -1771,7 +1777,7 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
             await engine._cycle_task
             cycle.assert_awaited_once_with("SCHEDULED")
 
-    async def test_scheduler_starts_at_nine_and_repeats_every_five_minutes(self):
+    async def test_scheduler_waits_until_entry_session_and_repeats_every_five_minutes(self):
         class FixedDateTime(datetime):
             current = None
 
@@ -1784,31 +1790,30 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(engine, "_guarded_cycle", new=mock.AsyncMock()) as cycle:
             FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 0))
             await engine._tick()
-            self.assertEqual(engine.next_run_at, IST.localize(datetime(2026, 3, 10, 9, 0, 5)))
+            self.assertIsNone(engine.next_run_at)
             cycle.assert_not_awaited()
 
-            FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 0, 5))
+            FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 15))
             await engine._tick()
-            await engine._cycle_task
-            self.assertEqual(engine.next_run_at, IST.localize(datetime(2026, 3, 10, 9, 5, 5)))
+            self.assertIsNone(engine.next_run_at)
+            cycle.assert_not_awaited()
 
-            FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 5, 5))
+            FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 20))
             await engine._tick()
-            await engine._cycle_task
-            self.assertEqual(engine.next_run_at, IST.localize(datetime(2026, 3, 10, 9, 10, 5)))
+            self.assertEqual(engine.next_run_at, IST.localize(datetime(2026, 3, 10, 9, 20, 5)))
+            cycle.assert_not_awaited()
 
-            engine.next_run_at = None
-            FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 7))
+            FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 20, 5))
             await engine._tick()
             await engine._cycle_task
-            self.assertEqual(engine.next_run_at, IST.localize(datetime(2026, 3, 10, 9, 10, 5)))
-            self.assertEqual(cycle.await_count, 3)
+            self.assertEqual(engine.next_run_at, IST.localize(datetime(2026, 3, 10, 9, 25, 5)))
+            self.assertEqual(cycle.await_count, 1)
 
             engine.next_run_at = IST.localize(datetime(2026, 3, 10, 15, 20, 5))
             FixedDateTime.current = engine.next_run_at
             await engine._tick()
             await engine._cycle_task
-            self.assertEqual(cycle.await_count, 4)
+            self.assertEqual(cycle.await_count, 2)
 
     def test_scheduled_ai_runs_without_quant_setup_and_reports_stale_inputs(self):
         engine = self.engine()
@@ -1819,7 +1824,7 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.gate(engine, setup)[1]), ["NIFTY", "BANKNIFTY", "SENSEX"])
         preopen = IST.localize(datetime(2026, 3, 10, 9, 5))
         self.assertEqual(session_state(CFG, preopen)["phase"], "PRE_MARKET")
-        self.assertEqual(list(self.gate(engine, setup, now=preopen)[1]), ["NIFTY", "BANKNIFTY", "SENSEX"])
+        self.assertEqual(self.gate(engine, setup, now=preopen)[0], "SKIPPED_OUTSIDE_WINDOW")
         before_start = IST.localize(datetime(2026, 3, 10, 8, 59))
         self.assertEqual(self.gate(engine, setup, now=before_start)[0], "SKIPPED_OUTSIDE_WINDOW")
 

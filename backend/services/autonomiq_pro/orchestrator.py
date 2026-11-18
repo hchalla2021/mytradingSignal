@@ -46,7 +46,7 @@ def slot_run_at(now: datetime, minutes: float) -> datetime:
 
 
 def analysis_window_open(now: datetime, cfg: AutonomiqConfig, session: dict) -> bool:
-    return (session["trading_day"] and session["phase"] in ("PRE_MARKET", "ACTIVE", "MANAGE_ONLY")
+    return (session["trading_day"] and session["phase"] in ("ACTIVE", "MANAGE_ONLY")
             and cfg.analysis_start <= now.time()
             and slot_start(now, ANALYSIS_INTERVAL_MINUTES).time() <= ANALYSIS_END)
 
@@ -243,6 +243,22 @@ class AutonomiqOrchestrator:
 
     async def _analyze(self, cfg: AutonomiqConfig, now: datetime, day: str, session: dict, trigger: str,
                        cycle_id: int) -> dict:
+        if session["phase"] == "PRE_MARKET":
+            return {
+                "cycle_id": cycle_id,
+                "trigger": trigger,
+                "at": now.isoformat(),
+                "session": session,
+                "ai_state": "SKIPPED_PRE_OPEN",
+                "model": None,
+                "market_alert": {
+                    "tone": "CAUTION",
+                    "title": "Waiting for live market",
+                    "detail": f"Pre-open data is not trade analysis. Analysis starts {cfg.market_start:%H:%M} IST.",
+                },
+                "summary": "Pre-open and auction matching; live intraday analysis is on hold.",
+                "indices": {},
+            }
         contexts: dict[str, dict] = {}
         for symbol in SYMBOLS:
             observed_at = datetime.now(IST)
