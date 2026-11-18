@@ -134,6 +134,11 @@ option-chain metrics and a deterministic quant score for each index.
 
 Rules:
 - Decide one action for each index present in the input (only those): BUY_CE, BUY_PE, HOLD, EXIT, WAIT or NO_TRADE.
+  Long-option BUY actions are allowed only when they exactly match the provided deterministic quant action.
+  NO_TRADE whenever the input reports data_errors or insufficient completed history.
+  Do not infer a price, trend, VWAP, PCR, OI, futures state, support/resistance level, or timeframe result
+  that is not explicitly present in the evidence.
+  Cross-validate 5-minute, 15-minute, 60-minute, futures and option-chain evidence. Prefer WAIT when they conflict.
   Long options only.
 - If an AUTONOMIQ live position is listed for an index, choose HOLD or EXIT for that position; do not propose
   another entry for that index. Broker-side protective stops and the Python risk manager remain authoritative.
@@ -151,6 +156,12 @@ Rules:
  "indices":{"<INDEX>":{"action":"...","conviction":0-100,"reasoning":"<= 8 words","risks":[]}}}"""
 
 def strategy_payload(contexts: dict[str, dict], session: dict, live_positions: list[dict] | None = None) -> dict:
+    def compact_candles(candles: list[dict], limit: int) -> list[dict]:
+        return [{key: candle[key] for key in ("date", "open", "high", "low", "close", "volume")
+                 if isinstance(candle, dict) and key in candle}
+                for candle in (candles or [])[-limit:]
+                if isinstance(candle, dict)]
+
     return {"session": session, "autonomiq_live_positions": live_positions or [], "indices": {
         symbol: {
             "spot": ctx["spot"], "analysis": {k: v for k, v in ctx["analysis"].items() if k != "sparkline"},
@@ -159,6 +170,13 @@ def strategy_payload(contexts: dict[str, dict], session: dict, live_positions: l
             "futures": ctx["data"].get("futures"),
             "options": {k: v for k, v in (ctx["data"].get("options") or {}).items() if k != "strikes"},
             "data_errors": ctx["data"]["errors"],
+            "evidence": {
+                "completed_5m": compact_candles(ctx["data"]["candles"].get("5m"), 8),
+                "completed_15m": compact_candles(ctx["data"]["candles"].get("15m"), 8),
+                "completed_60m": compact_candles(ctx["data"]["candles"].get("60m"), 6),
+                "bar_counts": {timeframe: len(ctx["data"]["candles"].get(timeframe) or [])
+                               for timeframe in ("5m", "15m", "60m")},
+            },
         } for symbol, ctx in contexts.items()}}
 
 
@@ -186,6 +204,58 @@ def normalize_strategy(result: dict) -> dict:
         "summary": str(result.get("summary", ""))[:700],
         "indices": indices,
     }
+
+
+def validate_strategy(strategy: dict, contexts: dict[str, dict], min_signal_score: float,
+                      live_positions: list[dict] | None = None) -> tuple[dict, list[str]]:
+    """Cross-check model output against completed data and deterministic quant state."""
+    issues: list[str] = []
+    symbols = set(contexts)
+    returned = set(strategy.get("indices") or {})
+    if returned != symbols:
+        issues.append(f"AI index set mismatch: returned {sorted(returned)}, required {sorted(symbols)}")
+
+    live_symbols = {str(trade["symbol"]).upper() for trade in (live_positions or [])}
+    for symbol, ctx in contexts.items():
+        expected_action, quant_note = quant_action(ctx, min_signal_score)
+        raw = (strategy.get("indices") or {}).get(symbol)
+        if not isinstance(raw, dict):
+            continue
+        action = str(raw.get("action", "WAIT")).upper()
+        problems = data_problems(ctx)
+        if problems:
+            issues.append(f"{symbol}: AI output ignored data quality failure")
+            raw.update(action="NO_TRADE", conviction=0,
+                       reasoning="; ".join(problems), risks=["Insufficient market data"])
+        if action in ("BUY_CE", "BUY_PE") and expected_action != action:
+            issues.append(f"{symbol}: AI action disagrees with deterministic quant")
+            raw.update(action="WAIT", reasoning=f"AI/quant conflict. {quant_note}.",
+                       risks=["Contradictory AI and quant direction"])
+        if action in ("HOLD", "EXIT") and symbol not in live_symbols:
+            issues.append(f"{symbol}: AI requested position management without an open position")
+            raw.update(action="WAIT", reasoning="No live AUTONOMIQ position exists.",
+                       risks=["Unsupported position-management action"])
+        conviction = raw.get("conviction")
+        if action in ("BUY_CE", "BUY_PE") and not (0 < float(conviction or 0) <= 100):
+            issues.append(f"{symbol}: BUY action lacks valid conviction")
+            raw.update(action="WAIT", reasoning="BUY lacked evidence-backed conviction.",
+                       risks=["Missing conviction"])
+
+    bullish = sum(1 for ctx in contexts.values() if ctx["quant"]["score"] >= 25)
+    bearish = sum(1 for ctx in contexts.values() if ctx["quant"]["score"] <= -25)
+    tone = str((strategy.get("market_alert") or {}).get("tone", "CAUTION")).upper()
+    if tone == "BULLISH" and bearish > bullish:
+        issues.append("Market alert bullish contradicts the bearish quant majority")
+        strategy["market_alert"]["tone"] = "CAUTION"
+    if tone == "BEARISH" and bullish > bearish:
+        issues.append("Market alert bearish contradicts the bullish quant majority")
+        strategy["market_alert"]["tone"] = "CAUTION"
+    if issues:
+        strategy["market_alert"]["tone"] = "CAUTION"
+        strategy["market_alert"]["title"] = "Evidence cross-check failed"
+        strategy["market_alert"]["detail"] = "AI output was rejected or downgraded to verified data."
+        strategy["summary"] = "Insufficient cross-validation; no unsupported trade direction is published."
+    return strategy, issues
 
 
 def data_problems(ctx: dict) -> list[str]:

@@ -89,6 +89,7 @@ class AIClient:
         body: dict[str, Any] = {
             "model": model, "max_tokens": cfg.max_output_tokens, "system": [system_block],
             "messages": [{"role": "user", "content": user}],
+            "temperature": cfg.ai_temperature,
         }
         if cfg.reasoning_effort != "default":
             body["output_config"] = {"effort": cfg.reasoning_effort}

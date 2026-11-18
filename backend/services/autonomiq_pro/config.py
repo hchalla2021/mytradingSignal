@@ -79,6 +79,7 @@ class AutonomiqConfig:
     daily_budget_usd: float = 1.25
     ai_timeout_seconds: float = 60
     ai_max_retries: int = 2
+    ai_temperature: float = 0.1
     require_ai_confirmation: bool = True
     auto_paper_trading: bool = False
     event_move_pct: float = 0.35
@@ -97,9 +98,9 @@ class AutonomiqConfig:
     estimated_round_trip_cost_rupees: float = 150
     max_open_positions: int = 3
     max_trades_per_day: int = 5
-    daily_loss_limit_rupees: float = 3500
-    max_risk_per_trade_rupees: float = 3500
-    index_daily_loss_limit_rupees: float = 3500
+    daily_loss_limit_rupees: float = 3000
+    max_risk_per_trade_rupees: float = 1000
+    index_daily_loss_limit_rupees: float = 1000
 
     @property
     def ai_configured(self) -> bool:
@@ -130,6 +131,7 @@ class AutonomiqConfig:
             "event_move_pct": self.event_move_pct,
             "max_output_tokens": self.max_output_tokens, "prompt_cache": self.prompt_cache,
             "ai_timeout_seconds": self.ai_timeout_seconds, "ai_max_retries": self.ai_max_retries,
+            "ai_temperature": self.ai_temperature,
             "monthly_budget_usd": self.monthly_budget_usd, "daily_budget_usd": self.daily_budget_usd,
             "require_ai_confirmation": self.require_ai_confirmation,
             "market_start": self.market_start.strftime("%H:%M"), "entry_cutoff": self.entry_cutoff.strftime("%H:%M"),
@@ -164,7 +166,7 @@ def load_config() -> AutonomiqConfig:
     holidays = frozenset(day.strip() for day in (g("EXTRA_HOLIDAYS") or "").split(",") if day.strip())
     budget_error = "AUTONOMIQ_PRO_INDEX_DAILY_LOSS_LIMIT_RUPEES must be finite and non-negative"
     try:
-        index_daily_loss_limit = float(g("INDEX_DAILY_LOSS_LIMIT_RUPEES") or "3500")
+        index_daily_loss_limit = float(g("INDEX_DAILY_LOSS_LIMIT_RUPEES") or "1000")
     except ValueError as exc:
         raise ValueError(budget_error) from exc
     if not math.isfinite(index_daily_loss_limit) or index_daily_loss_limit < 0:
@@ -190,6 +192,7 @@ def load_config() -> AutonomiqConfig:
         daily_budget_usd=_num(g("DAILY_BUDGET_USD"), 1.25, 0, 10_000),
         ai_timeout_seconds=_num(g("AI_TIMEOUT_SECONDS"), 60, 5, 600),
         ai_max_retries=int(_num(g("AI_MAX_RETRIES"), 2, 0, 5)),
+        ai_temperature=_num(g("AI_TEMPERATURE"), 0.1, 0, 1),
         require_ai_confirmation=_bool(g("REQUIRE_AI_CONFIRMATION"), True),
         auto_paper_trading=False,
         event_move_pct=_num(g("EVENT_MOVE_PCT"), 0.35, 0.05, 5),
@@ -208,7 +211,7 @@ def load_config() -> AutonomiqConfig:
         estimated_round_trip_cost_rupees=_num(g("ESTIMATED_ROUND_TRIP_COST_RUPEES"), 150, 0, 1000),
         max_open_positions=int(_num(g("MAX_OPEN_POSITIONS"), 3, 1, 3)),
         max_trades_per_day=int(_num(g("MAX_TRADES_PER_DAY"), 5, 1, 50)),
-        daily_loss_limit_rupees=_num(g("DAILY_LOSS_LIMIT_RUPEES"), 3500, 0, 10_000_000),
-        max_risk_per_trade_rupees=_num(g("MAX_RISK_PER_TRADE_RUPEES"), 3500, 0, 10_000_000),
+        daily_loss_limit_rupees=_num(g("DAILY_LOSS_LIMIT_RUPEES"), 3000, 0, 10_000_000),
+        max_risk_per_trade_rupees=_num(g("MAX_RISK_PER_TRADE_RUPEES"), 1000, 0, 10_000_000),
         index_daily_loss_limit_rupees=index_daily_loss_limit,
     )

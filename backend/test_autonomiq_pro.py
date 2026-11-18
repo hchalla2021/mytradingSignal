@@ -64,7 +64,7 @@ class ConfigTests(unittest.TestCase):
         defaults = AutonomiqConfig()
         fields = ("max_risk_per_trade_rupees", "max_trades_per_day",
                   "max_open_positions", "daily_loss_limit_rupees", "index_daily_loss_limit_rupees")
-        expected = (3500, 5, 3, 3500, 3500)
+        expected = (1000, 5, 3, 3000, 1000)
         self.assertEqual(tuple(getattr(defaults, field) for field in fields), expected)
         self.assertEqual(tuple(getattr(cfg, field) for field in fields), expected)
         self.assertEqual(tuple(cfg.public()[field] for field in fields), expected)
@@ -117,7 +117,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(cfg.public()["live_execution_allowed"], expected)
 
     def test_index_daily_budget_override_is_explicit_and_invalid_values_fail_closed(self):
-        for mode, value, expected in (("local", "2000", 2000), ("production", None, 3500)):
+        for mode, value, expected in (("local", "2000", 2000), ("production", None, 1000)):
             with self.subTest(mode=mode):
                 env = {"AUTONOMIQ_PRO_DEPLOYMENT_MODE": mode, "AUTONOMIQ_PRO_MAX_RISK_PER_TRADE_RUPEES": "2000"}
                 if value is not None:
@@ -1310,6 +1310,7 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
             CFG, DAY, "strategy", "claude-fable-5-2", "sys", {"a": 1})
         self.assertEqual(seen["key"], "test-key")
         self.assertEqual(seen["body"]["max_tokens"], 500)
+        self.assertEqual(seen["body"]["temperature"], 0.1)
         self.assertEqual(seen["body"]["system"][0]["cache_control"], {"type": "ephemeral"})
 
     async def test_retries_overload_then_succeeds(self):
@@ -1732,7 +1733,10 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
 class AICostGateTests(unittest.IsolatedAsyncioTestCase):
     def ctx(self, score=70.0, fresh=True):
         return {"spot": {"fresh": fresh, "price": 22500.0},
-                "data": {"candles": {"5m": [1], "15m": [1]}, "options": {"atm": 1}},
+                "data": {"candles": {"5m": [{} for _ in range(14)], "15m": [{} for _ in range(20)],
+                                     "60m": [{} for _ in range(10)]},
+                         "futures": {"ltp": 22510, "vwap": 22500},
+                         "options": {"atm": 22500, "strikes": [{}, {}]}},
                 "quant": {"score": score, "bias": "BULLISH", "flags": []}}
 
     def engine(self):
@@ -1928,7 +1932,11 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
 
 class SignalValidationTests(unittest.TestCase):
     def ctx(self, score=70.0, fresh=True):
-        return {"spot": {"fresh": fresh}, "data": {"candles": {"5m": [1], "15m": [1]}, "options": {"atm": 1}},
+        return {"spot": {"fresh": fresh},
+                "data": {"candles": {"5m": [{} for _ in range(14)], "15m": [{} for _ in range(20)],
+                                     "60m": [{} for _ in range(10)]},
+                         "futures": {"ltp": 22000, "vwap": 21950},
+                         "options": {"atm": 1, "strikes": [{}, {}]}},
                 "quant": {"score": score, "bias": "BULLISH", "flags": []}}
 
     def test_ai_cannot_override_quant_direction(self):
@@ -1952,6 +1960,22 @@ class SignalValidationTests(unittest.TestCase):
     def test_malformed_ai_action_degrades_to_wait(self):
         out = agents.normalize_strategy({"indices": {"nifty": {"action": "SELL EVERYTHING", "conviction": "x"}}})
         self.assertEqual(out["indices"]["NIFTY"]["action"], "WAIT")
+
+    def test_ai_output_is_cross_checked_against_quant_and_exact_symbols(self):
+        contexts = {"NIFTY": self.ctx(score=70), "BANKNIFTY": self.ctx(score=-70),
+                    "SENSEX": self.ctx(score=-70)}
+        strategy = {"market_alert": {"tone": "BEARISH", "title": "Mixed", "detail": "x"},
+                    "summary": "x", "indices": {
+                        "NIFTY": {"action": "BUY_PE", "conviction": 90, "reasoning": "unsupported", "risks": []},
+                        "BANKNIFTY": {"action": "BUY_PE", "conviction": 90, "reasoning": "bearish", "risks": []},
+                        "SENSEX": {"action": "BUY_CE", "conviction": 90, "reasoning": "unsupported", "risks": []},
+                    }}
+        checked, issues = agents.validate_strategy(strategy, contexts, 60)
+        self.assertTrue(issues)
+        self.assertEqual(checked["indices"]["NIFTY"]["action"], "WAIT")
+        self.assertEqual(checked["indices"]["SENSEX"]["action"], "WAIT")
+        self.assertEqual(checked["indices"]["BANKNIFTY"]["action"], "BUY_PE")
+        self.assertEqual(checked["market_alert"]["tone"], "CAUTION")
 
 
 class LiveRiskCalculationTests(unittest.TestCase):

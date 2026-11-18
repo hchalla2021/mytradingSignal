@@ -309,11 +309,17 @@ class AutonomiqOrchestrator:
             # Claim the slot before calling so no other path can spend tokens in the same slot.
             self.store.set_state("ai_slot", slot_start(now, ANALYSIS_INTERVAL_MINUTES).isoformat())
             try:
-                strategy = agents.normalize_strategy(await self.ai.complete_json(
+                raw_strategy = agents.normalize_strategy(await self.ai.complete_json(
                     cfg, day, "strategy", model, agents.STRATEGY_SYSTEM,
                     agents.strategy_payload(ai_contexts, {**session, "time": now.strftime("%H:%M"),
                                                           "trigger": "BIG_MOVE" if big_move else trigger},
                                             live_positions)))
+                strategy, validation_issues = agents.validate_strategy(
+                    raw_strategy, contexts, cfg.min_signal_score, live_positions)
+                if validation_issues:
+                    logger.warning("AUTONOMIQ PRO AI output cross-validation rejected: %s",
+                                   "; ".join(validation_issues))
+                    ai_state = "AI_OUTPUT_REJECTED"
             except AIUnavailable as exc:
                 ai_state = str(exc)
         elif ai_state == "ACTIVE":
