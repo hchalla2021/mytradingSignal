@@ -1310,7 +1310,8 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
             CFG, DAY, "strategy", "claude-fable-5-2", "sys", {"a": 1})
         self.assertEqual(seen["key"], "test-key")
         self.assertEqual(seen["body"]["max_tokens"], 500)
-        self.assertEqual(seen["body"]["temperature"], 0.1)
+        self.assertNotIn("temperature", seen["body"])
+        self.assertEqual(seen["body"]["output_config"]["effort"], "low")
         self.assertEqual(seen["body"]["system"][0]["cache_control"], {"type": "ephemeral"})
 
     async def test_retries_overload_then_succeeds(self):

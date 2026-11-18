@@ -79,7 +79,6 @@ class AutonomiqConfig:
     daily_budget_usd: float = 1.25
     ai_timeout_seconds: float = 60
     ai_max_retries: int = 2
-    ai_temperature: float = 0.1
     require_ai_confirmation: bool = True
     auto_paper_trading: bool = False
     event_move_pct: float = 0.35
@@ -131,7 +130,6 @@ class AutonomiqConfig:
             "event_move_pct": self.event_move_pct,
             "max_output_tokens": self.max_output_tokens, "prompt_cache": self.prompt_cache,
             "ai_timeout_seconds": self.ai_timeout_seconds, "ai_max_retries": self.ai_max_retries,
-            "ai_temperature": self.ai_temperature,
             "monthly_budget_usd": self.monthly_budget_usd, "daily_budget_usd": self.daily_budget_usd,
             "require_ai_confirmation": self.require_ai_confirmation,
             "market_start": self.market_start.strftime("%H:%M"), "entry_cutoff": self.entry_cutoff.strftime("%H:%M"),
@@ -192,7 +190,6 @@ def load_config() -> AutonomiqConfig:
         daily_budget_usd=_num(g("DAILY_BUDGET_USD"), 1.25, 0, 10_000),
         ai_timeout_seconds=_num(g("AI_TIMEOUT_SECONDS"), 60, 5, 600),
         ai_max_retries=int(_num(g("AI_MAX_RETRIES"), 2, 0, 5)),
-        ai_temperature=_num(g("AI_TEMPERATURE"), 0.1, 0, 1),
         require_ai_confirmation=_bool(g("REQUIRE_AI_CONFIRMATION"), True),
         auto_paper_trading=False,
         event_move_pct=_num(g("EVENT_MOVE_PCT"), 0.35, 0.05, 5),

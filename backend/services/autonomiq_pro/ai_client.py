@@ -89,7 +89,6 @@ class AIClient:
         body: dict[str, Any] = {
             "model": model, "max_tokens": cfg.max_output_tokens, "system": [system_block],
             "messages": [{"role": "user", "content": user}],
-            "temperature": cfg.ai_temperature,
         }
         if cfg.reasoning_effort != "default":
             body["output_config"] = {"effort": cfg.reasoning_effort}
@@ -165,6 +164,9 @@ class _HTTPError(Exception):
 
 def _error_type(response: httpx.Response) -> str:
     try:
-        return str((response.json().get("error") or {}).get("type") or "error")[:80]
+        error = response.json().get("error") or {}
+        kind = str(error.get("type") or "error")
+        message = str(error.get("message") or "").strip()
+        return f"{kind}: {message}"[:240] if message else kind
     except ValueError:
         return "error"
