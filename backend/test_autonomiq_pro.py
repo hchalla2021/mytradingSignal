@@ -1800,11 +1800,6 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
 
             FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 20))
             await engine._tick()
-            self.assertEqual(engine.next_run_at, IST.localize(datetime(2026, 3, 10, 9, 20, 5)))
-            cycle.assert_not_awaited()
-
-            FixedDateTime.current = IST.localize(datetime(2026, 3, 10, 9, 20, 5))
-            await engine._tick()
             await engine._cycle_task
             self.assertEqual(engine.next_run_at, IST.localize(datetime(2026, 3, 10, 9, 25, 5)))
             self.assertEqual(cycle.await_count, 1)

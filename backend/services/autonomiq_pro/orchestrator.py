@@ -189,7 +189,10 @@ class AutonomiqOrchestrator:
             self.next_run_at = None
             return
         if self.next_run_at is None:
-            self.next_run_at = slot_run_at(now, ANALYSIS_INTERVAL_MINUTES)
+            # At startup or after a restart, run the first check immediately when
+            # the active entry window has already begun. The slot claim below
+            # prevents repeated AI calls and a restart from overwriting the cycle.
+            self.next_run_at = now if now.time() >= self.cfg.market_start else slot_run_at(now, ANALYSIS_INTERVAL_MINUTES)
         if now >= self.next_run_at:
             if self.store.get_state("ai_slot") == slot_start(now, ANALYSIS_INTERVAL_MINUTES).isoformat():
                 self.next_run_at = next_slot(now, ANALYSIS_INTERVAL_MINUTES)
