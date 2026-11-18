@@ -235,7 +235,7 @@ function EntryGates({ sym, signal, snap, hasPosition = false }: {
       {`Approval state: ${approvalLabel}`}
     </p>}
     {signal?.source !== 'validation' && signal?.ai_action === null && quantBuy && <p className="mt-2 text-amber-200">
-      {`No new AI confirmation. Next scheduled AI: ${clock(snap?.health.next_run_at)} IST. Refresh now does not request AI.`}
+      {`No AI adjudication in this 5-minute slot. Next eligible AI: ${clock(snap?.health.next_run_at)} IST. Refresh rechecks only the live quant setup.`}
     </p>}
     {aiDeclined && quantBuy && <p className="mt-2 text-amber-200">
       AI declined this direction. Quant passed, but risk and broker submission are intentionally not reached.
@@ -505,7 +505,7 @@ function LiveTradeTable({ trades, liveAvailable, snap }: { trades: LiveTrade[]; 
         })}
       </div>
       {snap?.cycle?.trigger === 'MANUAL' && <p className="mt-3 text-amber-300">
-        Manual refresh is quant-only; it does not obtain new AI entry confirmation.
+        Manual refresh rechecks quant now. A quant-passed setup can obtain one Claude confirmation in the current unused 5-minute slot; a used slot waits for the next eligible cycle.
       </p>}
       <p className="mt-2 text-slate-400">Next scheduled analysis: {clock(snap?.health.next_run_at)} IST.
         After an entry fill, AUTONOMIQ submits broker-side SL protection and manages trailing updates.</p>
@@ -676,12 +676,12 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
             <span className="sm:hidden">{liveAvailable ? liveEnabled ? 'LIVE ON' : 'LIVE OFF' : 'LIVE ORDERS'}</span>
             <span className="hidden sm:inline">{liveAvailable ? liveEnabled ? 'LIVE TRADING ON' : 'LIVE TRADING OFF' : 'LIVE ORDERS'}</span>
           </span>
-          <button type="button" aria-label="Refresh now, no AI" disabled={busy || !snap} onClick={() => act('/api/autonomiq-pro/analyze', undefined, 'Quant refresh started — no AI tokens used')}
-            title="Re-runs indicator and quant analysis on live data now. This refresh never uses AI tokens; scheduled Claude Fable analysis runs every 5 minutes while within budget."
+          <button type="button" aria-label="Refresh and AI check" disabled={busy || !snap} onClick={() => act('/api/autonomiq-pro/analyze', undefined, 'Quant refresh started — AI check only if a quant setup passed')}
+            title="Re-runs live quant analysis now. If a quant setup passes and this 5-minute slot is unused, Claude Fable adjudicates it once; otherwise the next eligible slot handles it."
             className="autonomiq-refresh-button inline-flex items-center justify-center gap-2 rounded-full border border-emerald-500 text-center font-bold text-emerald-100 disabled:opacity-50">
             <Play className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" />
-            <span className="sm:hidden">Refresh · no AI</span>
-            <span className="hidden sm:inline">Refresh now · no AI</span>
+            <span className="sm:hidden">Refresh · AI check</span>
+            <span className="hidden sm:inline">Refresh now · AI check</span>
           </button>
         </div>
       </header>

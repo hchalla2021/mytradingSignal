@@ -131,9 +131,9 @@ test('header labels config-disabled execution LIVE ORDERS and retains the no-AI 
     const refresh = nodes(header).find(node => node.type === 'button' && text(node).includes('Refresh now'));
     assert.ok(refresh);
     assert.equal(refresh.props.disabled, false);
-    assert.equal(refresh.props['aria-label'], 'Refresh now, no AI');
-    assert.match(text(refresh), /Refresh · no AI/);
-    assert.match(refresh.props.title, /never uses AI tokens/);
+    assert.equal(refresh.props['aria-label'], 'Refresh and AI check');
+    assert.match(text(refresh), /Refresh · AI check/);
+    assert.match(refresh.props.title, /quant setup passes/);
   }
 });
 
@@ -172,8 +172,8 @@ test('green quant score shows missing AI and retains the scheduled WAIT after ma
     assert.match(body, /Risk NOT REACHED/);
     assert.match(body, /Broker NOT REQUESTED/);
     assert.match(body, /Approval state: WAIT · AI REVIEW/);
-    assert.match(body, /Refresh now does not request AI/);
-    assert.match(body, /Next scheduled AI: 11:05:00 IST/);
+    assert.match(body, /No AI adjudication in this 5-minute slot/);
+    assert.match(body, /Next eligible AI: 11:05:00 IST/);
     assert.match(body, /Last scheduled result · 10:58:00 IST: WAIT/);
     assert.match(body, /Extended; await a pullback/);
     assert.match(body, /Historical result only; not approval/);
@@ -426,7 +426,7 @@ test('empty Trades tab explains recorded WAIT decisions instead of implying a br
   assert.match(text(decisions), /NOT REQUESTED/);
   assert.match(text(decisions), /Awaiting AI confirmation/);
   const body = text(tree).replace(/\s+/g, ' ');
-  assert.match(body, /Manual refresh is quant-only/);
+  assert.match(body, /Manual refresh rechecks quant now/);
   assert.match(body, /Next scheduled analysis: 11:05:00 IST/);
   assert.match(body, /Live Trading ON alone does not submit an order/);
 });

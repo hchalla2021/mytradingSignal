@@ -97,4 +97,7 @@ async def analyze(actor: str = Depends(owner)):
         raise HTTPException(status_code=409, detail="Engine disabled or kill switch engaged")
     started = service.trigger("MANUAL")
     await asyncio.to_thread(service.store.audit, actor, "manual_analyze", {"started": started})
-    return {"started": started, "detail": "Analysis started" if started else "An analysis is already running"}
+    return {"started": started, "detail": (
+        "Analysis started; quant setup must pass and one AI call is allowed per 5-minute slot"
+        if started else "An analysis is already running or this 5-minute slot is already claimed"
+    )}

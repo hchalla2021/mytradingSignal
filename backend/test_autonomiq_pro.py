@@ -1816,9 +1816,16 @@ class AICostGateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cycle.await_count, 2)
 
     def test_scheduled_ai_runs_without_quant_setup_and_reports_stale_inputs(self):
+        from services.autonomiq_pro.orchestrator import slot_start
         engine = self.engine()
         setup = {"NIFTY": self.ctx(), "BANKNIFTY": self.ctx(score=10), "SENSEX": self.ctx(fresh=False)}
-        self.assertEqual(self.gate(engine, setup, "MANUAL"), ("SKIPPED_MANUAL_QUANT_ONLY", {}))
+        self.assertEqual(self.gate(engine, {"NIFTY": self.ctx(score=10)}, "MANUAL")[0],
+                         "SKIPPED_MANUAL_NO_QUANT_SETUP")
+        self.assertEqual(self.gate(engine, setup, "MANUAL"),
+                         (None, {"NIFTY": setup["NIFTY"]}))
+        engine.store.set_state("ai_slot", slot_start(NOW, CFG.analysis_interval_minutes).isoformat())
+        self.assertEqual(self.gate(engine, setup, "MANUAL")[0], "SKIPPED_SLOT_ALREADY_ANALYZED")
+        engine.store.set_state("ai_slot", "")
         self.assertEqual(list(self.gate(engine, {"NIFTY": self.ctx(score=10)})[1]), ["NIFTY"])
         self.assertEqual(list(self.gate(engine, {"NIFTY": self.ctx(fresh=False)})[1]), ["NIFTY"])
         self.assertEqual(list(self.gate(engine, setup)[1]), ["NIFTY", "BANKNIFTY", "SENSEX"])

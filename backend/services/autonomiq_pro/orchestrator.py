@@ -436,7 +436,21 @@ class AutonomiqOrchestrator:
         Entry limits block trade approval, not market analysis.
         """
         if trigger != "SCHEDULED":
-            return "SKIPPED_MANUAL_QUANT_ONLY", {}
+            if not analysis_window_open(now, cfg, session):
+                return "SKIPPED_OUTSIDE_WINDOW", {}
+            actionable = {}
+            for symbol, ctx in contexts.items():
+                if agents.data_problems(ctx):
+                    continue
+                quant_action, _ = agents.quant_action(ctx, cfg.min_signal_score)
+                if quant_action in ("BUY_CE", "BUY_PE"):
+                    actionable[symbol] = ctx
+            if not actionable:
+                return "SKIPPED_MANUAL_NO_QUANT_SETUP", {}
+            slot = slot_start(now, ANALYSIS_INTERVAL_MINUTES).isoformat()
+            if self.store.get_state("ai_slot") == slot:
+                return "SKIPPED_SLOT_ALREADY_ANALYZED", {}
+            return None, actionable
         if not analysis_window_open(now, cfg, session):
             return "SKIPPED_OUTSIDE_WINDOW", {}
         slot = slot_start(now, ANALYSIS_INTERVAL_MINUTES).isoformat()
