@@ -169,7 +169,7 @@ test('green quant score shows missing AI and retains the scheduled WAIT after ma
     const body = text(gates).replace(/\s+/g, ' ');
     assert.match(body, /Quant PASSED · BUY CE/);
     assert.match(body, /AI NOT REQUESTED/);
-    assert.match(body, /Risk NOT EVALUATED/);
+    assert.match(body, /Risk NOT REACHED/);
     assert.match(body, /Broker NOT REQUESTED/);
     assert.match(body, /Refresh now does not request AI/);
     assert.match(body, /Next scheduled AI: 11:05:00 IST/);

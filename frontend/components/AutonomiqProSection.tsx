@@ -190,6 +190,9 @@ function EntryGates({ sym, signal, snap, hasPosition = false }: {
   const quantBuy = signal?.quant_action === 'BUY_CE' || signal?.quant_action === 'BUY_PE';
   const aiBuy = signal?.ai_action === 'BUY_CE' || signal?.ai_action === 'BUY_PE';
   const aiAgrees = quantBuy && aiBuy && signal?.quant_action === signal?.ai_action;
+  const aiDeclined = !!signal?.ai_action && signal.ai_action !== 'NO_TRADE' &&
+    (signal.ai_action === 'WAIT' || signal.ai_action === 'HOLD');
+  const riskReached = aiAgrees;
   const quantLabel = signal?.source === 'validation' ? 'DATA UNAVAILABLE'
     : signal?.quant_action ? `${quantBuy ? 'PASSED · ' : ''}${ACTION_STYLE[signal.quant_action].label}` : 'NOT RECORDED';
   const aiLabel = signal?.ai_action == null
@@ -206,7 +209,8 @@ function EntryGates({ sym, signal, snap, hasPosition = false }: {
       {([
         ['Quant', quantLabel, quantBuy && signal?.source !== 'validation'],
         ['AI', aiLabel, aiAgrees],
-        ['Risk', signal?.risk ? signal.risk.approved ? 'PASSED' : 'BLOCKED' : 'NOT EVALUATED', signal?.risk?.approved],
+        ['Risk', signal?.risk ? signal.risk.approved ? 'PASSED' : 'BLOCKED'
+          : riskReached ? 'EVALUATING' : 'NOT REACHED', !!signal?.risk?.approved],
         ['Broker', (signal?.execution?.status ?? 'NOT_REQUESTED').replace(/_/g, ' '), false],
       ] as const).map(([label, value, passed]) => <div key={label}>
         <dt className="text-slate-400">{label}</dt>
@@ -215,6 +219,9 @@ function EntryGates({ sym, signal, snap, hasPosition = false }: {
     </dl>
     {signal?.source !== 'validation' && signal?.ai_action === null && quantBuy && <p className="mt-2 text-amber-200">
       {`No new AI confirmation. Next scheduled AI: ${clock(snap?.health.next_run_at)} IST. Refresh now does not request AI.`}
+    </p>}
+    {aiDeclined && quantBuy && <p className="mt-2 text-amber-200">
+      AI declined this direction. Quant passed, but risk and broker submission are intentionally not reached.
     </p>}
     {prior && <div className="autonomiq-scheduled mt-2 border-t border-slate-700 pt-2 text-slate-300">
       <CalendarDays aria-hidden="true" className="autonomiq-accent-icon" />
