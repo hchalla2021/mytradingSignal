@@ -175,7 +175,6 @@ class QuantEdgeHybridOrchestrator:
             slot = self._five_minute_slot(now)
             if self.ai_slot == slot:
                 return {"approved": False, "reason": "AI already consumed this 5-minute slot", "state": "PENDING"}
-
             key, item = max(self.pending.items(), key=lambda pair: pair[1]["priority"])
             candidate = item["candidate"]
             expected = "BUY_CE" if candidate.get("side") == "CE" else "BUY_PE"

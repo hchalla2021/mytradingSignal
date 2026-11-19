@@ -70,6 +70,9 @@ class AutonomiqConfig:
     api_key: str = field(default="", repr=False)
     primary_model: str = "claude-fable-5-2"
     advanced_model: str = "claude-fable-5-2"
+    quantum_model: str = "claude-haiku-5-5"
+    quantum_max_output_tokens: int = 512
+    quantum_ai_timeout_seconds: float = 15
     fable_event_only: bool = False
     reasoning_effort: str = "low"
     api_version: str = "2023-06-01"
@@ -107,6 +110,8 @@ class AutonomiqConfig:
 
     def model_for(self, trigger: str) -> str:
         """Use the advanced model only for event analysis when event-only mode is enabled."""
+        if trigger == "QUANTUM_SIGNAL":
+            return self.quantum_model
         if self.fable_event_only and trigger == "EVENT":
             return self.advanced_model
         return self.primary_model
@@ -126,6 +131,9 @@ class AutonomiqConfig:
             "analysis_start": self.analysis_start.strftime("%H:%M"),
             "analysis_end": ANALYSIS_END.strftime("%H:%M"),
             "primary_model": self.primary_model, "advanced_model": self.advanced_model,
+            "quantum_model": self.quantum_model,
+            "quantum_max_output_tokens": self.quantum_max_output_tokens,
+            "quantum_ai_timeout_seconds": self.quantum_ai_timeout_seconds,
             "fable_event_only": self.fable_event_only, "reasoning_effort": self.reasoning_effort,
             "event_move_pct": self.event_move_pct,
             "max_output_tokens": self.max_output_tokens, "prompt_cache": self.prompt_cache,
@@ -181,6 +189,9 @@ def load_config() -> AutonomiqConfig:
         api_key=(g("ANTHROPIC_API_KEY") or "").strip(),
         primary_model=(g("PRIMARY_MODEL") or "claude-fable-5-2").strip(),
         advanced_model=(g("ADVANCED_MODEL") or "claude-fable-5-2").strip(),
+        quantum_model=(g("QUANTUM_MODEL") or "claude-haiku-5-5").strip(),
+        quantum_max_output_tokens=int(_num(g("QUANTUM_MAX_OUTPUT_TOKENS"), 512, 100, 2000)),
+        quantum_ai_timeout_seconds=_num(g("QUANTUM_AI_TIMEOUT_SECONDS"), 15, 5, 60),
         fable_event_only=_bool(g("FABLE_EVENT_ONLY"), False),
         reasoning_effort=effort if effort in ("low", "medium", "high", "xhigh", "max", "default") else "low",
         api_version=(g("AI_API_VERSION") or "2023-06-01").strip(),

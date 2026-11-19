@@ -23,6 +23,6 @@
 
 | Date | NIFTY | BANKNIFTY | SENSEX |
 |------|-------|-----------|--------|
+| 2026-11-19 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
 | 2026-11-16 | 📈 +0.25% (SIDEWAYS) | 📈 +0.21% (SIDEWAYS) | 📈 +0.20% (SIDEWAYS) |
 | 2026-11-13 | 📈 +0.24% (SIDEWAYS) | 📈 +0.14% (SIDEWAYS) | 📈 +0.13% (SIDEWAYS) |
-| 2026-11-10 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |

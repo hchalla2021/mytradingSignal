@@ -27,7 +27,7 @@ PERSISTENT_STATE_FILE = Path(__file__).parent.parent / "data" / "persistent_mark
 _SAVE_DEBOUNCE_SECONDS = 10.0
 _last_save_time: float = 0.0
 _save_timer: threading.Timer | None = None
-_save_lock = threading.Lock()
+_save_lock = threading.RLock()
 
 
 def _ensure_persistent_dir():
@@ -67,21 +67,23 @@ def _debounced_save():
     global _last_save_time, _save_timer
     with _save_lock:
         now = time.time()
-        if now - _last_save_time >= _SAVE_DEBOUNCE_SECONDS:
-            # Enough time has passed — write immediately
-            _last_save_time = now
-            _save_persistent_state(_PERSISTENT_STATE)
-        elif _save_timer is None or not _save_timer.is_alive():
-            # Schedule a delayed write
-            delay = _SAVE_DEBOUNCE_SECONDS - (now - _last_save_time)
-            def _do_save():
-                global _last_save_time
-                with _save_lock:
-                    _last_save_time = time.time()
-                    _save_persistent_state(_PERSISTENT_STATE)
-            _save_timer = threading.Timer(delay, _do_save)
-            _save_timer.daemon = True
-            _save_timer.start()
+        if _save_timer is not None and _save_timer.is_alive():
+            return
+        delay = 0.0 if _last_save_time == 0 else max(
+            0.0, _SAVE_DEBOUNCE_SECONDS - (now - _last_save_time)
+        )
+
+        def _do_save():
+            global _last_save_time, _save_timer
+            with _save_lock:
+                _last_save_time = time.time()
+                _save_timer = None
+                state = dict(_PERSISTENT_STATE)
+            _save_persistent_state(state)
+
+        _save_timer = threading.Timer(delay, _do_save)
+        _save_timer.daemon = True
+        _save_timer.start()
 
 
 # In-memory persistent state (loaded on startup, updated on market data)
@@ -121,9 +123,10 @@ class PersistentMarketState:
                 '_symbol': symbol,
             }
             
-            _PERSISTENT_STATE[symbol] = persistent_data
+            with _save_lock:
+                _PERSISTENT_STATE[symbol] = persistent_data
             
-            # Debounced save — writes to disk at most once every 10 seconds
+            # Debounced save — all disk I/O runs on a timer thread.
             _debounced_save()
             
         except Exception as e:

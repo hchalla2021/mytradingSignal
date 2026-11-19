@@ -89,8 +89,14 @@ def hybrid_levels(*, entry: float, bid: float, quantity: int, delta: float, opti
         if prior_session:
             levels.append(min(c["low"] for c in prior_session))
         barriers.extend((reference - level) * abs(delta) for level in levels if level < reference)
-    if barriers and min(barriers) < target2 - entry + buffer:
-        raise ValueError("Insufficient room to the next candle resistance/support for cost-aware T2")
+    required_room = target2 - entry + buffer
+    available_room = min(barriers) if barriers else math.inf
+    if available_room < required_room:
+        raise ValueError(
+            "Insufficient room to the next candle resistance/support for cost-aware T2: "
+            f"required option move ₹{required_room:.2f}, available ₹{available_room:.2f} "
+            f"(entry ₹{entry:.2f}, stop ₹{stop:.2f}, T2 ₹{target2:.2f})"
+        )
     return {"stop_loss": stop, "target1": target1, "target2": target2,
             "risk": round(entry - stop, 8), "option_atr": option_atr}
 

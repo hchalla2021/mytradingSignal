@@ -33,6 +33,8 @@ services:
       - PORT=8000
       - HOST=0.0.0.0
       - AUTONOMIQ_PRO_DEPLOYMENT_MODE=production
+      - AQTE_LIVE_DEPLOYMENT_MODE=production
+      - QUANTUMEDGE_DEPLOYMENT_MODE=production
       - ZERODHA_SHARED_AUTH_FILE=/run/zerodha/credentials.json
       # ✅ CRITICAL FIX: Use container name, not localhost
       - REDIS_URL=redis://redis:6379

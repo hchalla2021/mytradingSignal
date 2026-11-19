@@ -164,6 +164,42 @@ class Store:
                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
                    (key, json.dumps(value), _now()))
 
+    def claim_ai_slot(self, slot: str) -> bool:
+        encoded = json.dumps(slot)
+        with self.lock, self.conn:
+            cursor = self.conn.execute(
+                "INSERT INTO runtime_state(key, value, updated_at) VALUES('ai_slot', ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at "
+                "WHERE runtime_state.value != excluded.value",
+                (encoded, _now()),
+            )
+            return cursor.rowcount == 1
+
+    def claim_quantum_signals(self, keys: list[str]) -> list[str]:
+        with self.lock, self.conn:
+            row = self.conn.execute(
+                "SELECT value FROM runtime_state WHERE key = 'quantum_processed_signals'",
+            ).fetchone()
+            processed = set(json.loads(row["value"]) if row else [])
+            claimed = [key for key in dict.fromkeys(keys) if key not in processed]
+            if claimed:
+                processed.update(claimed)
+                value = list(processed)[-500:]
+                self.conn.execute(
+                    "INSERT INTO runtime_state(key, value, updated_at) VALUES(?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                    ("quantum_processed_signals", json.dumps(value), _now()),
+                )
+            return claimed
+
+    def unprocessed_quantum_signals(self, keys: list[str]) -> list[str]:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT value FROM runtime_state WHERE key = 'quantum_processed_signals'",
+            ).fetchone()
+        processed = set(json.loads(row["value"]) if row else [])
+        return [key for key in dict.fromkeys(keys) if key not in processed]
+
     # ── audit / alerts ───────────────────────────────────────────────
     def audit(self, actor: str, action: str, detail: Any = None) -> None:
         self._exec("INSERT INTO audit_log(created_at, actor, action, detail) VALUES(?,?,?,?)",
@@ -202,6 +238,26 @@ class Store:
         row = rows[0]
         row["payload"] = json.loads(row["payload"]) if row.get("payload") else None
         return row
+
+    def last_ai_cycle_in_slot(self, slot_at: datetime, *, trigger: str | None = None) -> dict | None:
+        prefix = slot_at.isoformat()[:16]
+        with self.lock:
+            query = "SELECT * FROM analysis_cycles WHERE payload IS NOT NULL"
+            params: tuple[str, ...] = ()
+            if trigger is not None:
+                query += " AND trigger = ?"
+                params = (trigger,)
+            rows = self.conn.execute(query + " ORDER BY id DESC LIMIT 200", params).fetchall()
+        for row in rows:
+            cycle = dict(row)
+            payload = json.loads(cycle["payload"]) if cycle.get("payload") else None
+            if not payload or payload.get("at", "")[:16] != prefix:
+                continue
+            signals = (payload.get("indices") or {}).values()
+            if any((data.get("signal") or {}).get("ai_action") is not None for data in signals):
+                cycle["payload"] = payload
+                return cycle
+        return None
 
     def add_decision(self, cycle_id: int, day: str, decision: dict) -> int:
         return self._exec(

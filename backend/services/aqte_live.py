@@ -41,6 +41,7 @@ from services.expiryedge_algos import (
 )
 from services.expiryedge import get_config as get_expiryedge_config
 from services.expiryedge_ai import evaluate_opening_range
+from services.quantumedge_intraday import QuantumEdgeIntradayService
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"COMPLETE", "CANCELLED", "REJECTED"}
@@ -48,6 +49,7 @@ KILL_TAG = "AQTEKILL"
 # Every AQTE order carries its 16-hex trade id + E (entry) / S (stop); manual Kite orders never do.
 AQTE_TAG = re.compile(r"[0-9a-f]{16}[ES]")
 QUANTEDGE_TAG = re.compile(r"QEP[0-9a-f]{13}[ES]")
+QUANTUMEDGE_TAG = re.compile(r"QEI[0-9a-f]{13}[ES]")
 EXPIRYEDGE_TAG = re.compile(r"XEA[0-9a-f]{13}[ES]")
 EXPIRYEDGE_AI_TAG = re.compile(r"EAI[0-9a-f]{13}[ES]")
 KILL_EXCHANGES = {"NFO", "BFO", "NSE", "BSE"}
@@ -69,15 +71,15 @@ MARKET_WAIT = "Market data and pre-open analysis start at 09:00 IST; live auto-t
 KITE_MAX_MODIFICATIONS = 25
 EXIT_MODIFY_RESERVE = 5
 OWNER_LABELS = {
-    "QUANTEDGE": "QuantEdge Pro", "EXPIRYEDGE": "6 Algo Desk",
+    "QUANTEDGE": "QuantEdge Pro", "QUANTUMEDGE": "QuantumEdge IntraDay Algo", "EXPIRYEDGE": "6 Algo Desk",
     "EXPIRYEDGE_AI": "ExpiryEdge AI Algo",
 }
 OWNER_SOURCES = {
-    "QUANTEDGE": "quantedge_live", "EXPIRYEDGE": "expiryedge_live",
+    "QUANTEDGE": "quantedge_live", "QUANTUMEDGE": "quantumedge_intraday", "EXPIRYEDGE": "expiryedge_live",
     "EXPIRYEDGE_AI": "expiryedge_ai_live",
 }
 # Owners with their own desks; AQTE's controller views exclude their trades and proposals.
-SEPARATE_OWNERS = ("QUANTEDGE", "EXPIRYEDGE", "EXPIRYEDGE_AI")
+SEPARATE_OWNERS = ("QUANTEDGE", "QUANTUMEDGE", "EXPIRYEDGE", "EXPIRYEDGE_AI")
 EXPIRYEDGE_SCAN_SECONDS = 1.0
 EXPIRYEDGE_AI_RISK_CAP = 3000.0
 EXPIRYEDGE_AI_DAILY_LOSS_CAP = 3000.0
@@ -98,7 +100,13 @@ class EntrySkipped(LiveBlocked):
 
 def entry_window(at):
     dt = datetime.fromtimestamp(at, IST)
-    return session(at) and dt.hour * 60 + dt.minute < ENTRY_CUTOFF_MINUTE
+    if not session(at) or dt.hour * 60 + dt.minute >= ENTRY_CUTOFF_MINUTE:
+        return False
+    try:
+        from services.market_session_controller import NSE_HOLIDAYS
+        return dt.strftime("%Y-%m-%d") not in NSE_HOLIDAYS
+    except ImportError:
+        return False
 
 
 def aqte_order(order):
@@ -110,6 +118,7 @@ def algo_order(order):
     tag = str(order.get("tag") or "")
     return (
         aqte_order(order) or QUANTEDGE_TAG.fullmatch(tag) is not None
+        or QUANTUMEDGE_TAG.fullmatch(tag) is not None
         or EXPIRYEDGE_TAG.fullmatch(tag) is not None
         or EXPIRYEDGE_AI_TAG.fullmatch(tag) is not None
     )
@@ -218,6 +227,13 @@ class AQTELiveService:
                       "daily_entries": [], "daily_controls_version": DAILY_CONTROL_DEFAULTS_VERSION,
                       "automation_approval_version": AUTOMATION_APPROVAL_VERSION,
                       "quantedge": {"enabled": False, "lots": 1},
+                      "quantumedge": {
+                          "enabled": False,
+                          "indices": {
+                              symbol: {"enabled": True, "lots": 1, "risk_per_lot": 500}
+                              for symbol in SYMBOLS
+                          },
+                      },
                       "expiryedge": {"algos": {key: False for key in EXPIRYEDGE_ALGOS}},
                       "expiryedge_ai": {"enabled": False, "error": None}}
         self.expiryedge = ExpiryEdgeDesk()
@@ -231,7 +247,9 @@ class AQTELiveService:
         self.expiryedge_ai_failures = 0
         self.expiryedge_ai_next_activation = 0.0
         self.quantedge_next_activation = 0.0
+        self.quantumedge_next_activation = 0.0
         self.quantedge_hybrid = QuantEdgeHybridOrchestrator()
+        self.quantumedge = QuantumEdgeIntradayService()
         self.proposals = {}
         self.check = None
         self.error = None
@@ -316,6 +334,26 @@ class AQTELiveService:
                 not 1 <= self.state["quantedge"]["lots"] <= 5):
             raise LiveBlocked("Invalid QuantEdge Pro configuration; journal requires repair before trading")
         self.state["quantedge"]["enabled"] = False
+        quantumedge = self.state.setdefault("quantumedge", {
+            "enabled": False,
+            "indices": {symbol: {"enabled": True, "lots": 1, "risk_per_lot": 500}
+                        for symbol in SYMBOLS},
+        })
+        quantumedge.setdefault("indices", {})
+        for symbol in SYMBOLS:
+            quantumedge["indices"].setdefault(
+                symbol, {"enabled": True, "lots": 1, "risk_per_lot": 500})
+        quantumedge["enabled"] = False
+        if any(
+            not isinstance(quantumedge["indices"].get(symbol), dict)
+            or type(quantumedge["indices"][symbol].get("enabled")) is not bool
+            or type(quantumedge["indices"][symbol].get("lots")) is not int
+            or not 1 <= quantumedge["indices"][symbol]["lots"] <= 5
+            or type(quantumedge["indices"][symbol].get("risk_per_lot")) is not int
+            or not 100 <= quantumedge["indices"][symbol]["risk_per_lot"] <= 10_000
+            for symbol in SYMBOLS
+        ):
+            raise LiveBlocked("Invalid QuantumEdge IntraDay index configuration; journal requires repair")
         expiryedge = self.state.setdefault("expiryedge", {"algos": {key: False for key in EXPIRYEDGE_ALGOS}})
         algos = expiryedge.get("algos") if isinstance(expiryedge, dict) else None
         if (not isinstance(algos, dict) or
@@ -471,6 +509,7 @@ class AQTELiveService:
             self.state["automation_on"] = False
             self.state["automation_wanted"] = False
             self.state["quantedge"]["enabled"] = False
+            self.state["quantumedge"]["enabled"] = False
             self.state["expiryedge_ai"]["enabled"] = False
             self.expiryedge_off()
             logger.exception("AQTE live journal failed; broker mutations blocked")
@@ -786,6 +825,19 @@ class AQTELiveService:
         cfg = self.settings()
         if not self.ready:
             raise LiveBlocked("Live journal is unavailable")
+        mode = (os.getenv("AQTE_LIVE_DEPLOYMENT_MODE") or "local").strip().lower()
+        if mode == "production":
+            local_urls = ("localhost", "127.0.0.1")
+            configured_urls = (
+                getattr(cfg, "frontend_url", ""),
+                getattr(cfg, "cors_origins", ""),
+                getattr(cfg, "redirect_url", ""),
+            )
+            if getattr(cfg, "debug", False) or any(
+                    any(host in str(value).lower() for host in local_urls)
+                    for value in configured_urls):
+                raise LiveBlocked(
+                    "Production broker execution requires non-local callback/origin URLs and DEBUG=false")
         if not cfg.aqte_live_enabled:
             raise LiveBlocked("AQTE_LIVE_ENABLED is false in centralized backend settings")
         if not cfg.force_outbound_ipv4:
@@ -896,6 +948,9 @@ class AQTELiveService:
         if owner == "QUANTEDGE":
             if not self.state.get("quantedge", {}).get("enabled"):
                 raise LiveBlocked("QuantEdge Pro live approval is OFF; no new entry orders permitted")
+        elif owner == "QUANTUMEDGE":
+            if not self.state.get("quantumedge", {}).get("enabled"):
+                raise LiveBlocked("QuantumEdge IntraDay master live approval is OFF")
         elif owner == "EXPIRYEDGE":
             if not self.expiryedge_enabled():
                 raise LiveBlocked("Every 6 Algo Desk algo is OFF; no new entry orders permitted")
@@ -1447,6 +1502,307 @@ class AQTELiveService:
                 self.save("QUANTEDGE_SCAN_BLOCKED", reason=reason[:500])
             logger.exception("QuantEdge Pro entry scan disarmed; AQTE execution remains separate")
 
+    def quantumedge_loss_budget_reason(self, risk):
+        trades = [trade for trade in self.state["trades"]
+                  if trade.get("owner") == "QUANTUMEDGE" and day(trade["entry_at"]) == day(time.time())]
+        pnl = sum(trade["net_pnl"] for trade in trades)
+        if pnl <= -1500:
+            return "QuantumEdge IntraDay daily loss limit reached (INR 1500)"
+        if pnl - risk <= -1500:
+            return "QuantumEdge IntraDay planned risk would breach the INR 1500 daily loss limit"
+        return None
+
+    def quantumedge_candidate(self, symbol, busy=None):
+        cfg = self.state["quantumedge"]["indices"][symbol]
+        if not cfg["enabled"]:
+            return {"decision": "WAIT", "symbol": symbol, "reason": f"{symbol} engine disabled"}
+        if busy is None:
+            busy = self.book(self.broker())["busy"]
+        elif callable(busy):
+            busy = busy()
+        return self.quantumedge.evaluate(
+            self.service(), symbol, time.time(), cfg["lots"], cfg["risk_per_lot"],
+            busy, self.costs,
+        )
+
+    def quantumedge_proposal(self, symbol, busy=None):
+        with self.lock:
+            self.config_guard()
+            if not self.state["quantumedge"]["enabled"]:
+                raise LiveBlocked("QuantumEdge IntraDay master live approval is OFF")
+            if self.state["active"]:
+                raise EntrySkipped("The shared centralized broker slot is occupied")
+            signal = self.quantumedge_candidate(symbol, busy)
+            if signal.get("decision") not in ("BUY CE", "BUY PE") or not signal.get("entry"):
+                raise EntrySkipped(signal.get("reason") or "No qualified QuantumEdge signal")
+            proposal = {
+                "id": uuid4().hex, "owner": "QUANTUMEDGE", "symbol": symbol,
+                "contract": signal["contract"], "strategy": signal["strategy"],
+                "entry": signal["entry"], "risk": signal["risk"],
+                "signal_at": signal["signal_at"], "expires_at": time.time() + 15,
+                "setup_key": signal["setup_key"],
+                "execution_context": {
+                    "strategy_name": "QuantumEdge Multi-Factor Breakout",
+                    "entry_engine": "QuantumEdge IntraDay independent engine",
+                    "reason": signal["reason"], "supporting_engines": [],
+                    "confidence": self.quantumedge.last_result.get(symbol, {}).get("confidence"),
+                    "captured_at": time.time(),
+                },
+            }
+            self.proposals[proposal["id"]] = copy.deepcopy(proposal)
+            return proposal
+
+    def quantumedge_proposal_for_approval(self, approved, busy):
+        fresh = self.quantumedge_proposal(approved["symbol"], busy)
+        comparable = (
+            ("setup_key", fresh.get("setup_key"), approved.get("setup_key")),
+            ("contract", fresh.get("contract"), approved.get("contract")),
+            ("entry", fresh.get("entry"), approved.get("entry")),
+            ("risk", fresh.get("risk"), approved.get("risk")),
+        )
+        mismatched = [name for name, current, expected in comparable if current != expected]
+        if mismatched:
+            self.proposals.pop(fresh["id"], None)
+            raise EntrySkipped(
+                "AI-approved signal changed before execution: " + ", ".join(mismatched))
+        return fresh
+
+    def quantumedge_active(self):
+        active = self.state.get("active")
+        if not active or active.get("owner") != "QUANTUMEDGE":
+            return None
+        result = copy.deepcopy(active)
+        market = self.service()
+        with market.lock:
+            token = active.get("contract", {}).get("token")
+            tick = market.engine.options.get(token) if token is not None else None
+            fresh = market.engine.fresh(tick, time.time())
+            ltp = float(tick.price) if tick is not None and fresh else None
+        open_quantity = max(0, int(active.get("filled", 0)) - int(active.get("exited", 0)))
+        entry_price = float(active.get("entry_price") or 0)
+        result["ltp"] = ltp
+        result["unrealized"] = (
+            round((ltp - entry_price) * open_quantity, 2)
+            if ltp is not None and open_quantity > 0 and entry_price > 0 else None
+        )
+        return result
+
+    def quantumedge_status(self):
+        with self.lock:
+            from services.auth_state_machine import auth_state_manager
+            from services.market_session_controller import IST as SESSION_IST
+
+            cfg = self.state["quantumedge"]
+            now = time.time()
+            session_now = datetime.fromtimestamp(now, SESSION_IST)
+            minute = session_now.hour * 60 + session_now.minute
+            trading_day = session_now.weekday() < 5
+            from services.market_session_controller import NSE_HOLIDAYS
+            trading_day = trading_day and session_now.strftime("%Y-%m-%d") not in NSE_HOLIDAYS
+            if not trading_day:
+                market_phase = "CLOSED"
+                market_detail = "Exchange closed: weekend or holiday"
+            elif 9 * 60 <= minute < 9 * 60 + 8:
+                market_phase = "PRE_OPEN"
+                market_detail = "09:00–09:08 IST: pre-open order collection"
+            elif 9 * 60 + 8 <= minute < 9 * 60 + 15:
+                market_phase = "AUCTION_FREEZE"
+                market_detail = "09:08–09:15 IST: auction matching / price discovery"
+            elif 9 * 60 + 15 <= minute < 15 * 60 + 15:
+                market_phase = "NORMAL"
+                market_detail = "09:15–15:15 IST: normal QuantumEdge entry window"
+            elif 15 * 60 + 15 <= minute < 15 * 60 + 30:
+                market_phase = "CLOSING_AUCTION"
+                market_detail = "15:15–15:30 IST: closing auction; manage only"
+            elif 15 * 60 + 50 <= minute < 16 * 60:
+                market_phase = "POST_MARKET"
+                market_detail = "15:50–16:00 IST: post-market equities window; options entries disabled"
+            else:
+                market_phase = "CLOSED"
+                market_detail = "Outside NSE/BSE trading sessions; QuantumEdge will resume automatically"
+            signals = {}
+            for symbol in SYMBOLS:
+                try:
+                    signals[symbol] = self.quantumedge_candidate(symbol, set())
+                except (KeyError, TypeError, ValueError) as exc:
+                    signals[symbol] = {
+                        "decision": "WAIT", "symbol": symbol,
+                        "reason": f"Signal unavailable ({type(exc).__name__})",
+                    }
+            active = self.quantumedge_active()
+            auth_connected = auth_state_manager.is_authenticated
+            for symbol, signal in signals.items():
+                ai_result = self.quantumedge.last_result.get(symbol) or {}
+                same_setup = ai_result.get("setup_key") == signal.get("setup_key")
+                if active and active.get("owner") == "QUANTUMEDGE" and active.get("symbol") == symbol:
+                    signal["status"] = "LIVE_POSITION"
+                elif market_phase != "NORMAL":
+                    signal["status"] = "WAIT_SESSION"
+                elif not cfg["enabled"]:
+                    signal["status"] = "WAIT_MASTER"
+                elif not cfg["indices"][symbol]["enabled"]:
+                    signal["status"] = "WAIT_DISABLED"
+                elif not auth_connected:
+                    signal["status"] = "WAIT_BROKER"
+                    signal.setdefault("reason", "Zerodha authentication is unavailable")
+                elif signal.get("decision") not in ("BUY CE", "BUY PE"):
+                    signal["status"] = "WAIT_SIGNAL"
+                elif not same_setup or ai_result.get("state") == "PENDING":
+                    signal["status"] = "VALIDATING"
+                elif ai_result.get("state") == "REJECTED":
+                    signal["status"] = "REJECTED"
+                    signal["reason"] = ai_result.get("reason") or signal.get("reason")
+                elif ai_result.get("state") == "APPROVED":
+                    signal["status"] = ("READY" if self.state["armed_day"] == day(now)
+                                        and not active else "WAIT_BROKER")
+            trades = [copy.deepcopy(trade) for trade in self.state["trades"]
+                      if trade.get("owner") == "QUANTUMEDGE" and day(trade["entry_at"]) == day(now)]
+            entries = [entry for entry in self.state["daily_entries"]
+                       if entry.get("owner") == "QUANTUMEDGE" and day(entry["at"]) == day(now)]
+            return {
+                "generated_at": now, "ready": self.ready, "enabled": cfg["enabled"],
+                "armed": self.state["armed_day"] == day(now) and not self.state["killed"],
+                "indices": copy.deepcopy(cfg["indices"]),
+                "signals": signals, "ai": self.quantumedge.status(),
+                "active": active,
+                "positions": [active] if active and int(active.get("filled") or 0)
+                > int(active.get("exited") or 0) else [],
+                "trades": trades, "daily_trades": len(entries),
+                "daily_pnl": round(sum(trade["net_pnl"] for trade in trades), 2),
+                "daily_loss_limit": 1500, "max_trades": 5,
+                "zerodha_connected": auth_connected,
+                "zerodha_state": auth_state_manager.current_state.value,
+                "market_phase": market_phase,
+                "market_detail": market_detail,
+                "entry_window": market_phase == "NORMAL",
+                "deployment_mode": os.getenv("QUANTUMEDGE_DEPLOYMENT_MODE", "local"),
+                "local_live_allowed": os.getenv(
+                    "QUANTUMEDGE_ALLOW_LOCAL_LIVE", "false").strip().lower() in {
+                        "1", "true", "yes", "on",
+                    },
+                "error": cfg.get("error"),
+            }
+
+    def set_quantumedge_index(self, symbol, enabled, lots, risk_per_lot):
+        with self.lock:
+            if symbol not in SYMBOLS or type(enabled) is not bool:
+                raise LiveBlocked("Invalid QuantumEdge index control")
+            if type(lots) is not int or not 1 <= lots <= 5:
+                raise LiveBlocked("QuantumEdge lots must be 1 through 5")
+            if type(risk_per_lot) is not int or not 100 <= risk_per_lot <= 10_000:
+                raise LiveBlocked("QuantumEdge risk per lot must be INR 100 through 10000")
+            if self.state["quantumedge"]["enabled"] or self.state.get("active"):
+                raise LiveBlocked("Turn QuantumEdge OFF and wait for any active trade before changing risk")
+            self.state["quantumedge"]["indices"][symbol] = {
+                "enabled": enabled, "lots": lots, "risk_per_lot": risk_per_lot,
+            }
+            self.save("QUANTUMEDGE_INDEX_CONFIG", symbol=symbol, enabled=enabled, lots=lots,
+                      risk_per_lot=risk_per_lot)
+            return self.quantumedge_status()
+
+    def set_quantumedge_approval(self, enabled):
+        with self.lock:
+            if type(enabled) is not bool:
+                raise LiveBlocked("QuantumEdge master approval must be boolean")
+            if not self.ready:
+                raise LiveBlocked("QuantumEdge live journal unavailable")
+            if enabled:
+                mode = os.getenv("QUANTUMEDGE_DEPLOYMENT_MODE", "local").strip().lower()
+                local_allowed = os.getenv("QUANTUMEDGE_ALLOW_LOCAL_LIVE", "false").strip().lower() in {
+                    "1", "true", "yes", "on",
+                }
+                if mode != "production" and not (mode == "local" and local_allowed):
+                    raise LiveBlocked(
+                        "QuantumEdge live execution requires production mode or explicit local live opt-in")
+                self.config_guard()
+                if self.state["killed"] or self.state.get("flatten_pending"):
+                    raise LiveBlocked("Resolve emergency stop before enabling QuantumEdge")
+            self.state["quantumedge"]["enabled"] = enabled
+            self.state["quantumedge"]["error"] = None
+            self.proposals = {key: value for key, value in self.proposals.items()
+                              if value.get("owner") != "QUANTUMEDGE"}
+            self.save("QUANTUMEDGE_APPROVAL_ON" if enabled else "QUANTUMEDGE_APPROVAL_OFF")
+            return self.quantumedge_status()
+
+    def request_quantumedge_exit(self, trade_id):
+        with self.lock:
+            active = self.state.get("active")
+            if (not active or active.get("owner") != "QUANTUMEDGE"
+                    or active.get("id") != trade_id):
+                raise LiveBlocked("The selected QuantumEdge trade is no longer active")
+            self.request_exit(trade_id)
+            return self.quantumedge_status()
+
+    def quantumedge_activate(self, now):
+        if self.state["armed_day"] == day(now) and not self.state["killed"]:
+            return True
+        if (self.state["killed"] or self.state.get("flatten_pending") or self.state.get("active")
+                or not entry_window(now) or now < self.quantumedge_next_activation):
+            return False
+        try:
+            self.preflight()
+            self.arm()
+        except LiveBlocked as exc:
+            reason = str(exc)
+            self.quantumedge_next_activation = now + ACTIVATION_RETRY_SECONDS
+            if reason != self.state["quantumedge"].get("error"):
+                self.state["quantumedge"]["error"] = reason
+                self.save("QUANTUMEDGE_WAITING", reason=reason[:500])
+            return False
+        self.quantumedge_next_activation = 0.0
+        self.state["quantumedge"]["error"] = None
+        return True
+
+    def automated_quantumedge_entry(self):
+        with self.lock:
+            now = time.time()
+            if not self.state["quantumedge"]["enabled"] or not entry_window(now):
+                return
+            if self.state.get("active") or self.state.get("flatten_pending") or self.state["killed"]:
+                return
+            busy = self.book(self.broker())["busy"]
+            qualified = []
+            for symbol in SYMBOLS:
+                if not self.state["quantumedge"]["indices"][symbol]["enabled"]:
+                    continue
+                candidate = self.quantumedge_candidate(symbol, busy)
+                if candidate.get("decision") in ("BUY CE", "BUY PE"):
+                    qualified.append(candidate)
+            for candidate in sorted(
+                    qualified,
+                    key=lambda item: (item["signal_at"], item["entry"]["reward_risk"],
+                                      -item["risk"]),
+                    reverse=True):
+                approval = self.quantumedge.review(candidate)
+            if not self.quantumedge_activate(now):
+                return
+            approved = self.quantumedge.approved_candidates(now)
+            for candidate in sorted(
+                    approved,
+                    key=lambda item: (item["signal_at"], item["entry"]["reward_risk"], -item["risk"]),
+                    reverse=True):
+                self.config_guard()
+                try:
+                    proposal = self.quantumedge_proposal_for_approval(candidate, busy)
+                    self.confirm(proposal["id"])
+                except (EntrySkipped, LiveBlocked):
+                    continue
+                self.quantumedge.consume_approved(candidate["setup_key"])
+                return
+
+    def scan_quantumedge(self):
+        try:
+            self.automated_quantumedge_entry()
+        except Exception as exc:  # noqa: BLE001 - independent fail-safe
+            reason = f"{type(exc).__name__}: {exc}"
+            with self.lock:
+                self.state["quantumedge"]["enabled"] = False
+                self.state["quantumedge"]["error"] = reason
+                self.proposals = {key: value for key, value in self.proposals.items()
+                                  if value.get("owner") != "QUANTUMEDGE"}
+                self.save("QUANTUMEDGE_SCAN_BLOCKED", reason=reason[:500])
+            logger.exception("QuantumEdge entry scan disarmed")
+
     def expiryedge_ai_enabled(self):
         return bool(self.state.get("expiryedge_ai", {}).get("enabled"))
 
@@ -1797,6 +2153,8 @@ class AQTELiveService:
     def owner_proposal(self, owner, proposal, busy):
         if owner == "QUANTEDGE":
             return self.quantedge_proposal(proposal["symbol"], busy)
+        if owner == "QUANTUMEDGE":
+            return self.quantumedge_proposal(proposal["symbol"], busy)
         if owner == "EXPIRYEDGE":
             return self.expiryedge_proposal(proposal["symbol"], proposal["algo"], busy)
         if owner == "EXPIRYEDGE_AI":
@@ -2320,12 +2678,14 @@ class AQTELiveService:
             # Use the rechecked tier/stop/target, not an obsolete higher-risk plan.
             proposal = {**current, "expires_at": proposal["expires_at"]}
             reason = (self.quantedge_loss_budget_reason(proposal["risk"]) if owner == "QUANTEDGE"
+                      else self.quantumedge_loss_budget_reason(proposal["risk"]) if owner == "QUANTUMEDGE"
                       else self.expiryedge_loss_budget_reason(proposal["risk"]) if owner == "EXPIRYEDGE"
                       else self.expiryedge_ai_loss_budget_reason(proposal["risk"]) if owner == "EXPIRYEDGE_AI"
                       else self.loss_budget_reason(proposal["symbol"], proposal["risk"]))
             if reason:
                 raise EntrySkipped(reason)
             control = ({"trail_start_r": 1.0, "daily_loss": 1500} if owner == "QUANTEDGE"
+                       else {"trail_start_r": 1.0, "daily_loss": 1500} if owner == "QUANTUMEDGE"
                        else {"trail_start_r": EXPIRYEDGE_TRAIL_START_R, "daily_loss": self.settings().aqte_live_daily_loss}
                        if owner == "EXPIRYEDGE"                        else {
                            "trail_start_r": 1.0, "trail_gap_r": EXPIRYEDGE_AI_TRAIL_GAP_R,
@@ -2389,6 +2749,7 @@ class AQTELiveService:
             # Persist the unique intent BEFORE sending. A timeout is not a rejection.
             active = {
                 "id": ("QEP" + uuid4().hex[:13]) if owner == "QUANTEDGE" else (
+                    "QEI" + uuid4().hex[:13]) if owner == "QUANTUMEDGE" else (
                     "XEA" + uuid4().hex[:13]) if owner == "EXPIRYEDGE" else (
                     "EAI" + uuid4().hex[:13]) if owner == "EXPIRYEDGE_AI" else uuid4().hex[:16],
                 "owner": owner, "symbol": proposal["symbol"], "contract": c,
@@ -2455,6 +2816,10 @@ class AQTELiveService:
                 self.state["quantedge"]["enabled"] = False
                 self.proposals = {key: value for key, value in self.proposals.items()
                                   if value.get("owner") != "QUANTEDGE"}
+            elif owner == "QUANTUMEDGE":
+                self.state["quantumedge"]["enabled"] = False
+                self.proposals = {key: value for key, value in self.proposals.items()
+                                  if value.get("owner") != "QUANTUMEDGE"}
             elif owner == "EXPIRYEDGE":
                 algos = self.state["expiryedge"]["algos"]
                 if active.get("algo") in algos:
@@ -2733,6 +3098,7 @@ class AQTELiveService:
             self.state.update(armed_day=None, automation_on=False, automation_wanted=False,
                               killed=True, flatten_pending=True)
             self.state["quantedge"]["enabled"] = False
+            self.state["quantumedge"]["enabled"] = False
             self.state["expiryedge_ai"]["enabled"] = False
             self.expiryedge_off()
             self.waiting = None
@@ -2875,6 +3241,7 @@ class AQTELiveService:
                 raise LiveBlocked("Emergency square-off still in progress; wait until Kite shows no open AQTE positions or AQTE orders")
             self.state.update(killed=False, armed_day=None, automation_on=False, automation_wanted=False)
             self.state["quantedge"]["enabled"] = False
+            self.state["quantumedge"]["enabled"] = False
             self.expiryedge_off()
             self.expiryedge_error = None
             self.error = None
@@ -2891,6 +3258,7 @@ class AQTELiveService:
             self.state["armed_day"] = None
             self.state["automation_on"] = False
             self.state["quantedge"]["enabled"] = False
+            self.state["quantumedge"]["enabled"] = False
             self.state["expiryedge_ai"]["enabled"] = False
             # A standing ON request re-arms through a fresh preflight after the retry delay.
             self.next_activation = time.time() + ACTIVATION_RETRY_SECONDS
@@ -3066,6 +3434,7 @@ class AQTELiveService:
                     await asyncio.to_thread(self.prepare_session)
                     await asyncio.to_thread(self.auto_activate)
                     await asyncio.to_thread(self.measured, "quantedge.scan", self.scan_quantedge)
+                    await asyncio.to_thread(self.measured, "quantumedge.scan", self.scan_quantumedge)
                     await asyncio.to_thread(self.measured, "expiryedge.scan", self.scan_expiryedge)
                     await asyncio.to_thread(self.measured, "expiryedge_ai.scan", self.scan_expiryedge_ai)
                     await asyncio.to_thread(self.measured, "execution.scan", self.scan_entries)

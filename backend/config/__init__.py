@@ -14,6 +14,7 @@ from functools import lru_cache
 from typing import Optional
 from pathlib import Path
 from urllib.parse import urlparse
+import os
 
 
 # Auto-detection removed - using direct .env values
@@ -83,6 +84,9 @@ class Settings(BaseSettings):
     # ExpiryEdge AI has its own explicit local/production live-order opt-in.
     expiryedge_ai_live_enabled: bool = Field(default=False, env="EXPIRYEDGE_AI_LIVE_ENABLED")
     aqte_live_static_ip: str = "122.177.245.101"
+    aqte_live_deployment_mode: str = "local"
+    aqte_live_local_static_ip: str = ""
+    aqte_live_production_static_ip: str = ""
     # Real-money opt-in: lets fully aligned, unvalidated rule setups enter one lot.
     aqte_live_allow_unvalidated_rules: bool = False
     aqte_morning_super_candle_enabled: bool = True
@@ -327,9 +331,24 @@ def get_settings() -> Settings:
     """Get cached settings, preferring the persisted, refreshable broker token."""
     # Docker env_file values are frozen at container creation. Only the token
     # is mutable at runtime; other settings retain normal environment precedence.
-    token = dotenv_values(ENV_FILE).get("ZERODHA_ACCESS_TOKEN")
+    values = dotenv_values(ENV_FILE)
+    mode = (os.getenv("AQTE_LIVE_DEPLOYMENT_MODE")
+            or values.get("AQTE_LIVE_DEPLOYMENT_MODE") or "local").strip().lower()
+    production_ip = (os.getenv("AQTE_LIVE_PRODUCTION_STATIC_IP")
+                     or values.get("AQTE_LIVE_PRODUCTION_STATIC_IP") or "").strip()
+    local_ip = (os.getenv("AQTE_LIVE_LOCAL_STATIC_IP")
+                or values.get("AQTE_LIVE_LOCAL_STATIC_IP") or "").strip()
+    legacy_ip = (os.getenv("AQTE_LIVE_STATIC_IP")
+                 or values.get("AQTE_LIVE_STATIC_IP") or "").strip()
+    selected_ip = production_ip if mode == "production" and production_ip else (
+        local_ip if mode == "local" and local_ip else legacy_ip
+    )
+    overrides = {}
+    token = values.get("ZERODHA_ACCESS_TOKEN")
     if token is not None:
-        return Settings(zerodha_access_token=token)
-    return Settings()
+        overrides["zerodha_access_token"] = token
+    if selected_ip:
+        overrides["aqte_live_static_ip"] = selected_ip
+    return Settings(**overrides)
 
 __all__ = ["Settings", "get_settings"]

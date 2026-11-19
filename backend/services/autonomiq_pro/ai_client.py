@@ -52,6 +52,7 @@ class AIClient:
         self.transport = transport
         self.consecutive_failures = 0
         self.circuit_open_until = 0.0
+        self.authentication_failed = False
         self.last_call_at = 0.0
         self.last_error: str | None = None
 
@@ -61,7 +62,7 @@ class AIClient:
         if not cfg.ai_configured:
             return "NOT_CONFIGURED"
         if time.time() < self.circuit_open_until:
-            return "CIRCUIT_OPEN"
+            return "AI_AUTHENTICATION_FAILED" if self.authentication_failed else "CIRCUIT_OPEN"
         if self.store.ai_usage(day)["cost_usd"] >= cfg.daily_budget_usd:
             return "DAILY_BUDGET_EXHAUSTED"
         if self.store.ai_usage(day[:7])["cost_usd"] >= cfg.monthly_budget_usd:
@@ -78,6 +79,11 @@ class AIClient:
             raise AIUnavailable("DAILY_BUDGET_INSUFFICIENT")
         if self.store.ai_usage(day[:7])["cost_usd"] + worst_case > cfg.monthly_budget_usd:
             raise AIUnavailable("MONTHLY_BUDGET_INSUFFICIENT")
+
+    def preflight(self, cfg: AutonomiqConfig, day: str, model: str, system: str,
+                  payload: dict[str, Any]) -> None:
+        user = json.dumps(payload, separators=(",", ":"), default=str)
+        self._guard(cfg, day, model, len(system) + len(user))
 
     async def complete_json(self, cfg: AutonomiqConfig, day: str, agent: str, model: str, system: str,
                             payload: dict[str, Any]) -> dict:
@@ -129,6 +135,7 @@ class AIClient:
                     raise AIUnavailable("BAD_OUTPUT") from exc
                 self.store.record_ai_call(day, agent, model, "OK", **record)
                 self.consecutive_failures, self.last_error, self.last_call_at = 0, None, time.time()
+                self.authentication_failed = False
                 return parsed
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 if attempt < cfg.ai_max_retries:
@@ -141,10 +148,13 @@ class AIClient:
                 self._failed(reason)
                 raise AIUnavailable(reason) from exc
             except _HTTPError as exc:
-                reason = f"HTTP {exc.status}: {exc.kind}"
-                self.store.record_ai_call(day, agent, model, "ERROR", latency_ms=exc.latency, error=reason)
+                detail = f"HTTP {exc.status}: {exc.kind}"
+                reason = _public_http_error(exc.status)
+                logger.warning("AUTONOMIQ PRO AI provider rejected request: %s", detail)
+                self.store.record_ai_call(day, agent, model, reason, latency_ms=exc.latency, error=reason)
                 self._failed(reason)
                 if exc.status in (401, 403):
+                    self.authentication_failed = True
                     self.circuit_open_until = time.time() + CIRCUIT_COOLDOWN_S
                 raise AIUnavailable(reason) from exc
 
@@ -170,3 +180,13 @@ def _error_type(response: httpx.Response) -> str:
         return f"{kind}: {message}"[:240] if message else kind
     except ValueError:
         return "error"
+
+
+def _public_http_error(status: int) -> str:
+    if status in (401, 403):
+        return "AI_AUTHENTICATION_FAILED"
+    if status == 429:
+        return "AI_RATE_LIMITED"
+    if 400 <= status < 500:
+        return "AI_REQUEST_REJECTED"
+    return "AI_SERVICE_UNAVAILABLE"

@@ -154,13 +154,33 @@ class MarketDataCollector:
         self.gateway = gateway or KiteGateway()
         self._prev_oi: dict[str, tuple[int, int]] = {}
         self._candle_cache: dict[int, tuple[datetime, list[dict[str, Any]]]] = {}
+        self._history_cache: dict[tuple[int, str, str, datetime], list[dict[str, Any]]] = {}
+
+    def _history(
+        self,
+        token: int,
+        start: datetime,
+        now: datetime,
+        interval: str,
+        minutes: int,
+        scope: str,
+    ) -> list[dict[str, Any]]:
+        boundary = now.replace(minute=now.minute // minutes * minutes, second=0, microsecond=0)
+        key = (token, interval, scope, boundary)
+        cached = self._history_cache.get(key)
+        if cached is not None:
+            return cached
+        candles = completed(self.gateway.historical(token, start, now, interval), minutes, now)
+        for stale_key in tuple(self._history_cache):
+            if stale_key[:3] == key[:3]:
+                del self._history_cache[stale_key]
+        self._history_cache[key] = candles
+        return candles
 
     def _execution_candles(self, token: int, now: datetime) -> list[dict[str, Any]]:
         boundary = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0)
-        cached = self._candle_cache.get(token)
-        if cached and cached[0] == boundary:
-            return cached[1]
-        candles = completed(self.gateway.historical(token, now - timedelta(days=6), now, "5minute"), 5, now)
+        candles = self._history(
+            token, now - timedelta(days=6), now, "5minute", 5, "completed-6d")
         dates: list[datetime] = []
         for candle in candles:
             at = parse_ts(candle["date"])
@@ -189,10 +209,15 @@ class MarketDataCollector:
         from services.aqte_service import get_aqte_service
 
         market = get_aqte_service()
-        with market.lock:
+        acquired = market.lock.acquire(timeout=0.1)
+        if not acquired:
+            return None
+        try:
             contract = next((c for c in market.engine.contracts.values()
                              if c.exchange == exchange and c.trading_symbol == trading_symbol), None)
             tick = market.engine.options.get(contract.token) if contract else None
+        finally:
+            market.lock.release()
         if tick is None or tick.bid <= 0 or tick.bid_quantity <= 0:
             return None
         timestamp = now.timestamp()
@@ -222,16 +247,20 @@ class MarketDataCollector:
         out: dict[str, Any] = {"symbol": symbol, "errors": [], "candles": {}, "futures": None, "options": None}
         today = now.date()
         try:
-            raw5 = self.gateway.historical(INDEX_TOKENS[symbol], now - timedelta(days=6), now, "5minute")
-            out["candles"]["5m"] = completed(raw5, 5, now)
+            out["candles"]["5m"] = self._history(
+                INDEX_TOKENS[symbol], now - timedelta(days=6), now,
+                "5minute", 5, "completed-6d",
+            )
             c5 = out["candles"]["5m"]
             boundary = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0)
             dates = [datetime.fromisoformat(c["date"]) for c in c5]
             if len(c5) >= 14 and dates == sorted(set(dates)) and dates[-1] + timedelta(minutes=5) == boundary:
                 measured_atr(c5)
                 self._candle_cache[INDEX_TOKENS[symbol]] = (boundary, c5)
-            raw15 = self.gateway.historical(INDEX_TOKENS[symbol], now - timedelta(days=30), now, "15minute")
-            c15 = completed(raw15, 15, now)
+            c15 = self._history(
+                INDEX_TOKENS[symbol], now - timedelta(days=30), now,
+                "15minute", 15, "completed-30d",
+            )
             out["candles"]["15m"] = c15
             out["candles"]["60m"] = ind.resample(c15, 4)
         except Exception as exc:  # noqa: BLE001 — Kite raises many exception types
@@ -249,9 +278,11 @@ class MarketDataCollector:
         if futs:
             fut = futs[0]
             try:
-                fut_candles = completed(self.gateway.historical(
-                    fut["instrument_token"], now.replace(hour=9, minute=15, second=0, microsecond=0), now,
-                    "5minute"), 5, now)
+                fut_candles = self._history(
+                    int(fut["instrument_token"]),
+                    now.replace(hour=9, minute=15, second=0, microsecond=0),
+                    now, "5minute", 5, "futures-session",
+                )
                 q = self.gateway.quote([f"{exchange}:{fut['tradingsymbol']}"]).get(
                     f"{exchange}:{fut['tradingsymbol']}", {})
                 buy, sell = int(q.get("buy_quantity") or 0), int(q.get("sell_quantity") or 0)

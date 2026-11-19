@@ -2,221 +2,47 @@
   "NIFTY": {
     "symbol": "NIFTY",
     "direction": "BULLISH",
-    "confidence": 56,
-    "rawScore": 0.1699,
+    "confidence": 57,
+    "rawScore": 0.1884,
     "ictSetup": {
       "name": "\u26a1 FVG ENTRY LONG",
       "description": "Displacement creating FVG \u2014 Price likely to retrace and hold",
       "grade": "B+",
       "confluences": 2
     },
-    "prediction5m": "NEUTRAL",
-    "pred5mConf": 5,
-    "pred5mScore": 0.0026,
+    "prediction5m": "BUY",
+    "pred5mConf": 62,
+    "pred5mScore": 0.2597,
     "signals": {
       "order_blocks": {
-        "score": 0.1847,
-        "signal": "BULL",
-        "label": "Bearish OB @ 25211-25226 (0% away)",
-        "weight": 0.25,
-        "value": 0.185,
-        "extra": {
-          "bullish_obs": 3,
-          "bearish_obs": 2,
-          "nearest_ob": {
-            "type": "BEARISH_RETEST",
-            "zone": "25211-25226",
-            "dist": 0
-          }
-        }
-      },
-      "fair_value_gaps": {
-        "score": 0.3387,
-        "signal": "BULL",
-        "label": "Bullish FVG @ 25214-25220",
-        "weight": 0.2,
-        "value": 0.339,
-        "extra": {
-          "bullish_fvgs": 4,
-          "bearish_fvgs": 1,
-          "nearest_fvg": {
-            "type": "BULLISH",
-            "zone": "25214-25220",
-            "dist": 0.04
-          }
-        }
-      },
-      "market_structure": {
-        "score": 0.6,
-        "signal": "BULL",
-        "label": "\u26a0\ufe0f CHoCH \u2014 Bullish reversal above 25226",
-        "weight": 0.2,
-        "value": 0.6,
-        "extra": {
-          "structure": "BULLISH_CHOCH",
-          "swing_highs": 2,
-          "swing_lows": 3,
-          "last_swing_high": 25226.35,
-          "last_swing_low": 25196.15
-        }
-      },
-      "liquidity_sweeps": {
-        "score": 0.0,
+        "score": 0.0587,
         "signal": "NEUTRAL",
-        "label": "No liquidity sweep detected",
-        "weight": 0.15,
-        "value": 0.0,
-        "extra": {
-          "sweeps_detected": 0,
-          "last_sweep": null
-        }
-      },
-      "displacement": {
-        "score": -0.64,
-        "signal": "BEAR",
-        "label": "Bearish displacement \u00d7 1 \u2014 Institutional selling",
-        "weight": 0.1,
-        "value": 0.905,
-        "extra": {
-          "displacement_count": 2,
-          "avg_body_ratio": 0.905,
-          "bull_count": 1,
-          "bear_count": 1
-        }
-      },
-      "smart_money_div": {
-        "score": 0.0,
-        "signal": "NEUTRAL",
-        "label": "No significant smart money divergence",
-        "weight": 0.1,
-        "value": 0.0,
-        "extra": {
-          "divergence": "NONE",
-          "price_change": -0.05,
-          "oi_slope": -2274126.2424
-        }
-      }
-    },
-    "metrics": {
-      "price": 25227.95,
-      "changePct": -0.63,
-      "oi": 314528825,
-      "candleCount": 21,
-      "swingHighs": 2,
-      "swingLows": 3,
-      "lastSwingHigh": 25226.35,
-      "lastSwingLow": 25196.15
-    },
-    "ai": {
-      "provider": "numpy_fallback",
-      "featureVersion": "ict_ai_v1",
-      "classProbabilities": {
-        "STRONG_BUY": 54.05,
-        "BUY": 18.17,
-        "NEUTRAL": 7.41,
-        "SELL": 7.06,
-        "STRONG_SELL": 13.31
-      },
-      "sequencePrediction": {
-        "nextMove": "UP",
-        "nextMovePts": 1.37,
-        "trendContinuationProb": 45.26,
-        "reversalProb": 61.96,
-        "horizonSec": 300
-      },
-      "microstructure": {
-        "liquidityDensity": 0.0,
-        "structureDensity": 33.2,
-        "fakeBreakoutRisk": 32.82,
-        "stopHuntRisk": 24.0
-      },
-      "smc": {
-        "state": "BALANCED",
-        "score": 34.48
-      },
-      "multiTimeframe": {
-        "micro": {
-          "trend": "NEUTRAL",
-          "momentum": 0.26
-        },
-        "medium": {
-          "trend": "BULL",
-          "momentum": 16.99
-        },
-        "macro": {
-          "trend": "BULL",
-          "momentum": 12.0
-        },
-        "alignmentPct": 33.33
-      },
-      "commandDeck": {
-        "streamState": "CLOSED",
-        "modelProvider": "numpy_fallback",
-        "analysisLatencyMs": 253,
-        "pipelineCadenceMs": 30000,
-        "eventRatePerSec": 2.43,
-        "queueDepth": 7,
-        "cacheState": "WARM",
-        "alerts": [
-          "Live stream unavailable; confidence auto-degraded"
-        ]
-      },
-      "institutionalConfluence": {
-        "executionProbability": 47,
-        "smartMoneyAlignment": 34,
-        "institutionalFlow": 41,
-        "riskScore": 41,
-        "rewardScore": 33,
-        "riskRewardRatio": 0.8
-      }
-    },
-    "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-11-18T15:56:29.677180+05:30"
-  },
-  "BANKNIFTY": {
-    "symbol": "BANKNIFTY",
-    "direction": "NEUTRAL",
-    "confidence": 5,
-    "rawScore": 0.0051,
-    "ictSetup": {
-      "name": "\u2696\ufe0f NO TRADE ZONE",
-      "description": "ICT signals mixed \u2014 Wait for alignment",
-      "grade": "\u2014",
-      "confluences": 0
-    },
-    "prediction5m": "NEUTRAL",
-    "pred5mConf": 5,
-    "pred5mScore": -0.0122,
-    "signals": {
-      "order_blocks": {
-        "score": -0.1544,
-        "signal": "BEAR",
-        "label": "Bearish OB @ 61995-62046 (0.01% away)",
+        "label": "Bullish OB @ 25352-25364 (0.64% away)",
         "weight": 0.25,
-        "value": -0.154,
+        "value": 0.059,
         "extra": {
           "bullish_obs": 2,
-          "bearish_obs": 2,
+          "bearish_obs": 1,
           "nearest_ob": {
-            "type": "BEARISH",
-            "zone": "61995-62046",
-            "dist": 0.01
+            "type": "BULLISH",
+            "zone": "25352-25364",
+            "dist": 0.64
           }
         }
       },
       "fair_value_gaps": {
-        "score": 0.2187,
+        "score": 0.7187,
         "signal": "BULL",
-        "label": "Bullish FVG @ 61964-62020",
+        "label": "Bullish FVG @ 25491-25504",
         "weight": 0.2,
-        "value": 0.219,
+        "value": 0.719,
         "extra": {
-          "bullish_fvgs": 4,
-          "bearish_fvgs": 1,
+          "bullish_fvgs": 9,
+          "bearish_fvgs": 0,
           "nearest_fvg": {
             "type": "BULLISH",
-            "zone": "61964-62020",
-            "dist": 0.08
+            "zone": "25491-25504",
+            "dist": 0.07
           }
         }
       },
@@ -228,180 +54,8 @@
         "value": null,
         "extra": {
           "structure": "FORMING",
-          "swing_highs": 1,
-          "swing_lows": 3
-        }
-      },
-      "liquidity_sweeps": {
-        "score": 0.0,
-        "signal": "NEUTRAL",
-        "label": "No liquidity sweep detected",
-        "weight": 0.15,
-        "value": 0.0,
-        "extra": {
-          "sweeps_detected": 0,
-          "last_sweep": null
-        }
-      },
-      "displacement": {
-        "score": 0.0,
-        "signal": "NEUTRAL",
-        "label": "No displacement \u2014 market chopping",
-        "weight": 0.1,
-        "value": 0.0,
-        "extra": {
-          "displacement_count": 0,
-          "avg_body_ratio": 0
-        }
-      },
-      "smart_money_div": {
-        "score": 0.0,
-        "signal": "NEUTRAL",
-        "label": "No significant smart money divergence",
-        "weight": 0.1,
-        "value": 0.0,
-        "extra": {
-          "divergence": "NONE",
-          "price_change": 0.01,
-          "oi_slope": -106703.2727
-        }
-      }
-    },
-    "metrics": {
-      "price": 62038.65,
-      "changePct": -0.38,
-      "oi": 25229790,
-      "candleCount": 21,
-      "swingHighs": 1,
-      "swingLows": 3,
-      "lastSwingHigh": 61988.75,
-      "lastSwingLow": 61890.8
-    },
-    "ai": {
-      "provider": "numpy_fallback",
-      "featureVersion": "ict_ai_v1",
-      "classProbabilities": {
-        "STRONG_BUY": 12.92,
-        "BUY": 12.58,
-        "NEUTRAL": 48.15,
-        "SELL": 12.92,
-        "STRONG_SELL": 13.43
-      },
-      "sequencePrediction": {
-        "nextMove": "SIDEWAYS",
-        "nextMovePts": 1.08,
-        "trendContinuationProb": 31.58,
-        "reversalProb": 78.66,
-        "horizonSec": 300
-      },
-      "microstructure": {
-        "liquidityDensity": 0.0,
-        "structureDensity": 0.0,
-        "fakeBreakoutRisk": 46.52,
-        "stopHuntRisk": 30.0
-      },
-      "smc": {
-        "state": "BALANCED",
-        "score": 0.0
-      },
-      "multiTimeframe": {
-        "micro": {
-          "trend": "NEUTRAL",
-          "momentum": -1.22
-        },
-        "medium": {
-          "trend": "NEUTRAL",
-          "momentum": 0.51
-        },
-        "macro": {
-          "trend": "NEUTRAL",
-          "momentum": -90.0
-        },
-        "alignmentPct": 100.0
-      },
-      "commandDeck": {
-        "streamState": "CLOSED",
-        "modelProvider": "numpy_fallback",
-        "analysisLatencyMs": 250,
-        "pipelineCadenceMs": 30000,
-        "eventRatePerSec": 2.43,
-        "queueDepth": 6,
-        "cacheState": "WARM",
-        "alerts": [
-          "Live stream unavailable; confidence auto-degraded"
-        ]
-      },
-      "institutionalConfluence": {
-        "executionProbability": 43,
-        "smartMoneyAlignment": 35,
-        "institutionalFlow": 0,
-        "riskScore": 56,
-        "rewardScore": 24,
-        "riskRewardRatio": 0.43
-      }
-    },
-    "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-11-18T15:56:29.677755+05:30"
-  },
-  "SENSEX": {
-    "symbol": "SENSEX",
-    "direction": "NEUTRAL",
-    "confidence": 6,
-    "rawScore": -0.023,
-    "ictSetup": {
-      "name": "\u2696\ufe0f NO TRADE ZONE",
-      "description": "ICT signals mixed \u2014 Wait for alignment",
-      "grade": "\u2014",
-      "confluences": 0
-    },
-    "prediction5m": "NEUTRAL",
-    "pred5mConf": 30,
-    "pred5mScore": 0.1143,
-    "signals": {
-      "order_blocks": {
-        "score": -0.1137,
-        "signal": "NEUTRAL",
-        "label": "Bullish OB @ 82034-82058 (0% away)",
-        "weight": 0.25,
-        "value": -0.114,
-        "extra": {
-          "bullish_obs": 3,
-          "bearish_obs": 2,
-          "nearest_ob": {
-            "type": "BULLISH_RETEST",
-            "zone": "82034-82058",
-            "dist": 0
-          }
-        }
-      },
-      "fair_value_gaps": {
-        "score": 0.0773,
-        "signal": "NEUTRAL",
-        "label": "Bearish FVG @ 82041-82061",
-        "weight": 0.2,
-        "value": 0.077,
-        "extra": {
-          "bullish_fvgs": 3,
-          "bearish_fvgs": 1,
-          "nearest_fvg": {
-            "type": "BEARISH",
-            "zone": "82041-82061",
-            "dist": 0.02
-          }
-        }
-      },
-      "market_structure": {
-        "score": -0.45,
-        "signal": "BEAR",
-        "label": "Bearish structure \u2014 Lower Highs + Lower Lows",
-        "weight": 0.2,
-        "value": -0.45,
-        "extra": {
-          "structure": "BEARISH_TREND",
-          "swing_highs": 2,
-          "swing_lows": 3,
-          "last_swing_high": 82066.19,
-          "last_swing_low": 81965.99
+          "swing_highs": 0,
+          "swing_lows": 1
         }
       },
       "liquidity_sweeps": {
@@ -418,78 +72,78 @@
       "displacement": {
         "score": 0.8,
         "signal": "BULL",
-        "label": "Bullish displacement \u00d7 2 \u2014 Institutional buying",
+        "label": "Bullish displacement \u00d7 1 \u2014 Institutional buying",
         "weight": 0.1,
-        "value": 0.936,
+        "value": 1.0,
         "extra": {
-          "displacement_count": 2,
-          "avg_body_ratio": 0.936,
-          "bull_count": 2,
+          "displacement_count": 1,
+          "avg_body_ratio": 1.0,
+          "bull_count": 1,
           "bear_count": 0
         }
       },
       "smart_money_div": {
-        "score": 0.0,
-        "signal": "NEUTRAL",
-        "label": "No significant smart money divergence",
+        "score": -0.5,
+        "signal": "BEAR",
+        "label": "\u26a0\ufe0f Bearish divergence \u2014 Price \u21910.3% but OI dropping",
         "weight": 0.1,
-        "value": 0.0,
+        "value": -0.5,
         "extra": {
-          "divergence": "NONE",
-          "price_change": -0.09,
-          "oi_slope": -1440723.3939
+          "divergence": "BEARISH_DIVERGENCE",
+          "price_change": 0.26,
+          "oi_slope": -3861023.8333
         }
       }
     },
     "metrics": {
-      "price": 82031.81,
-      "changePct": -0.61,
-      "oi": 65568640,
+      "price": 25514.3,
+      "changePct": 1.14,
+      "oi": 354959605,
       "candleCount": 21,
-      "swingHighs": 2,
-      "swingLows": 3,
-      "lastSwingHigh": 82066.19,
-      "lastSwingLow": 81965.99
+      "swingHighs": 0,
+      "swingLows": 1,
+      "lastSwingHigh": null,
+      "lastSwingLow": 25471.8
     },
     "ai": {
       "provider": "numpy_fallback",
       "featureVersion": "ict_ai_v1",
       "classProbabilities": {
-        "STRONG_BUY": 32.45,
-        "BUY": 19.77,
-        "NEUTRAL": 25.58,
-        "SELL": 10.14,
-        "STRONG_SELL": 12.06
+        "STRONG_BUY": 75.64,
+        "BUY": 18.73,
+        "NEUTRAL": 3.37,
+        "SELL": 1.11,
+        "STRONG_SELL": 1.15
       },
       "sequencePrediction": {
         "nextMove": "SIDEWAYS",
-        "nextMovePts": 0.01,
-        "trendContinuationProb": 36.37,
-        "reversalProb": 73.13,
+        "nextMovePts": 0.18,
+        "trendContinuationProb": 54.41,
+        "reversalProb": 53.73,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 0.0,
-        "structureDensity": 31.3,
-        "fakeBreakoutRisk": 43.18,
-        "stopHuntRisk": 30.0
+        "structureDensity": 25.0,
+        "fakeBreakoutRisk": 29.63,
+        "stopHuntRisk": 37.0
       },
       "smc": {
-        "state": "BALANCED",
-        "score": 32.9
+        "state": "BULLISH_IMBALANCE",
+        "score": 17.6
       },
       "multiTimeframe": {
         "micro": {
-          "trend": "NEUTRAL",
-          "momentum": 11.43
+          "trend": "BULL",
+          "momentum": 25.97
         },
         "medium": {
-          "trend": "NEUTRAL",
-          "momentum": -2.3
+          "trend": "BULL",
+          "momentum": 18.84
         },
         "macro": {
-          "trend": "NEUTRAL",
-          "momentum": -88.0
+          "trend": "BULL",
+          "momentum": 14.0
         },
         "alignmentPct": 100.0
       },
@@ -502,19 +156,371 @@
         "queueDepth": 4,
         "cacheState": "WARM",
         "alerts": [
+          "Smart money divergence is materially elevated",
           "Live stream unavailable; confidence auto-degraded"
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 46,
-        "smartMoneyAlignment": 56,
-        "institutionalFlow": 41,
-        "riskScore": 52,
-        "rewardScore": 34,
-        "riskRewardRatio": 0.65
+        "executionProbability": 65,
+        "smartMoneyAlignment": 46,
+        "institutionalFlow": 26,
+        "riskScore": 42,
+        "rewardScore": 57,
+        "riskRewardRatio": 1.36
       }
     },
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-11-18T15:56:29.678199+05:30"
+    "timestamp": "2026-11-19T15:35:30.799939+05:30"
+  },
+  "BANKNIFTY": {
+    "symbol": "BANKNIFTY",
+    "direction": "BULLISH",
+    "confidence": 44,
+    "rawScore": 0.1925,
+    "ictSetup": {
+      "name": "\u26a1 FVG ENTRY LONG",
+      "description": "Displacement creating FVG \u2014 Price likely to retrace and hold",
+      "grade": "B+",
+      "confluences": 2
+    },
+    "prediction5m": "BUY",
+    "pred5mConf": 36,
+    "pred5mScore": 0.2363,
+    "signals": {
+      "order_blocks": {
+        "score": -0.0527,
+        "signal": "NEUTRAL",
+        "label": "Bullish OB @ 62934-62949 (0.2% away)",
+        "weight": 0.25,
+        "value": -0.053,
+        "extra": {
+          "bullish_obs": 3,
+          "bearish_obs": 1,
+          "nearest_ob": {
+            "type": "BULLISH",
+            "zone": "62934-62949",
+            "dist": 0.2
+          }
+        }
+      },
+      "fair_value_gaps": {
+        "score": 0.9467,
+        "signal": "BULL",
+        "label": "Bullish FVG @ 62983-63023",
+        "weight": 0.2,
+        "value": 0.947,
+        "extra": {
+          "bullish_fvgs": 7,
+          "bearish_fvgs": 0,
+          "nearest_fvg": {
+            "type": "BULLISH",
+            "zone": "62983-63023",
+            "dist": 0.1
+          }
+        }
+      },
+      "market_structure": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "Waiting for swing points to form",
+        "weight": 0.2,
+        "value": null,
+        "extra": {
+          "structure": "FORMING",
+          "swing_highs": 1,
+          "swing_lows": 2
+        }
+      },
+      "liquidity_sweeps": {
+        "score": -0.0908,
+        "signal": "NEUTRAL",
+        "label": "Bearish sweep @ 62963 \u2014 Stops hunted",
+        "weight": 0.15,
+        "value": -0.091,
+        "extra": {
+          "sweeps_detected": 1,
+          "last_sweep": {
+            "type": "BEARISH_SWEEP",
+            "level": 62962.75,
+            "depth_pct": 0.033,
+            "ts": "2026-11-19T14:35:00+05:30"
+          }
+        }
+      },
+      "displacement": {
+        "score": 0.8,
+        "signal": "BULL",
+        "label": "Bullish displacement \u00d7 1 \u2014 Institutional buying",
+        "weight": 0.1,
+        "value": 1.0,
+        "extra": {
+          "displacement_count": 1,
+          "avg_body_ratio": 1.0,
+          "bull_count": 1,
+          "bear_count": 0
+        }
+      },
+      "smart_money_div": {
+        "score": -0.5,
+        "signal": "BEAR",
+        "label": "\u26a0\ufe0f Bearish divergence \u2014 Price \u21910.2% but OI dropping",
+        "weight": 0.1,
+        "value": -0.5,
+        "extra": {
+          "divergence": "BEARISH_DIVERGENCE",
+          "price_change": 0.24,
+          "oi_slope": -134522.0
+        }
+      }
+    },
+    "metrics": {
+      "price": 63063.0,
+      "changePct": 1.65,
+      "oi": 27165480,
+      "candleCount": 21,
+      "swingHighs": 1,
+      "swingLows": 2,
+      "lastSwingHigh": 62962.75,
+      "lastSwingLow": 62933.15
+    },
+    "ai": {
+      "provider": "numpy_fallback",
+      "featureVersion": "ict_ai_v1",
+      "classProbabilities": {
+        "STRONG_BUY": 74.34,
+        "BUY": 19.52,
+        "NEUTRAL": 3.75,
+        "SELL": 1.2,
+        "STRONG_SELL": 1.2
+      },
+      "sequencePrediction": {
+        "nextMove": "SIDEWAYS",
+        "nextMovePts": 0.53,
+        "trendContinuationProb": 47.89,
+        "reversalProb": 61.21,
+        "horizonSec": 300
+      },
+      "microstructure": {
+        "liquidityDensity": 5.45,
+        "structureDensity": 27.54,
+        "fakeBreakoutRisk": 35.81,
+        "stopHuntRisk": 41.36
+      },
+      "smc": {
+        "state": "BULLISH_IMBALANCE",
+        "score": 21.6
+      },
+      "multiTimeframe": {
+        "micro": {
+          "trend": "BULL",
+          "momentum": 23.63
+        },
+        "medium": {
+          "trend": "BULL",
+          "momentum": 19.25
+        },
+        "macro": {
+          "trend": "BULL",
+          "momentum": -12.0
+        },
+        "alignmentPct": 100.0
+      },
+      "commandDeck": {
+        "streamState": "CLOSED",
+        "modelProvider": "numpy_fallback",
+        "analysisLatencyMs": 254,
+        "pipelineCadenceMs": 30000,
+        "eventRatePerSec": 2.43,
+        "queueDepth": 7,
+        "cacheState": "WARM",
+        "alerts": [
+          "Smart money divergence is materially elevated",
+          "Live stream unavailable; confidence auto-degraded"
+        ]
+      },
+      "institutionalConfluence": {
+        "executionProbability": 59,
+        "smartMoneyAlignment": 49,
+        "institutionalFlow": 29,
+        "riskScore": 47,
+        "rewardScore": 44,
+        "riskRewardRatio": 0.94
+      }
+    },
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-11-19T15:35:30.800565+05:30"
+  },
+  "SENSEX": {
+    "symbol": "SENSEX",
+    "direction": "BULLISH",
+    "confidence": 50,
+    "rawScore": 0.1889,
+    "ictSetup": {
+      "name": "\u26a1 FVG ENTRY LONG",
+      "description": "Displacement creating FVG \u2014 Price likely to retrace and hold",
+      "grade": "B+",
+      "confluences": 2
+    },
+    "prediction5m": "BUY",
+    "pred5mConf": 62,
+    "pred5mScore": 0.2553,
+    "signals": {
+      "order_blocks": {
+        "score": 0.0062,
+        "signal": "NEUTRAL",
+        "label": "Bearish OB @ 82568-82629 (0% away)",
+        "weight": 0.25,
+        "value": 0.006,
+        "extra": {
+          "bullish_obs": 2,
+          "bearish_obs": 2,
+          "nearest_ob": {
+            "type": "BEARISH_RETEST",
+            "zone": "82568-82629",
+            "dist": 0
+          }
+        }
+      },
+      "fair_value_gaps": {
+        "score": 0.7867,
+        "signal": "BULL",
+        "label": "Bullish FVG @ 82927-82961",
+        "weight": 0.2,
+        "value": 0.787,
+        "extra": {
+          "bullish_fvgs": 9,
+          "bearish_fvgs": 0,
+          "nearest_fvg": {
+            "type": "BULLISH",
+            "zone": "82927-82961",
+            "dist": 0.09
+          }
+        }
+      },
+      "market_structure": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "Waiting for swing points to form",
+        "weight": 0.2,
+        "value": null,
+        "extra": {
+          "structure": "FORMING",
+          "swing_highs": 0,
+          "swing_lows": 1
+        }
+      },
+      "liquidity_sweeps": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "No liquidity sweep detected",
+        "weight": 0.15,
+        "value": 0.0,
+        "extra": {
+          "sweeps_detected": 0,
+          "last_sweep": null
+        }
+      },
+      "displacement": {
+        "score": 0.8,
+        "signal": "BULL",
+        "label": "Bullish displacement \u00d7 1 \u2014 Institutional buying",
+        "weight": 0.1,
+        "value": 1.0,
+        "extra": {
+          "displacement_count": 1,
+          "avg_body_ratio": 1.0,
+          "bull_count": 1,
+          "bear_count": 0
+        }
+      },
+      "smart_money_div": {
+        "score": -0.5,
+        "signal": "BEAR",
+        "label": "\u26a0\ufe0f Bearish divergence \u2014 Price \u21910.3% but OI dropping",
+        "weight": 0.1,
+        "value": -0.5,
+        "extra": {
+          "divergence": "BEARISH_DIVERGENCE",
+          "price_change": 0.3,
+          "oi_slope": -8738808.3333
+        }
+      }
+    },
+    "metrics": {
+      "price": 83021.75,
+      "changePct": 1.21,
+      "oi": 106266800,
+      "candleCount": 21,
+      "swingHighs": 0,
+      "swingLows": 1,
+      "lastSwingHigh": null,
+      "lastSwingLow": 82868.15
+    },
+    "ai": {
+      "provider": "numpy_fallback",
+      "featureVersion": "ict_ai_v1",
+      "classProbabilities": {
+        "STRONG_BUY": 75.19,
+        "BUY": 18.99,
+        "NEUTRAL": 3.52,
+        "SELL": 1.14,
+        "STRONG_SELL": 1.15
+      },
+      "sequencePrediction": {
+        "nextMove": "SIDEWAYS",
+        "nextMovePts": 0.19,
+        "trendContinuationProb": 49.92,
+        "reversalProb": 58.22,
+        "horizonSec": 300
+      },
+      "microstructure": {
+        "liquidityDensity": 0.0,
+        "structureDensity": 25.0,
+        "fakeBreakoutRisk": 34.55,
+        "stopHuntRisk": 37.0
+      },
+      "smc": {
+        "state": "BULLISH_IMBALANCE",
+        "score": 17.6
+      },
+      "multiTimeframe": {
+        "micro": {
+          "trend": "BULL",
+          "momentum": 25.53
+        },
+        "medium": {
+          "trend": "BULL",
+          "momentum": 18.89
+        },
+        "macro": {
+          "trend": "BULL",
+          "momentum": 0.0
+        },
+        "alignmentPct": 100.0
+      },
+      "commandDeck": {
+        "streamState": "CLOSED",
+        "modelProvider": "numpy_fallback",
+        "analysisLatencyMs": 251,
+        "pipelineCadenceMs": 30000,
+        "eventRatePerSec": 2.43,
+        "queueDepth": 6,
+        "cacheState": "WARM",
+        "alerts": [
+          "Smart money divergence is materially elevated",
+          "Live stream unavailable; confidence auto-degraded"
+        ]
+      },
+      "institutionalConfluence": {
+        "executionProbability": 61,
+        "smartMoneyAlignment": 46,
+        "institutionalFlow": 26,
+        "riskScore": 43,
+        "rewardScore": 54,
+        "riskRewardRatio": 1.26
+      }
+    },
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-11-19T15:35:00.780770+05:30"
   }
 }

@@ -73,8 +73,13 @@ class CacheService:
             url = os.getenv("REDIS_URL") or settings.redis_url
             if url:
                 import redis
-                self._redis_sync = redis.Redis.from_url(url, decode_responses=True)
-                self._redis_sync.ping()
+                self._redis_sync = redis.Redis.from_url(
+                    url,
+                    decode_responses=True,
+                    socket_connect_timeout=0.5,
+                    socket_timeout=0.5,
+                    retry_on_timeout=False,
+                )
         except Exception:
             self._redis_sync = None
 
@@ -84,7 +89,7 @@ class CacheService:
                 raw = self._redis_sync.get(key)
                 return json.loads(raw) if raw else None
             except Exception:
-                pass
+                self._redis_sync = None
         cached = _SHARED_CACHE.get(key)
         if not cached:
             return None
@@ -103,7 +108,7 @@ class CacheService:
             try:
                 self._redis_sync.setex(key, expire, payload)
             except Exception:
-                pass
+                self._redis_sync = None
         _SHARED_CACHE[key] = (payload, time.time() + expire)
     
     @property

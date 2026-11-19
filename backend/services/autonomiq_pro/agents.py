@@ -133,16 +133,27 @@ STRATEGY_SYSTEM = """You are the Strategy Agent of AUTONOMIQ PRO, an intraday In
 option-chain metrics and a deterministic quant score for each index.
 
 Rules:
-- Decide one action for each index present in the input (only those): BUY_CE, BUY_PE, HOLD, EXIT, WAIT or NO_TRADE.
+- This is a signal-triggered risk review. Decide one action for each Quantum signal present in the input
+  (only those): BUY_CE, BUY_PE, HOLD, EXIT, WAIT or NO_TRADE.
   Long-option BUY actions are allowed only when they exactly match the provided deterministic quant action.
+  When execution_plan is present, validate its entry, stop, targets and reward/risk for market-condition
+  plausibility and false-signal risk, but never output or replace any of those prices.
   NO_TRADE whenever the input reports data_errors or insufficient completed history.
   Do not infer a price, trend, VWAP, PCR, OI, futures state, support/resistance level, or timeframe result
   that is not explicitly present in the evidence.
   Cross-validate 5-minute, 15-minute, 60-minute, futures and option-chain evidence. Prefer WAIT when they conflict.
+  The deterministic quant.action is explicitly supplied for every index; never replace or infer it from the score.
   Long options only.
 - If an AUTONOMIQ live position is listed for an index, choose HOLD or EXIT for that position; do not propose
   another entry for that index. Broker-side protective stops and the Python risk manager remain authoritative.
-- Prefer WAIT when signals conflict, price is extended, or edge is unclear. NO_TRADE when data quality is poor.
+- Confirm the deterministic BUY when data is clean and the supplied timeframes and futures align.
+  Treat extension and momentum flags as evidence, not automatic vetoes: approve if completed candles show
+  continuation, or WAIT if the flags are supported by exhaustion or a failed breakout.
+- Do not veto a setup merely because price is near or above a day high; live price, liquidity and structural room
+  are independently revalidated by the Python risk engine immediately before any broker request.
+- Prefer WAIT only when supplied evidence conflicts or exhaustion is demonstrated by completed candles.
+  Do not infer theta decay, rejected highs or breakout failure unless the supplied candles and option data
+  explicitly show them. NO_TRADE when data quality is poor.
 - Use price_action previous-candle OHLC, confirmed swings, previous-day levels and ATR to assess
   breakout/pullback quality and nearby opposing levels. WAIT on a failed breakout or poor room to move.
 - Python independently builds structural premium stops and cost-aware targets; never relax risk limits.
@@ -155,7 +166,8 @@ Rules:
  "summary":"<= 18 words of market analysis",
  "indices":{"<INDEX>":{"action":"...","conviction":0-100,"reasoning":"<= 8 words","risks":[]}}}"""
 
-def strategy_payload(contexts: dict[str, dict], session: dict, live_positions: list[dict] | None = None) -> dict:
+def strategy_payload(contexts: dict[str, dict], session: dict, live_positions: list[dict] | None = None,
+                     min_signal_score: float = 60) -> dict:
     def compact_candles(candles: list[dict], limit: int) -> list[dict]:
         return [{key: candle[key] for key in ("date", "open", "high", "low", "close", "volume")
                  if isinstance(candle, dict) and key in candle}
@@ -165,15 +177,25 @@ def strategy_payload(contexts: dict[str, dict], session: dict, live_positions: l
     return {"session": session, "autonomiq_live_positions": live_positions or [], "indices": {
         symbol: {
             "spot": ctx["spot"], "analysis": {k: v for k, v in ctx["analysis"].items() if k != "sparkline"},
-            "quant": {k: ctx["quant"][k] for k in ("score", "bias", "flags", "pcr", "atm_iv")},
+            "quant": {
+                **{k: ctx["quant"][k] for k in ("score", "bias", "flags", "pcr", "atm_iv")},
+                "action": quant_action(ctx, min_signal_score)[0],
+            },
             "quant_factors": [f["factor"] for f in ctx["quant"]["factors"]],
             "futures": ctx["data"].get("futures"),
             "options": {k: v for k, v in (ctx["data"].get("options") or {}).items() if k != "strikes"},
+            "execution_plan": {
+                key: ctx["candidate_plan"][key] for key in (
+                    "tradingsymbol", "entry", "stop_loss", "target1", "target2",
+                    "risk_reward", "risk_rupees", "lot_size",
+                ) if ctx.get("candidate_plan") and key in ctx["candidate_plan"]
+            } if ctx.get("candidate_plan") else None,
+            "execution_plan_error": (ctx.get("candidate_plan") or {}).get("error"),
             "data_errors": ctx["data"]["errors"],
             "evidence": {
-                "completed_5m": compact_candles(ctx["data"]["candles"].get("5m"), 8),
-                "completed_15m": compact_candles(ctx["data"]["candles"].get("15m"), 8),
-                "completed_60m": compact_candles(ctx["data"]["candles"].get("60m"), 6),
+                "completed_5m": compact_candles(ctx["data"]["candles"].get("5m"), 4),
+                "completed_15m": compact_candles(ctx["data"]["candles"].get("15m"), 3),
+                "completed_60m": compact_candles(ctx["data"]["candles"].get("60m"), 2),
                 "bar_counts": {timeframe: len(ctx["data"]["candles"].get(timeframe) or [])
                                for timeframe in ("5m", "15m", "60m")},
             },
@@ -212,8 +234,13 @@ def validate_strategy(strategy: dict, contexts: dict[str, dict], min_signal_scor
     issues: list[str] = []
     symbols = set(contexts)
     returned = set(strategy.get("indices") or {})
-    if returned != symbols:
-        issues.append(f"AI index set mismatch: returned {sorted(returned)}, required {sorted(symbols)}")
+    extra = returned - symbols
+    missing = symbols - returned
+    for symbol in extra:
+        (strategy.get("indices") or {}).pop(symbol, None)
+        issues.append(f"AI ignored unsupported index: {symbol}")
+    if missing:
+        issues.append(f"AI index set missing: required {sorted(missing)}")
 
     live_symbols = {str(trade["symbol"]).upper() for trade in (live_positions or [])}
     for symbol, ctx in contexts.items():
@@ -270,13 +297,19 @@ def data_problems(ctx: dict) -> list[str]:
 
 
 def quant_action(ctx: dict, min_score: float) -> tuple[str, str]:
-    """Deterministic quant decision. The AI can only confirm it or downgrade it to WAIT."""
+    """Directional quant decision; execution vetoes remain separate evidence."""
     quant = ctx["quant"]
     score = quant["score"]
     action = "BUY_CE" if score >= min_score else "BUY_PE" if score <= -min_score else "WAIT"
-    if action != "WAIT" and any("extended" in f or "extreme" in f for f in quant["flags"]):
-        return "WAIT", "Quant edge present but price is extended — wait for pullback"
-    return action, f"Quant score {score:+.0f} ({quant['bias'].lower()})"
+    note = f"Quant score {score:+.0f} ({quant['bias'].lower()})"
+    return action, note
+
+
+def quant_entry_veto(ctx: dict) -> str | None:
+    flags = [str(flag) for flag in (ctx["quant"].get("flags") or [])]
+    if any("extended" in flag.lower() or "extreme" in flag.lower() for flag in flags):
+        return "; ".join(flags)
+    return None
 
 
 class SignalValidationAgent:
@@ -306,18 +339,39 @@ class SignalValidationAgent:
 
         score = quant["score"]
         quant_action_, quant_note = quant_action(ctx, min_score)
+        entry_veto = quant_entry_veto(ctx)
+        executable_quant_action = "WAIT" if entry_veto else quant_action_
 
+        if ai_state == "SKIPPED_QUANTUM_SIGNAL_ALREADY_PROCESSED":
+            return {
+                "action": "WAIT", "score": score, "strength": _strength(abs(score)),
+                "conviction": abs(score),
+                "reasoning": "This Quantum signal was already processed; awaiting a new Quantum signal.",
+                "source": "quant", "approval_status": "WAIT",
+            }
         if ai is None:
             if require_ai and quant_action_ in ("BUY_CE", "BUY_PE"):
+                if ai_state == "SKIPPED_SLOT_ALREADY_ANALYZED":
+                    return {
+                        "action": "WAIT", "score": score, "strength": _strength(abs(score)),
+                        "conviction": abs(score),
+                        "reasoning": (
+                            f"{quant_note}. The AI decision for this 5-minute slot is already complete; "
+                            "this quant refresh is not a new entry confirmation."
+                        ),
+                        "source": "quant", "approval_status": "AI_SLOT_COMPLETE",
+                    }
                 return {"action": "WAIT", "score": score, "strength": _strength(abs(score)), "conviction": abs(score),
                         "reasoning": f"{quant_note}. Awaiting AI confirmation ({ai_state}).", "source": "quant",
                         "approval_status": "PENDING_AI"}
-            return {"action": quant_action_, "score": score, "strength": _strength(abs(score)),
+            return {"action": executable_quant_action, "score": score, "strength": _strength(abs(score)),
                     "conviction": abs(score),
-                    "reasoning": (f"{quant_note}. AI confirmation unavailable ({ai_state})."
-                                  if require_ai else quant_note),
+                    "reasoning": (
+                        f"{quant_note}. Entry veto: {entry_veto}." if entry_veto
+                        else f"{quant_note}. AI confirmation unavailable ({ai_state})."
+                        if require_ai else quant_note),
                     "source": "quant",
-                    "approval_status": "PENDING_AI" if quant_action_ in ("BUY_CE", "BUY_PE") else "WAIT"}
+                    "approval_status": "PENDING_AI" if executable_quant_action in ("BUY_CE", "BUY_PE") else "WAIT"}
 
         ai_action = ai["action"]
         conviction = round((abs(score) + ai["conviction"]) / 2, 1)

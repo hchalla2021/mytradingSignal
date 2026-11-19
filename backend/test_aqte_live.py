@@ -23,6 +23,7 @@ from services.aqte_live import (
 )
 from services.aqte_engine import AQTEEngine, Policy
 from test_aqte import CONTRACT, IST, NOW, START, ready_engine, scalp_info, tick
+import config as app_config
 
 
 def settings(**overrides):
@@ -36,6 +37,27 @@ def settings(**overrides):
                   app_access_username="admin")
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+class StaticIPModeTests(unittest.TestCase):
+    def tearDown(self):
+        app_config.get_settings.cache_clear()
+
+    def test_local_and_production_select_separate_broker_egress_ips(self):
+        values = {
+            "AQTE_LIVE_STATIC_IP": "legacy-ip",
+            "AQTE_LIVE_LOCAL_STATIC_IP": "122.177.241.68",
+            "AQTE_LIVE_PRODUCTION_STATIC_IP": "159.65.147.167",
+            "ZERODHA_ACCESS_TOKEN": "token",
+        }
+        for mode, expected in (("local", values["AQTE_LIVE_LOCAL_STATIC_IP"]),
+                               ("production", values["AQTE_LIVE_PRODUCTION_STATIC_IP"])):
+            with self.subTest(mode=mode), \
+                    patch.object(app_config, "dotenv_values", return_value={
+                        **values, "AQTE_LIVE_DEPLOYMENT_MODE": mode,
+                    }), patch.dict(os.environ, {}, clear=True):
+                app_config.get_settings.cache_clear()
+                self.assertEqual(app_config.get_settings().aqte_live_static_ip, expected)
 
 
 class LiveTests(unittest.TestCase):

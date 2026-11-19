@@ -89,6 +89,7 @@ from routers.global_news import http_router as global_news_http, ws_router as gl
 from routers.observatory import http_router as observatory_http
 from routers.aqte import router as aqte_http
 from routers.quantedge import router as quantedge_http
+from routers.quantumedge import router as quantumedge_http
 from routers.expiryedge import router as expiryedge_http
 from routers.algo_desk import router as algo_desk_http
 from routers.autonomiq_pro import router as autonomiq_pro_http
@@ -717,6 +718,7 @@ app.include_router(fii_dii_router, prefix="/api", tags=["FII / DII"])
 app.include_router(observatory_http, tags=["Observatory"])
 app.include_router(aqte_http)
 app.include_router(quantedge_http)
+app.include_router(quantumedge_http)
 app.include_router(expiryedge_http)
 app.include_router(algo_desk_http)
 app.include_router(autonomiq_pro_http)

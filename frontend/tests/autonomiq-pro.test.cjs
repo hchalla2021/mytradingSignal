@@ -167,7 +167,7 @@ test('green quant score shows missing AI and retains the scheduled WAIT after ma
     assert.match(body, /Risk NOT REACHED/);
     assert.match(body, /Broker NOT REQUESTED/);
     assert.match(body, /Approval state: WAIT · AI REVIEW/);
-    assert.match(body, /No AI adjudication in this 5-minute slot/);
+    assert.match(body, /Waiting for AI · next slot/);
     assert.match(body, /Last scheduled result · 10:58:00 IST: WAIT/);
     assert.match(body, /Extended; await a pullback/);
     assert.match(body, /Historical result only; not approval/);
@@ -182,6 +182,92 @@ test('quant veto and AI agreement cannot advertise that risk or broker submissio
     strength: 'High', timestamp: at(0), reasoning: 'Aligned',
     risk: { approved: false, checks: [{ name: 'Risk per trade', passed: false, detail: 'Too large' }] },
     execution: { status: 'BLOCKED', detail: 'Too large' },
+  });
+
+  test('quant refresh shows the scheduled AI decline instead of reporting an awaiting order', () => {
+    const snap = snapshot();
+    snap.cycle = cycle({
+      action: 'WAIT', quant_action: 'BUY_CE', ai_action: null, source: 'quant',
+      strength: 'High', timestamp: at(0), reasoning: 'Awaiting AI confirmation',
+    });
+    snap.cycle.trigger = 'QUANT_EVENT';
+    snap.cycle.ai_state = 'SKIPPED_SLOT_ALREADY_ANALYZED';
+    snap.last_scheduled = { at: at(-30), ai_state: 'ACTIVE', signals: {
+      NIFTY: {
+        action: 'WAIT', quant_action: 'BUY_CE', ai_action: 'WAIT',
+        reasoning: 'Resistance cluster; limited room', timestamp: at(-30),
+        execution: { status: 'NOT_REQUESTED', detail: '' },
+      },
+    } };
+    const body = text(nodes(render(snap)).find(node => node.props?.['aria-label'] === 'NIFTY entry gates'))
+      .replace(/\s+/g, ' ');
+    assert.match(body, /AI already completed this scheduled 5-minute analysis/);
+    assert.match(body, /Last scheduled result .* WAIT/);
+    assert.match(body, /Resistance cluster; limited room/);
+    assert.match(body, /Historical result only/);
+  });
+
+  test('completed AI slot is not presented as awaiting AI approval', () => {
+    const snap = snapshot();
+    snap.cycle = cycle({
+      action: 'WAIT', quant_action: 'BUY_CE', ai_action: null, source: 'quant',
+      approval_status: 'AI_SLOT_COMPLETE', strength: 'High', timestamp: at(0),
+      reasoning: 'The AI decision for this 5-minute slot is already complete.',
+    });
+    snap.cycle.trigger = 'QUANT_EVENT';
+    snap.cycle.ai_state = 'SKIPPED_SLOT_ALREADY_ANALYZED';
+    const tree = render(snap);
+    assert.match(card(tree), /WAIT · AI SLOT COMPLETE/);
+    assert.doesNotMatch(card(tree), /WAIT · AWAITING AI|Awaiting AI confirmation/);
+  });
+
+  test('same-slot refresh retains the scheduled BUY and owner authorization blocker', () => {
+    const snap = snapshot();
+    snap.runtime.live_execution_allowed = true;
+    snap.runtime.live_trading_enabled = false;
+    snap.cycle = cycle({
+      action: 'WAIT', quant_action: 'BUY_CE', ai_action: null, source: 'quant',
+      approval_status: 'AI_SLOT_COMPLETE', strength: 'High', timestamp: at(0),
+      reasoning: 'The AI decision for this 5-minute slot is already complete.',
+    });
+
+    test('risk plan failure is blocked immediately instead of evaluating', () => {
+      const snap = snapshot();
+      snap.cycle = cycle({
+        action: 'BUY_CE', quant_action: 'BUY_CE', ai_action: 'BUY_CE', source: 'ai+quant',
+        approval_status: 'RISK_BLOCKED', strength: 'High', timestamp: at(0),
+        reasoning: 'No trade: insufficient room to T2',
+        risk: { approved: false, checks: [{ name: 'Execution plan', passed: false, detail: 'Insufficient room to T2' }] },
+        execution: { status: 'NOT_REQUESTED', detail: '' },
+      });
+      const body = text(nodes(render(snap)).find(node => node.props?.['aria-label'] === 'NIFTY entry gates'));
+      assert.match(body, /Risk BLOCKED/);
+      assert.match(body, /Risk blocked: target T2 is too close/);
+      assert.match(body, /Execution plan: Insufficient room to T2/);
+      assert.doesNotMatch(body, /Risk EVALUATING|Risk CHECKING/);
+    });
+    snap.cycle.trigger = 'QUANT_EVENT';
+    snap.cycle.ai_state = 'SKIPPED_SLOT_ALREADY_ANALYZED';
+    snap.cycle.at = at(10);
+    snap.last_scheduled = { at: at(5), ai_state: 'ACTIVE', signals: {
+      NIFTY: {
+        action: 'BUY_CE', score: 85, source: 'ai+quant', approval_status: 'APPROVED',
+        quant_action: 'BUY_CE', ai_action: 'BUY_CE', reasoning: 'Aligned', timestamp: at(-2),
+        risk: { approved: true, checks: [] },
+        execution: { status: 'OFF', detail: 'Owner live-trading switch is OFF' },
+        execution_trace: [
+          { stage: 'quant', state: 'PASS', detail: 'BUY_CE; score 85' },
+          { stage: 'ai', state: 'PASS', detail: 'AI and quant agree on BUY_CE' },
+          { stage: 'authorization', state: 'BLOCKED', detail: 'Owner live-trading switch is OFF' },
+        ],
+      },
+    } };
+    const tree = render(snap);
+    assert.match(card(tree), /BUY CE · LIVE OFF/);
+    assert.match(card(tree), /AI BUY CE · AGREES/);
+    assert.match(card(tree), /Risk PASSED/);
+    assert.match(card(tree), /Broker OFF/);
+    assert.match(card(tree), /Owner live-trading switch is OFF/);
   });
   const gates = () => {
     const tree = render(snap, { tab: 'analysis' });
@@ -332,10 +418,10 @@ test('a fresh unfilled proposal stays WAIT without live prices and expires with 
   assert.match(body, /Entry \(Premium\) —/);
 });
 
-test('live diagnostics show actual AI request and failed risk checks', () => {
+test('live diagnostics show actual AI request, safe errors and failed risk checks', () => {
   const snap = snapshot();
   snap.config.min_signal_score = 60;
-  snap.health.ai_last_error = 'BAD_OUTPUT';
+  snap.health.ai_last_error = 'HTTP 401: authentication_error: invalid x-api-key';
   snap.ai_usage.recent = [{
     created_at: at(-30), model: 'configured-model', status: 'BAD_OUTPUT', error: 'unparseable',
   }];
@@ -349,10 +435,11 @@ test('live diagnostics show actual AI request and failed risk checks', () => {
   const tree = render(snap);
   const diagnostics = nodes(tree).find(node => node.props?.['aria-label'] === 'AI execution diagnostics');
   assert.match(text(diagnostics), /10:59:30 IST · configured-model · BAD_OUTPUT/);
-  assert.match(text(diagnostics).replace(/\s+/g, ' '), /Analysis error: BAD_OUTPUT/);
+  assert.match(text(diagnostics).replace(/\s+/g, ' '), /AI notice: AI authentication needs attention/);
+  assert.doesNotMatch(text(diagnostics), /invalid x-api-key|HTTP 401|authentication_error/);
   const body = card(tree);
   assert.match(body, /entry needs ≥ \+60 CE \/ ≤ -60 PE and AI agreement/);
-  assert.match(body, /Risk per trade : Estimated risk exceeds limit/);
+  assert.match(body, /Risk per trade: Estimated risk exceeds limit/);
   assert.doesNotMatch(body, /Entry window : Open/);
 });
 
@@ -420,7 +507,8 @@ test('empty Trades tab explains recorded WAIT decisions instead of implying a br
   assert.match(text(decisions), /NOT REQUESTED/);
   assert.match(text(decisions), /Awaiting AI confirmation/);
   const body = text(tree).replace(/\s+/g, ' ');
-  assert.match(body, /Manual refresh is disabled/);
+  assert.match(body, /Manual refresh is quant-only/);
+  assert.match(body, /New Quantum signals trigger one isolated AI risk review/);
   assert.match(body, /Next scheduled analysis: 11:05:00 IST/);
   assert.match(body, /Live Trading ON alone does not submit an order/);
 });
@@ -484,7 +572,7 @@ test('analysis shows snapshot times and updates measurements without changing ru
   assert.match(text(rules), /Last computed: 11:00:00 IST/);
   assert.match(text(rules), /60m trend up \+ 15/);
   const cadence = nodes(tree).find(node => node.props?.['aria-label'] === 'Analysis refresh cadence');
-  assert.match(text(cadence), /Quant refreshes automatically every 30 seconds/);
+  assert.match(text(cadence), /AI runs only when a new signal fingerprint appears/);
   assert.match(text(cadence), /Next cycle: 11:05:00 IST/);
 
   index.futures.vwap = 25290.25;

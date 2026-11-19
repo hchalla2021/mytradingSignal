@@ -61,7 +61,7 @@ function elements(tree, visibleOnly = false) {
 }
 const find = (tree, id) => elements(tree).find(node => node.props?.id === id);
 
-test('AQTE precedes charts and live indices without duplicating dashboard providers', () => {
+test('QuantumEdge is first, then AQTE, charts and live indices without duplicate providers', () => {
   const page = readFileSync(path.join(components, '..', 'app', 'page.tsx'), 'utf8');
   const source = ts.createSourceFile('page.tsx', page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let dashboard;
@@ -78,8 +78,9 @@ test('AQTE precedes charts and live indices without duplicating dashboard provid
   visit(source);
   assert.ok(dashboard, 'Dashboard flex container must exist');
   const children = dashboard.children.filter(child => ts.isJsxElement(child) || ts.isJsxSelfClosingElement(child));
-  assert.match(children[0].getText(source), /<AQTESection marketData=\{marketData\} isConnected=\{isConnected\}\s*\/>/);
-  assert.match(children[1].getText(source), /<ChartWorkspace marketData=\{marketData\} institutionalData=\{institutionalData\}/);
+  assert.match(children[0].getText(source), /<QuantumEdgeIntradaySection marketData=\{marketData\} isConnected=\{isConnected\}\s*\/>/);
+  assert.match(children[2].getText(source), /<AQTESection marketData=\{marketData\} isConnected=\{isConnected\}\s*\/>/);
+  assert.match(children[3].getText(source), /<ChartWorkspace marketData=\{marketData\} institutionalData=\{institutionalData\}/);
   const orderOf = node => {
     const opening = ts.isJsxElement(node) ? node.openingElement : node;
     const style = opening.attributes.properties.find(attribute =>
@@ -88,14 +89,39 @@ test('AQTE precedes charts and live indices without duplicating dashboard provid
     return match ? Number(match[1]) : 0;
   };
   assert.ok(children.slice(1).every(child => orderOf(child) > orderOf(children[0])));
-  assert.match(children[2].getText(source), /<LiveMarketIndexTabs\b/);
-  assert.ok(children.slice(2).every(child => orderOf(child) > orderOf(children[1])));
+  assert.match(children[4].getText(source), /<LiveMarketIndexTabs\b/);
   assert.ok(children.slice(3).every(child => orderOf(child) > orderOf(children[2])));
+  assert.ok(children.slice(5).every(child => orderOf(child) > orderOf(children[4])));
+  assert.equal((page.match(/<QuantumEdgeIntradaySection\b/g) ?? []).length, 1);
   assert.equal((page.match(/<AQTESection\b/g) ?? []).length, 1);
   assert.equal((page.match(/<LiveMarketIndexTabs\b/g) ?? []).length, 1);
   assert.equal((page.match(/<ChartWorkspace\b/g) ?? []).length, 1);
   assert.equal((page.match(/<InstitutionalWorkspace\b/g) ?? []).length, 1);
   assert.match(page, /onSnapshot=\{setInstitutionalData\}/);
+});
+
+test('QuantumEdge dashboard is autonomous and uses independent index controls', () => {
+  const source = readFileSync(path.join(components, 'QuantumEdgeIntradaySection.tsx'), 'utf8');
+  assert.match(source, /QuantumEdge IntraDay Algo — Intraday Algo \| CE \/ PE/);
+  assert.match(source, /QuantumEdge master auto live/);
+  assert.match(source, /independent engine/);
+  assert.match(source, /Risk \/ lot/);
+  assert.match(source, /Signal-triggered AI only/);
+  assert.match(source, /Edit \$\{displayName\(symbol\)\} lots and risk/);
+  assert.match(source, /qe-save-config/);
+  assert.match(source, /recorded\?\.setup_key === signal\.setup_key/);
+  assert.match(source, /title=\{item\.reason\}/);
+  assert.match(source, /signal\.status/);
+  assert.match(source, /LIVE_POSITION/);
+  assert.match(source, /generation\.current \+= 1/);
+  assert.match(source, /mutating\.current = true/);
+  assert.doesNotMatch(source, /\? 0\s*:\s*null/);
+  assert.match(source, /active\?\.entry_at/);
+  assert.doesNotMatch(source, /MANUAL ORDER|PLACE ORDER/);
+  const css = readFileSync(path.join(components, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(css, /\.qe-shell\s*\{[^}]*isolation:\s*isolate/s);
+  assert.match(css, /grid-template-columns:\s*auto minmax\(44px, 72px\) auto minmax\(72px, 1fr\) auto/);
+  assert.match(css, /max-width:\s*420px/);
 });
 
 test('dashboard keeps BTST and removes the retired strategy workspace', () => {

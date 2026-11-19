@@ -15,6 +15,23 @@ type Sym = (typeof SYMBOLS)[number];
 type Action = 'BUY_CE' | 'BUY_PE' | 'HOLD' | 'EXIT' | 'WAIT' | 'NO_TRADE';
 type Tab = 'live' | 'analysis' | 'alerts' | 'trades' | 'performance' | 'settings';
 
+function aiErrorMessage(error: string | null): string | null {
+  if (!error) return null;
+  if (/authentication_failed|401|403|x-api-key|invalid.+api.+key/i.test(error)) {
+    return 'AI authentication needs attention. Verify the Anthropic API key in backend/.env; live market and quant analysis continue safely.';
+  }
+  if (error === 'AI_RATE_LIMITED' || /rate.?limit/i.test(error)) {
+    return 'AI is temporarily rate-limited; live market and quant analysis continue safely.';
+  }
+  if (/AI_SERVICE_UNAVAILABLE|AI_REQUEST_REJECTED|HTTP |Timeout|TransportError/i.test(error)) {
+    return 'AI confirmation is temporarily unavailable; live market and quant analysis continue safely.';
+  }
+  if (error === 'BAD_OUTPUT' || error === 'OUTPUT_TOKEN_LIMIT') {
+    return 'AI confirmation was not accepted; quant-only analysis remains active.';
+  }
+  return 'AI confirmation is unavailable; live market and quant analysis continue safely.';
+}
+
 interface Check { name: string; passed: boolean; detail: string }
 interface Plan {
   tradingsymbol: string; entry: number; stop_loss: number; trailing_sl: number; target1: number; target2: number;
@@ -24,9 +41,10 @@ interface Plan {
 interface Signal {
   action: Action; strength: string; conviction: number; score: number; reasoning: string; risks?: string[];
   quant_action?: Action; ai_action?: Action | null;
-  approval_status?: 'PENDING_AI' | 'AI_DECLINED' | 'PENDING_RISK' | 'RISK_BLOCKED' | 'APPROVED' | 'DATA_UNAVAILABLE' | 'POSITION_MANAGEMENT' | 'WAIT';
+  approval_status?: 'PENDING_AI' | 'AI_SLOT_COMPLETE' | 'AI_DECLINED' | 'PENDING_RISK' | 'RISK_BLOCKED' | 'APPROVED' | 'DATA_UNAVAILABLE' | 'POSITION_MANAGEMENT' | 'WAIT';
   source: string; plan?: Plan | null; risk?: { approved: boolean; checks: Check[] } | null;
   execution?: { status: string; detail: string }; timestamp: string;
+  execution_trace?: { stage: string; state: string; detail: string }[];
 }
 interface Trend { trend: string; supertrend: string | null }
 interface IndexCycle {
@@ -50,8 +68,9 @@ interface Snapshot {
   spots: Record<Sym, Spot>;
   cycle: { at: string; trigger: string; ai_state: string; model: string | null; summary: string;
     market_alert: { tone: string; title: string; detail: string }; indices: Record<Sym, IndexCycle> } | null;
-  last_scheduled?: { at: string; ai_state: string;
-    signals: Partial<Record<Sym, Pick<Signal, 'action' | 'reasoning' | 'execution' | 'timestamp'>>> } | null;
+  last_scheduled?: { at: string; ai_state: string; trigger?: string;
+    signals: Partial<Record<Sym, Pick<Signal, 'action' | 'score' | 'source' | 'approval_status' |
+      'quant_action' | 'ai_action' | 'risk' | 'reasoning' | 'execution' | 'execution_trace' | 'timestamp'>>> } | null;
   alerts: { id: number; created_at: string; level: string; symbol: string | null; message: string }[];
   decisions: { id: number; created_at: string; symbol: string; action: Action; strength: string; score: number;
     approved: number; reasoning: string; contract: string | null; execution?: Signal['execution'] | null }[];
@@ -200,31 +219,32 @@ function EntryGates({ sym, signal, snap, hasPosition = false }: {
         : signal?.risk ? signal.risk.approved ? 'APPROVED' : 'RISK_BLOCKED'
           : undefined);
   const approvalLabel = approvalStatus === 'PENDING_AI' ? 'WAIT · AI REVIEW'
-    : approvalStatus === 'AI_DECLINED' ? 'WAIT · AI DECLINED'
-      : approvalStatus === 'PENDING_RISK' ? 'WAIT · RISK CHECK'
+    : approvalStatus === 'AI_SLOT_COMPLETE' ? 'WAIT · AI SLOT COMPLETE'
+      : approvalStatus === 'AI_DECLINED' ? 'WAIT · AI DECLINED'
         : approvalStatus === 'RISK_BLOCKED' ? 'BLOCKED · RISK'
-          : approvalStatus === 'APPROVED' ? 'APPROVED'
-            : approvalStatus === 'DATA_UNAVAILABLE' ? 'WAIT · DATA'
-              : approvalStatus === 'POSITION_MANAGEMENT' ? 'POSITION CONTROL'
-                : null;
+          : approvalStatus === 'APPROVED' ? 'APPROVED' : null;
   const quantLabel = signal?.source === 'validation' ? 'DATA UNAVAILABLE'
     : signal?.quant_action ? `${quantBuy ? 'PASSED · ' : ''}${ACTION_STYLE[signal.quant_action].label}` : 'NOT RECORDED';
   const aiLabel = signal?.ai_action == null
     ? signal?.ai_action === null ? 'NOT REQUESTED' : 'NOT RECORDED'
     : `${ACTION_STYLE[signal.ai_action].label}${aiBuy ? aiAgrees ? ' · AGREES' : ' · DOES NOT AGREE' : ''}`;
-  const scheduled = snap?.cycle?.trigger === 'MANUAL' ? snap.last_scheduled : null;
+  const scheduled = snap && snap.cycle?.trigger !== 'SCHEDULED' ? snap.last_scheduled : null;
   const prior = scheduled?.signals[sym];
+  const failedRiskChecks = signal?.risk?.checks.filter((check) => !check.passed) ?? [];
+  const t2RoomBlocked = failedRiskChecks.some((check) =>
+    /Insufficient room.+T2/i.test(check.detail || check.name));
 
   return <div aria-label={`${sym} entry gates`} className="autonomiq-gates my-3 rounded-lg border border-slate-700/70 bg-black/15 p-2.5 text-[12px]">
     <div className="mb-2 font-semibold text-slate-300">{hasPosition
       ? 'New-entry checks · separate from your open broker position'
-      : 'Entry approval · score alone does not submit an order'}</div>
+      : 'Entry approval'}</div>
     <dl className="grid grid-cols-2 gap-2">
       {([
         ['Quant', quantLabel, quantBuy && signal?.source !== 'validation'],
         ['AI', aiLabel, aiAgrees],
         ['Risk', signal?.risk ? signal.risk.approved ? 'PASSED' : 'BLOCKED'
-          : riskReached ? 'EVALUATING' : 'NOT REACHED', !!signal?.risk?.approved],
+          : approvalStatus === 'RISK_BLOCKED' ? 'BLOCKED'
+            : riskReached ? 'CHECKING' : 'NOT REACHED', !!signal?.risk?.approved],
         ['Broker', (signal?.execution?.status ?? 'NOT_REQUESTED').replace(/_/g, ' '), false],
       ] as const).map(([label, value, passed]) => <div key={label}>
         <dt className="text-slate-400">{label}</dt>
@@ -234,28 +254,61 @@ function EntryGates({ sym, signal, snap, hasPosition = false }: {
     {approvalLabel && <p className="mt-2 break-words font-semibold text-amber-200">
       {`Approval state: ${approvalLabel}`}
     </p>}
-    {signal?.source !== 'validation' && signal?.ai_action === null && quantBuy && <p className="mt-2 text-amber-200">
-      {`No AI adjudication in this 5-minute slot. Automatic quant rechecks continue; next eligible AI: ${clock(snap?.health.next_run_at)} IST.`}
+    {failedRiskChecks.length > 0 && <div role="status" className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2 text-rose-200">
+      <p className="font-bold">{t2RoomBlocked
+        ? 'Risk blocked: target T2 is too close to support/resistance'
+        : 'Risk blocked: mandatory entry check failed'}</p>
+      <p className="mt-1 break-words">{failedRiskChecks.map((check) => `${check.name}: ${check.detail || 'Not passed'}`).join('; ')}</p>
+    </div>}
+    {!failedRiskChecks.length && signal?.source !== 'validation' && signal?.ai_action === null && quantBuy && <p className="mt-2 text-amber-200">
+      {snap?.cycle?.ai_state === 'SKIPPED_QUANTUM_SIGNAL_ALREADY_PROCESSED'
+        ? 'This Quantum signal is already processed. Waiting for a new signal.'
+        : snap?.cycle?.ai_state === 'SKIPPED_SLOT_ALREADY_ANALYZED'
+        ? 'AI already completed this scheduled 5-minute analysis.'
+        : `Waiting for AI · next slot ${clock(snap?.health.next_run_at)} IST`}
     </p>}
     {aiDeclined && quantBuy && <p className="mt-2 text-amber-200">
-      AI declined this direction. Quant passed, but risk and broker submission are intentionally not reached.
+      AI said WAIT. Risk and broker are not run.
     </p>}
     {prior && <div className="autonomiq-scheduled mt-2 border-t border-slate-700 pt-2 text-slate-300">
       <CalendarDays aria-hidden="true" className="autonomiq-accent-icon" />
       <div className="min-w-0">
-        <p className="font-semibold">{`Last scheduled result · ${clock(scheduled?.at)} IST: ${ACTION_STYLE[prior.action].label}${prior.execution && prior.execution.status !== 'NOT_REQUESTED' ? ` · ${prior.execution.status.replace(/_/g, ' ')}` : ''}`}</p>
-        <p className="mt-1 break-words">{prior.reasoning}{prior.execution?.detail ? ` · ${prior.execution.detail}` : ''}</p>
-        <p className="autonomiq-caption mt-1 text-slate-400">Historical result only; not approval for this refreshed data.</p>
+        <p className="font-semibold">{`${scheduled?.trigger === 'OWNER_RECHECK' ? 'Live ON recheck' : 'Last scheduled result'} · ${clock(scheduled?.at)} IST: ${ACTION_STYLE[prior.action].label}${prior.execution && prior.execution.status !== 'NOT_REQUESTED' ? ` · ${prior.execution.status.replace(/_/g, ' ')}` : ''}`}</p>
+        {prior.reasoning && <p className="mt-1 break-words">{prior.reasoning}</p>}
+        {prior.execution?.detail && <p className="mt-1 break-words">{prior.execution.detail}</p>}
+        <p className="autonomiq-caption mt-1 text-slate-400">Historical result only; not approval for refreshed data.</p>
       </div>
     </div>}
   </div>;
+}
+
+function currentScheduledSignal(snap: Snapshot | null, sym: Sym, cycle: IndexCycle | undefined): Signal | undefined {
+  const liveSignal = cycle?.signal;
+  const scheduled = snap?.last_scheduled?.signals[sym];
+  const cycleAt = snap?.cycle?.at ? Date.parse(snap.cycle.at) : NaN;
+  const scheduledAt = snap?.last_scheduled?.at ? Date.parse(snap.last_scheduled.at) : NaN;
+  const sameSlot = Number.isFinite(cycleAt) && Number.isFinite(scheduledAt)
+    && Math.floor(cycleAt / 300000) === Math.floor(scheduledAt / 300000);
+  if (!liveSignal || !scheduled || !sameSlot ||
+      snap?.cycle?.ai_state !== 'SKIPPED_SLOT_ALREADY_ANALYZED') {
+    return liveSignal;
+  }
+  return {
+    ...liveSignal,
+    ...scheduled,
+    score: liveSignal.score,
+    quant_action: liveSignal.quant_action,
+    strength: liveSignal.strength,
+    conviction: liveSignal.conviction,
+    plan: null,
+  };
 }
 
 function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
   sym: Sym; cycle?: IndexCycle; snap: Snapshot | null; current: boolean; elapsedMs: number; trade?: LiveTrade;
 }) {
   const [open, setOpen] = useState(false);
-  const signal = cycle?.signal;
+  const signal = currentScheduledSignal(snap, sym, cycle);
   const dataUnavailable = signal?.action === 'NO_TRADE' && signal.source === 'validation';
   const strengthAvailable = !!signal && !['validation', 'risk-management'].includes(signal.source);
   const strength = dataUnavailable ? 'Unavailable' : strengthAvailable ? signal?.strength : '—';
@@ -285,6 +338,10 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
   const statusLabel = trade
     ? trade.status === 'OPEN' ? `OPEN ${trade.option_type}` : trade.status.replace(/_/g, ' ')
     : dataUnavailable ? 'DATA UNAVAILABLE'
+      : isBuy && execution?.status === 'OFF' && snap?.runtime.live_execution_allowed
+        ? `${ACTION_STYLE[signal.action].label} · LIVE OFF`
+      : signal?.action === 'WAIT' && signal.approval_status === 'AI_SLOT_COMPLETE'
+        ? 'WAIT · AI SLOT COMPLETE'
       : signal?.action === 'WAIT' && signal.ai_action === null &&
         (signal.quant_action === 'BUY_CE' || signal.quant_action === 'BUY_PE')
         ? 'WAIT · AWAITING AI' : style.label;
@@ -301,8 +358,6 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
   const livePercent = livePoints != null && entry ? livePoints * 100 / entry : null;
   const trailPoints = trailing != null && entry != null ? trailing - entry : null;
   const trailPercent = trailPoints != null && entry ? trailPoints * 100 / entry : null;
-  const failedChecks = signal?.risk?.checks.filter((check) => !check.passed) ?? [];
-  const quantThreshold = num(typeof snap?.config.min_signal_score === 'number' ? snap.config.min_signal_score : null, 0);
 
   return (
     <div aria-label={`${sym} trade card`} className="autonomiq-card flex min-w-0 flex-col">
@@ -342,7 +397,8 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
             </>
           ) : proposal ? (
             <>
-              <div className={`font-bold ${execution?.status === 'ENTRY_PENDING' ? 'text-emerald-300' : 'text-amber-300'}`}>
+              <div className={`font-bold ${execution?.status === 'ENTRY_PENDING' ? 'text-emerald-300'
+                : execution?.status === 'UNFILLED' ? 'text-amber-300' : 'text-amber-300'}`}>
                 {execution?.status === 'ENTRY_PENDING' ? 'LIVE LIMIT SUBMITTED · FILL NOT CONFIRMED' :
                   snap?.runtime.live_execution_allowed && snap.runtime.live_trading_enabled
                     ? `LIVE ENTRY · ${execution?.status ?? 'CHECKING'}`
@@ -432,11 +488,8 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
         {cycle.errors.map((error) => <li key={error}>{error}</li>)}
       </ul> : null}
       {cycle && !dataUnavailable && <div className="mt-2 text-[12px] text-slate-400">
-        {`Quant ${num(cycle.quant.score, 0)} · entry needs ≥ +${quantThreshold} CE / ≤ -${quantThreshold} PE and AI agreement.`}
+        {`Quant ${num(cycle.quant.score, 0)} · entry needs ≥ +${num(typeof snap?.config.min_signal_score === 'number' ? snap.config.min_signal_score : null, 0)} CE / ≤ -${num(typeof snap?.config.min_signal_score === 'number' ? snap.config.min_signal_score : null, 0)} PE and AI agreement.`}
       </div>}
-      {failedChecks.length > 0 && <ul aria-label={`${sym} entry blockers`} className="mt-2 space-y-1 break-words text-[12px] text-amber-300">
-        {failedChecks.map((check) => <li key={check.name}>{check.name}: {check.detail || 'Not passed'}</li>)}
-      </ul>}
       <div className="autonomiq-card-footer mt-auto">
         <span className="autonomiq-card-time"><Clock3 aria-hidden="true" className="h-5 w-5 text-cyan-300" />{clock(signal?.timestamp)} IST</span>
         <button type="button" aria-expanded={open} aria-controls={open ? `autonomiq-${sym}-details` : undefined}
@@ -469,6 +522,14 @@ function SignalCard({ sym, cycle, snap, current, elapsedMs, trade }: {
           {proposal && <div>Δ {num(proposal.quote.delta ?? null)} · spread {num(proposal.quote.spread_pct ?? null)}% · estimated risk {inr(proposal.risk_rupees, 0)} ({proposal.lots}×{proposal.lot_size})</div>}
           {signal?.risks?.map((r) => <div key={r} className="text-amber-300">⚠ {r}</div>)}
           {cycle.errors.length > 0 && <div className="text-slate-400">Data issues: {cycle.errors.join(', ')}</div>}
+          {signal?.execution_trace?.length ? <ol aria-label={`${sym} execution trace`} className="mt-2 space-y-1 text-[12px]">
+            {signal.execution_trace.map((item) => <li key={item.stage} className="break-words">
+              <span className={`font-semibold ${item.state === 'PASS' || item.state === 'ENTRY_PENDING'
+                ? 'text-emerald-300' : item.state === 'BLOCKED' || item.state === 'OFF' ? 'text-rose-300' : 'text-amber-300'}`}>
+                {item.stage.toUpperCase()} · {item.state}
+              </span>{`: ${item.detail}`}
+            </li>)}
+          </ol> : null}
         </div>
       )}
     </div>
@@ -505,7 +566,7 @@ function LiveTradeTable({ trades, liveAvailable, snap }: { trades: LiveTrade[]; 
         })}
       </div>
       {snap?.cycle?.trigger === 'MANUAL' && <p className="mt-3 text-amber-300">
-        Manual refresh is disabled. Quant refreshes automatically every 30 seconds and Claude is requested only when a setup passes in an unused 5-minute slot.
+        Manual refresh is quant-only. New Quantum signals trigger one isolated AI risk review; the existing scheduled AI system remains separate.
       </p>}
       <p className="mt-2 text-slate-400">Next scheduled analysis: {clock(snap?.health.next_run_at)} IST.
         After an entry fill, AUTONOMIQ submits broker-side SL protection and manages trailing updates.</p>
@@ -621,7 +682,13 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
   const deploymentMode = typeof snap?.config.deployment_mode === 'string' ? snap.config.deployment_mode : 'local';
   const localLive = liveAvailable && deploymentMode === 'local';
   const aiState = snap?.health.ai_state ?? 'OFFLINE';
+  const aiStateTone = aiState === 'ACTIVE' ? 'good'
+    : aiState === 'DISABLED' || aiState === 'NOT_CONFIGURED' ? 'muted' : 'warn';
+  const aiStateLabel = aiState === 'AI_AUTHENTICATION_FAILED' ? 'KEY INVALID'
+    : aiState === 'CIRCUIT_OPEN' ? 'PAUSED' : aiState.replace(/_/g, ' ');
+  const analysisError = aiErrorMessage(snap?.health.ai_last_error ?? snap?.health.last_error ?? null);
   const analysisAIState = aiState === 'ACTIVE' ? cycle?.ai_state ?? aiState : aiState;
+  const aiOutputSanitized = cycle?.ai_state === 'AI_OUTPUT_SANITIZED';
   const analysisOn = !!runtime?.engine_enabled && analysisAIState === 'ACTIVE';
   const lastAICall = snap?.ai_usage.recent?.[0];
   const preOpen = snap?.session.phase === 'PRE_MARKET';
@@ -719,9 +786,10 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
         {/* Status bar */}
         <div aria-label="AUTONOMIQ system status" className="autonomiq-status-grid grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
           <StatusPill icon={isConnected ? Wifi : WifiOff} label="Zerodha" value={isConnected ? 'Connected' : 'Disconnected'} tone={isConnected ? 'good' : 'bad'} />
-          <StatusPill icon={Cpu} label="AI Engine" value={aiState.replace(/_/g, ' ')} tone={aiState === 'ACTIVE' ? 'good' : aiState === 'DISABLED' || aiState === 'NOT_CONFIGURED' ? 'muted' : 'warn'} />
+          <StatusPill icon={Cpu} label="AI Engine" value={aiStateLabel} tone={aiStateTone} />
           <StatusPill icon={Brain} label="AI Analysis"
-            value={analysisOn ? 'ON' : runtime?.engine_enabled ? analysisAIState.replace(/_/g, ' ') : 'OFF'}
+            value={analysisOn || aiOutputSanitized ? aiOutputSanitized ? 'SANITIZED' : 'ON'
+              : runtime?.engine_enabled ? analysisAIState.replace(/_/g, ' ') : 'OFF'}
             tone={analysisOn ? 'good' : runtime?.engine_enabled ? 'warn' : 'muted'} />
           <StatusPill icon={Lock} label="Live Trade"
             value={!liveAvailable ? 'DISABLED' : liveEnabled ? 'ON' : 'OFF'}
@@ -747,8 +815,8 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
             <div aria-label="AI execution diagnostics" className="autonomiq-diagnostics flex min-w-0 flex-wrap break-words text-slate-300">
               <span>Last AI request: {lastAICall ? `${clock(lastAICall.created_at)} IST · ${lastAICall.model} · ${lastAICall.status}` : 'No recorded request'}</span>
               <span>Next slot: {clock(snap?.health.next_run_at)} IST</span>
-              {(snap?.health.ai_last_error || snap?.health.last_error) && <span className="text-amber-300">
-                Analysis error: {snap.health.ai_last_error || snap.health.last_error}
+              {analysisError && <span className="text-amber-300">
+                AI notice: {analysisError}
               </span>}
             </div>
             <div className="autonomiq-spot-grid grid min-w-0 grid-cols-1 gap-5 md:grid-cols-3">
@@ -828,7 +896,7 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
         {tab === 'analysis' && (
           <>
           <div aria-label="Analysis refresh cadence" className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 break-words text-[13px] text-slate-300">
-            <span>Quant refreshes automatically every 30 seconds. Claude analysis runs only for quant-passed setups, once per 5-minute slot.</span>
+            <span>Quantum is polled every 5 seconds, but AI runs only when a new signal fingerprint appears. Scheduled 5-minute AI analysis remains independent.</span>
             <span>Green quant scores are not entry approval. AI agreement, risk validation and broker checks are separate gates.</span>
             <span>{`Next cycle: ${clock(snap?.health.next_run_at)} IST`}</span>
           </div>
@@ -904,7 +972,7 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
                 Local live execution is configured. This computer can place REAL Zerodha orders after you turn ON.
                 Disable production entries first; run only one live executor per account. Your local outbound IP must be permitted by Zerodha.
               </p>}
-              <ControlRow label="Analysis engine" hint="Runs Claude Fable analysis from 09:00–15:20 IST every 5 minutes, subject to AI budget and availability">
+              <ControlRow label="Analysis engine" hint="Scheduled 5-minute AI analysis plus isolated AI risk reviews for newly generated Quantum signals">
                 <Toggle label="Engine enabled" on={snap.runtime.engine_enabled} disabled={busy}
                   onClick={() => act('/api/autonomiq-pro/control', { engine_enabled: !snap.runtime.engine_enabled })} />
               </ControlRow>
@@ -944,7 +1012,7 @@ function AutonomiqProSection({ marketData, isConnected = false }: { marketData?:
                   </div>
                 ))}
               </dl>
-              {snap.health.ai_last_error && <p className="mt-2 text-[14px] text-amber-300">Last AI error: {snap.health.ai_last_error}</p>}
+              {analysisError && <p className="mt-2 text-[14px] text-amber-300">{analysisError}</p>}
             </div>
           </div>
         )}

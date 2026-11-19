@@ -34,6 +34,7 @@ class LiveOrderExecutor:
         self.store = store
         self.collector = collector
         self._lock = asyncio.Lock()
+        self._account_id: str | None = None
 
     async def preflight(self, cfg: AutonomiqConfig) -> dict:
         if not cfg.live_execution_allowed:
@@ -45,6 +46,7 @@ class LiveOrderExecutor:
             if not cfg.live_execution_allowed:
                 raise LiveExecutionBlocked(LIVE_EXECUTION_DISABLED_REASON)
             account = await asyncio.to_thread(self._preflight_sync)
+            self._account_id = account["account_id"]
             self.store.set_state("live_trading_enabled", True)
             self.store.audit("owner", "live_trading_enabled", {"account_id": account["account_id"]})
             return account
@@ -52,6 +54,7 @@ class LiveOrderExecutor:
     async def deactivate(self, cfg: AutonomiqConfig) -> None:
         async with self._lock:
             self.store.set_state("live_trading_enabled", False)
+            self._account_id = None
             self.store.audit("owner", "live_trading_disabled", {})
             if not cfg.live_execution_allowed:
                 return
@@ -104,7 +107,8 @@ class LiveOrderExecutor:
                 return {"status": "BLOCKED", "detail": "Outside the AUTONOMIQ entry session"}
             if decision.get("action") not in ("BUY_CE", "BUY_PE") or decision.get("source") != "ai+quant":
                 return {"status": "BLOCKED", "detail": "A reconciled AI and quant BUY decision is required"}
-            if not (decision.get("risk") or {}).get("approved"):
+            approval = decision.get("approval_status")
+            if approval not in ("PENDING_RISK", "APPROVED") and not (decision.get("risk") or {}).get("approved"):
                 failed = [f"{check['name']}: {check.get('detail') or 'Not passed'}"
                           for check in (decision.get("risk") or {}).get("checks", []) if not check["passed"]]
                 return {"status": "BLOCKED", "detail": "; ".join(failed)
@@ -138,10 +142,12 @@ class LiveOrderExecutor:
             return {"status": "BLOCKED", "detail": "AUTONOMIQ already has an open or pending position for this index"}
 
         kite = self.collector.gateway.client()
-        profile = kite.profile()
-        account_id = str(profile.get("user_id") or "")
+        account_id = self._account_id
         if not account_id:
-            return {"status": "BLOCKED", "detail": "Zerodha account identity is unavailable"}
+            profile = kite.profile()
+            account_id = str(profile.get("user_id") or "")
+            if not account_id:
+                return {"status": "BLOCKED", "detail": "Zerodha account identity is unavailable"}
         orders, positions = kite.orders(), kite.positions()
         active_positions = [trade for trade in live_rows if int(trade.get("entry_filled") or 0)
                             > int(trade.get("exit_filled") or 0)]
@@ -198,9 +204,22 @@ class LiveOrderExecutor:
                 symbol, exchange, tradingsymbol, datetime.now(IST))
         except (KiteException, ValueError, KeyError) as exc:
             logger.warning("AUTONOMIQ PRO hybrid entry history unavailable for %s: %s", symbol, exc)
-            return {"status": "BLOCKED", "detail": f"Hybrid entry history unavailable: {str(exc)[:240]}"}
+            detail = f"Hybrid entry history unavailable: {str(exc)[:240]}"
+            return {"status": "BLOCKED", "detail": detail, "risk_checks": [
+                {"name": "Execution plan", "passed": False, "detail": detail},
+            ]}
         quote_key = f"{exchange}:{tradingsymbol}"
-        quote = kite.quote([quote_key]).get(quote_key) or {}
+        quote_now = datetime.now(IST)
+        quote = self.collector.cached_option_quote(exchange, tradingsymbol, quote_now)
+        streamed_at = parse_ts(quote.get("timestamp")) if isinstance(quote, dict) else None
+        streamed_depth = quote.get("depth") if isinstance(quote, dict) else None
+        streamed_age = (quote_now - streamed_at).total_seconds() if streamed_at else None
+        if (not isinstance(quote, dict)
+                or streamed_age is None or streamed_age < -3
+                or streamed_age > min(5, cfg.max_option_quote_age_seconds)
+                or _best_price((streamed_depth or {}).get("buy")) <= 0
+                or _best_price((streamed_depth or {}).get("sell")) <= 0):
+            quote = kite.quote([quote_key]).get(quote_key) or {}
         quote_at = parse_ts(quote.get("timestamp"))
         age = (datetime.now(IST) - quote_at).total_seconds() if quote_at else None
         depth = quote.get("depth") or {}
@@ -229,7 +248,10 @@ class LiveOrderExecutor:
                 option_candles=option_candles, cfg=cfg, tick_size=tick_size)
         except (ValueError, KeyError, TypeError) as exc:
             logger.warning("AUTONOMIQ PRO hybrid entry blocked for %s: %s", symbol, exc)
-            return {"status": "BLOCKED", "detail": f"Hybrid entry validation: {str(exc)[:240]}"}
+            detail = f"Hybrid entry validation: {str(exc)[:240]}"
+            return {"status": "BLOCKED", "detail": detail, "risk_checks": [
+                {"name": "Execution plan", "passed": False, "detail": detail},
+            ]}
         risk_points, stop = levels["risk"], levels["stop_loss"]
         target1, target2 = levels["target1"], levels["target2"]
         estimated_slippage = max((ask - bid) * lot_size, entry * lot_size * cfg.max_exit_slippage_pct / 100)
@@ -251,6 +273,15 @@ class LiveOrderExecutor:
             return {"status": "BLOCKED", "detail": detail, "risk_checks": [
                 {"name": "Live execution risk", "passed": False, "detail": detail},
             ]}
+        passed_risk = [{
+            "name": "Live execution risk", "passed": True,
+            "detail": f"Estimated loss ₹{risk.estimated_loss():,.2f} within configured limits",
+        }]
+        if not self.store.get_state("live_trading_enabled", False):
+            return {
+                "status": "OFF", "detail": "Owner live-trading switch is OFF",
+                "risk_checks": passed_risk,
+            }
 
         try:
             available = float(kite.margins("equity")["available"]["cash"])
@@ -315,8 +346,11 @@ class LiveOrderExecutor:
         self.store.audit("autonomiq-pro", "live_entry_submitted", {
             "trade_id": trade_id, "order_id": str(order_id), "tag": tag + "E",
         })
-        return {"status": "ENTRY_PENDING", "trade_id": trade_id, "order_id": str(order_id),
-                "detail": "One-lot marketable limit submitted; fill is not guaranteed"}
+        return {
+            "status": "ENTRY_PENDING", "trade_id": trade_id, "order_id": str(order_id),
+            "detail": "One-lot marketable limit submitted; fill is not guaranteed",
+            "risk_checks": passed_risk,
+        }
 
     def _reject_entry(self, trade_id: int, symbol: str, detail: str, now: datetime) -> dict:
         self.store.update_live_trade(
@@ -420,8 +454,23 @@ class LiveOrderExecutor:
             if mark is not None:
                 self.store.update_live_trade(trade["id"], **mark)
 
+    def mark_trade_rows(self, trades: list[dict], cfg: AutonomiqConfig, now: datetime) -> list[dict]:
+        for trade in trades:
+            mark = self.quote_mark(trade, cfg, now)
+            if mark is not None:
+                trade.update(mark)
+        return trades
+
     def _manage_sync(self, cfg: AutonomiqConfig, now: datetime, square_off) -> None:
         trades = self.store.open_live_trades(limit=10000)
+        repair_rows = [
+            trade for trade in self.store.live_trades(limit=100)
+            if trade.get("status") in {"UNFILLED", "REJECTED"}
+            and trade.get("day") == now.strftime("%Y-%m-%d")
+            and trade.get("entry_order_id")
+            and not trade.get("error")
+        ]
+        trades = [*trades, *repair_rows]
         if not trades:
             self._enforce_daily_loss(cfg, now)
             return
@@ -469,6 +518,24 @@ class LiveOrderExecutor:
             filled = int(entry.get("filled_quantity") or 0)
             avg = float(entry.get("average_price") or trade.get("entry_price") or 0)
             status = _order_status(entry)
+            if (trade["status"] in {"UNFILLED", "REJECTED"} and not filled
+                    and not trade.get("error") and status in TERMINAL_ORDERS):
+                detail = str(entry.get("status_message") or (
+                    "IOC entry cancelled without a fill" if status == "CANCELLED"
+                    else "Broker rejected the entry"
+                ))[:300]
+                self.store.update_live_trade(
+                    trade["id"], error=detail, last_broker_sync=now.isoformat(),
+                )
+                self.store.audit("autonomiq-pro", "entry_terminal_reason_repaired", {
+                    "trade_id": trade["id"], "order_id": entry_id, "status": trade["status"],
+                    "detail": detail,
+                })
+                self.store.add_alert(
+                    "warning", f"AUTONOMIQ {trade['tradingsymbol']} "
+                    f"{trade['status']}: {detail}", trade["symbol"],
+                )
+                return
             if (entry_id != trade.get("entry_order_id")
                     or filled != int(trade.get("entry_filled") or 0)
                     or (status in TERMINAL_ORDERS and trade["status"] in {
@@ -490,12 +557,19 @@ class LiveOrderExecutor:
                     fields["error"] = str(entry.get("status_message") or "Entry rejected")[:300]
                 elif not filled and status == "CANCELLED":
                     fields["status"] = "UNFILLED"
+                    fields["error"] = str(
+                        entry.get("status_message") or "IOC entry cancelled without a fill"
+                    )[:300]
                 self.store.update_live_trade(trade["id"], **fields)
                 trade.update(fields)
                 if fields.get("status") in {"REJECTED", "UNFILLED"}:
                     detail = fields.get("error") or "IOC entry cancelled without a fill"
                     self.store.add_alert("warning", f"AUTONOMIQ {trade['tradingsymbol']} "
                                          f"{fields['status']}: {detail}", trade["symbol"])
+                    self.store.audit("autonomiq-pro", "entry_reconciled_terminal", {
+                        "trade_id": trade["id"], "symbol": trade["symbol"],
+                        "status": fields["status"], "order_id": entry_id, "detail": detail,
+                    })
                 if filled and status not in TERMINAL_ORDERS:
                     try:
                         kite.cancel_order(variety=entry.get("variety") or "regular", order_id=entry["order_id"])
