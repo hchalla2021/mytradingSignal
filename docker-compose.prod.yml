@@ -32,6 +32,10 @@ services:
       # Override with container-specific settings
       - PORT=8000
       - HOST=0.0.0.0
+      - DEBUG=false
+      - FRONTEND_URL=${PRODUCTION_FRONTEND_URL:-https://mydailytradesignals.com}
+      - CORS_ORIGINS=${PRODUCTION_CORS_ORIGINS:-https://mydailytradesignals.com}
+      - REDIRECT_URL=${PRODUCTION_REDIRECT_URL:-https://mydailytradesignals.com/api/auth/callback}
       - AUTONOMIQ_PRO_DEPLOYMENT_MODE=production
       - AQTE_LIVE_DEPLOYMENT_MODE=production
       - QUANTUMEDGE_DEPLOYMENT_MODE=production

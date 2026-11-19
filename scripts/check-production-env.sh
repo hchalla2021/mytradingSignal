@@ -26,22 +26,35 @@ enabled() {
     esac
 }
 
-# Unset URLs fall back to the production domain in config.Settings.
+# docker-compose.prod.yml overrides all four values below with production-safe
+# settings, so localhost values in a shared development .env are harmless at runtime.
 for key in FRONTEND_URL REDIRECT_URL; do
     url="$(setting "$key")"
     case "$url" in
         "") ;;
-        *localhost*|*127.0.0.1*|*0.0.0.0*) fail "$key points to a local address; use the public production URL" ;;
+        *localhost*|*127.0.0.1*|*0.0.0.0*) warn "$key is local in $env_file; docker-compose.prod.yml overrides it for production" ;;
         https://*) ;;
         *) warn "$key is not https; owner login and Kite redirect expect the public https URL" ;;
     esac
 done
 
+cors="$(setting CORS_ORIGINS)"
+if [ -n "$cors" ]; then
+    case "$cors" in
+        *localhost*|*127.0.0.1*|*0.0.0.0*) warn "CORS_ORIGINS is local in $env_file; docker-compose.prod.yml overrides it for production" ;;
+    esac
+fi
+if enabled DEBUG; then
+    warn "DEBUG is true in $env_file; docker-compose.prod.yml overrides it with DEBUG=false"
+fi
+
 if enabled AQTE_LIVE_ENABLED; then
     if [ -n "$(setting FORCE_OUTBOUND_IPV4)" ] && ! enabled FORCE_OUTBOUND_IPV4; then
         warn "FORCE_OUTBOUND_IPV4 is not true; Auto Trade ON preflight will be refused"
     fi
-    expected="$(setting AQTE_LIVE_STATIC_IP)"
+    # docker-compose.prod.yml always forces production mode.
+    expected="$(setting AQTE_LIVE_PRODUCTION_STATIC_IP)"
+    [ -n "$expected" ] || expected="$(setting AQTE_LIVE_STATIC_IP)"
     actual="$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
     if [ -z "$expected" ]; then
         warn "AQTE_LIVE_STATIC_IP is not set; the built-in default will not match this server"
