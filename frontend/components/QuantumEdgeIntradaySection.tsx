@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, BarChart3, Bot, Layers3, Pencil,
-  ShieldCheck, Sparkles, Zap,
+  Activity, AlertTriangle, BarChart3, Bot, Coins, Crosshair, Layers3, Pencil,
+  Settings, ShieldCheck, Sparkles, TrendingUp, Zap,
 } from 'lucide-react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import type { MarketData } from '@/hooks/useMarketSocket';
+import QuantumEdgeMiniChart from './QuantumEdgeMiniChart';
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 type SymbolName = (typeof SYMBOLS)[number];
@@ -207,6 +208,9 @@ export default function QuantumEdgeIntradaySection({
   }, [apply, draft, snapshot]);
 
   const stale = !snapshot || Date.now() / 1000 - snapshot.generated_at > 10;
+  const marketStatusClass = snapshot?.market_phase === 'NORMAL' ? 'qe-market-open'
+    : ['PRE_OPEN', 'AUCTION_FREEZE', 'CLOSING_AUCTION', 'POST_MARKET'].includes(snapshot?.market_phase ?? '')
+      ? 'qe-market-transition' : 'qe-market-closed';
   const active = snapshot?.active ?? null;
   const opportunities = useMemo(() => SYMBOLS.map(symbol => {
     const signal = snapshot?.signals[symbol];
@@ -232,6 +236,36 @@ export default function QuantumEdgeIntradaySection({
               : snapshot?.market_phase === 'POST_MARKET' ? 'POST-MARKET' : 'CLOSED'),
     };
   }), [snapshot]);
+  const [opportunityUpdatedAt, setOpportunityUpdatedAt] =
+    useState<Partial<Record<SymbolName, number>>>({});
+  const previousOpportunityValues = useRef<Partial<Record<SymbolName, string>>>({});
+  const hasOpportunityBaseline = useRef(false);
+  useEffect(() => {
+    if (!snapshot) return;
+    const changedAt: Partial<Record<SymbolName, number>> = {};
+    for (const item of opportunities) {
+        const signature = JSON.stringify({
+          side: item.side,
+          premium: item.premium,
+          confidence: item.confidence,
+          status: item.status,
+          reason: item.reason,
+          strategy: item.signal?.strategy_name,
+          contract: item.signal?.contract?.trading_symbol,
+          priceAction: item.signal?.price_action,
+          ml: item.ai?.ml && [item.ai.ml.state, item.ai.ml.score],
+        });
+        if (hasOpportunityBaseline.current
+          && previousOpportunityValues.current[item.symbol] !== signature) {
+          changedAt[item.symbol] = Date.now();
+        }
+        previousOpportunityValues.current[item.symbol] = signature;
+    }
+    hasOpportunityBaseline.current = true;
+    if (Object.keys(changedAt).length) {
+        setOpportunityUpdatedAt(previous => ({ ...previous, ...changedAt }));
+    }
+  }, [opportunities, snapshot]);
 
   const pending = opportunities.find(item => item.side && item.status === 'ENTRY_BLOCKED')
     ?? opportunities.find(item => item.side && item.status === 'AI_APPROVED');
@@ -281,18 +315,22 @@ export default function QuantumEdgeIntradaySection({
       <td className={tone}><span className="qe-position-value">{returnLabel(tradeReturn(trade))}</span></td>
       <td className="qe-position-status"><span className="qe-position-value">• LIVE</span></td>
     </tr>;
-  }) : <tr className="qe-empty-row"><td colSpan={12}>No QuantumEdge-owned live positions.</td></tr>, [positions]);
+  }) : <tr className="qe-empty-row"><td colSpan={12}>
+    <span className="qe-empty-icon"><Layers3 aria-hidden="true" /></span>
+    <span>No open algo positions</span>
+    <small>QuantumEdge positions will appear here after a confirmed fill.</small>
+  </td></tr>, [positions]);
 
   return <section aria-label="QuantumEdge IntraDay Algo" className="qe-shell">
     <header className="qe-topbar">
       <div className="qe-brand">
-        <BarChart3 aria-hidden="true" />
-        <strong>QuantumEdge <span>IntraDay</span></strong>
-        <i />
-        <div className="qe-title">
-          <h2><span className="sr-only">QuantumEdge IntraDay Algo — Intraday Algo | CE / PE</span>INTRADAY ALGO | CE / PE</h2>
-          <p>Python Rules + Price Action + Claude{snapshot?.ai.ml?.ready && snapshot.ai.ml.mode !== 'off'
-            ? ` + LightGBM (${snapshot.ai.ml.mode})` : ''} • NIFTY • BANK NIFTY • SENSEX</p>
+        <span className="qe-brand-icon" aria-hidden="true">
+          <BarChart3 className="qe-brand-bars" />
+          <TrendingUp className="qe-brand-trend" />
+        </span>
+        <div className="qe-brand-copy">
+          <h2 className="qe-brand-title">QuantumEdge <span>Intraday</span></h2>
+          <p>Python Rules • Price Action • AI Analysis • NIFTY • BANK NIFTY • SENSEX</p>
         </div>
       </div>
       <div className="qe-top-controls">
@@ -307,16 +345,18 @@ export default function QuantumEdgeIntradaySection({
           <Zap /> <span><small>Zerodha</small><b>{snapshot?.zerodha_connected ? 'Connected' : 'Reconnect required'}</b></span>
         </span>
         <span className="qe-status" title={snapshot?.market_detail ?? ''}>
-          <i className={snapshot?.market_phase === 'NORMAL' ? '' : 'qe-session-muted'} />
-          Market <b>{snapshot?.market_phase === 'NORMAL' ? 'OPEN'
+          <i className={marketStatusClass} />
+          <span className="qe-status-copy"><span>Market</span><b className={marketStatusClass}>{snapshot?.market_phase === 'NORMAL' ? 'OPEN'
             : snapshot?.market_phase === 'PRE_OPEN' ? 'PRE-OPEN'
               : snapshot?.market_phase === 'AUCTION_FREEZE' ? 'AUCTION'
                 : snapshot?.market_phase === 'CLOSING_AUCTION' ? 'CLOSE AUCTION'
-                  : snapshot?.market_phase === 'POST_MARKET' ? 'POST-MARKET' : 'CLOSED'}</b>
+                  : snapshot?.market_phase === 'POST_MARKET' ? 'POST-MARKET' : 'CLOSED'}</b></span>
         </span>
         <span className="qe-clock">{new Date(clock).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })} IST</span>
         <button type="button" className="qe-gear" aria-label="QuantumEdge settings"
-          onClick={() => document.getElementById('qe-index-controls')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>⚙</button>
+          onClick={() => document.getElementById('qe-index-controls')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
+          <Settings aria-hidden="true" />
+        </button>
       </div>
     </header>
 
@@ -377,11 +417,24 @@ export default function QuantumEdgeIntradaySection({
 
     <div className="qe-main-grid">
       <section className="qe-panel qe-active" aria-label="QuantumEdge active trade">
-        <div className="qe-panel-head">
-          <h3><i /> ACTIVE TRADE</h3>
-          <span>{active ? `${active.state.replaceAll('_', ' ')} · ${activeSymbolLabel(active)}`
-            : pending ? `${displayName(pending.symbol)} · ${pending.status === 'ENTRY_BLOCKED' ? 'ENTRY BLOCKED' : 'AI APPROVED · NO ORDER YET'}`
-            : 'WAITING FOR QUALIFIED SIGNAL'}</span>
+        <div className="qe-active-heading">
+          <div className="qe-opp-heading qe-active-title">
+            <span className="qe-opp-icon"><Activity aria-hidden="true" /></span>
+            <div>
+              <h3>ACTIVE <span>TRADE</span></h3>
+              <p>Live position and risk overview</p>
+            </div>
+          </div>
+          <div className="qe-active-actions">
+            <span className="qe-active-state">{active ? `${active.state.replaceAll('_', ' ')} · ${activeSymbolLabel(active)}`
+              : pending ? `${displayName(pending.symbol)} · ${pending.status === 'ENTRY_BLOCKED' ? 'ENTRY BLOCKED' : 'AI APPROVED · NO ORDER YET'}`
+              : 'WAITING FOR QUALIFIED SIGNAL'}</span>
+            <button type="button" className="qe-square-off" disabled={!active || busy || stale}
+              onClick={() => active && window.confirm(`Square off QuantumEdge trade ${active.contract.trading_symbol}?`)
+                && void apply('exit', { trade_id: active.id })}>
+              ■ &nbsp; SQUARE OFF
+            </button>
+          </div>
         </div>
         <div className="qe-trade-identity">
           <strong className={active?.contract.trading_symbol.endsWith('PE') ? 'qe-pe' : ''}>
@@ -401,20 +454,35 @@ export default function QuantumEdgeIntradaySection({
           </div>
           <div className="qe-track-labels"><span>{money(active?.stop)}<small>(SL)</small></span><span>{money(active?.target)}<small>(Target)</small></span></div>
         </div>
-        <button type="button" className="qe-square-off" disabled={!active || busy || stale}
-          onClick={() => active && window.confirm(`Square off QuantumEdge trade ${active.contract.trading_symbol}?`)
-            && void apply('exit', { trade_id: active.id })}>
-          ■ &nbsp; SQUARE OFF
-        </button>
+        <QuantumEdgeMiniChart marketData={marketData} />
       </section>
 
       <section className="qe-panel qe-opportunities" aria-label="QuantumEdge live opportunities">
-        <div className="qe-panel-head"><h3><Zap /> LIVE OPPORTUNITIES (AUTO)</h3></div>
+        <div className="qe-opp-heading">
+          <span className="qe-opp-icon"><Zap aria-hidden="true" /></span>
+          <div>
+            <h3>LIVE OPPORTUNITIES <span>(AUTO)</span></h3>
+            <p>Auto-detected trading opportunities across major indices</p>
+          </div>
+        </div>
         <table className="qe-opp-table" role="table" aria-label="Index opportunities">
-          <thead role="rowgroup"><tr role="row">{['Index', 'Signal', 'Premium', 'Confidence', 'Status'].map(label =>
-            <th key={label} role="columnheader" scope="col">{label}</th>)}</tr></thead>
-          <tbody role="rowgroup">{opportunities.map(item => <tr key={item.symbol} role="row">
-            <th scope="row" role="rowheader"><i aria-hidden="true" /> {displayName(item.symbol)}</th>
+          <thead role="rowgroup"><tr role="row">{[
+            { label: 'Index', Icon: Layers3 }, { label: 'Signal', Icon: Crosshair },
+            { label: 'Premium', Icon: Coins }, { label: 'Confidence', Icon: BarChart3 },
+            { label: 'Status', Icon: Activity },
+          ].map(({ label, Icon }) =>
+            <th key={label} role="columnheader" scope="col"><span><Icon aria-hidden="true" />{label}</span></th>)}</tr></thead>
+          <tbody role="rowgroup">{opportunities.map(item => {
+            const updatedAt = opportunityUpdatedAt[item.symbol];
+            return <tr key={item.symbol} role="row">
+            <th scope="row" role="rowheader">
+              <span className="qe-opp-symbol"><i aria-hidden="true" />{displayName(item.symbol)}</span>
+              {updatedAt != null && <small className="qe-opp-updated">
+                UPDATED {new Date(updatedAt).toLocaleTimeString('en-IN', {
+                  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+                })}
+              </small>}
+            </th>
             <td role="cell"><span className="qe-opp-mobile-label" aria-hidden="true">Signal</span><span className={item.side === 'PE' ? 'qe-side-pe' : item.side === 'CE' ? 'qe-side-ce' : 'qe-side-wait'}>{item.side ?? '—'}</span></td>
             <td role="cell"><span className="qe-opp-mobile-label" aria-hidden="true">Premium</span><span className="qe-opp-premium" title={money(item.premium)}>{money(item.premium)}</span></td>
             <td role="cell" className="qe-confidence-cell"><span className="qe-opp-mobile-label" aria-hidden="true">Confidence</span><span>{item.confidence == null ? '—' : `${number(item.confidence, 0)}%`}</span><i aria-hidden="true"><b style={{ width: `${item.confidence ?? 0}%` }} /></i></td>
@@ -432,13 +500,21 @@ export default function QuantumEdgeIntradaySection({
               {item.ai?.ml?.score != null && <small className="qe-wait-reason">LightGBM {number(item.ai.ml.score, 3)} · {item.ai.ml.state}</small>}
               </div>
             </td>
-          </tr>)}</tbody>
+          </tr>;
+          })}</tbody>
         </table>
       </section>
     </div>
 
     <section className="qe-positions" aria-label="QuantumEdge positions">
-      <div className="qe-positions-head"><h3><Layers3 /> <i /> ALGO POSITIONS (LIVE)</h3>
+      <div className="qe-positions-head">
+        <div className="qe-positions-title">
+          <span className="qe-positions-icon"><Layers3 aria-hidden="true" /></span>
+          <div>
+            <h3>ALGO POSITIONS <span>(LIVE)</span></h3>
+            <p>Real-time automated exposure and performance</p>
+          </div>
+        </div>
         <dl className="qe-positions-summary" aria-label="QuantumEdge position summary">
           <div className="qe-summary-card qe-summary-realized">
             <dt>Realized P&L</dt>

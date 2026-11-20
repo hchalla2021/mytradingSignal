@@ -170,7 +170,7 @@
         "riskRewardRatio": 0.9
       }
     },
-    "dataSource": "LIVE",
+    "dataSource": "MARKET_CLOSED",
     "timestamp": "2026-11-20T15:13:06.219322+05:30"
   },
   "BANKNIFTY": {
@@ -349,7 +349,7 @@
         "riskRewardRatio": 0.84
       }
     },
-    "dataSource": "LIVE",
+    "dataSource": "MARKET_CLOSED",
     "timestamp": "2026-11-20T15:13:06.221368+05:30"
   },
   "SENSEX": {
@@ -523,7 +523,7 @@
         "riskRewardRatio": 0.9
       }
     },
-    "dataSource": "LIVE",
+    "dataSource": "MARKET_CLOSED",
     "timestamp": "2026-11-20T15:13:06.222732+05:30"
   }
 }

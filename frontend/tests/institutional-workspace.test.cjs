@@ -36,6 +36,7 @@ function harness(filename, imports = {}, initialStates = [], runtime = {}) {
       if (id === 'react') return react;
       if (id === 'react/jsx-runtime') return require(id);
       if (id === 'next/dynamic') return () => function DynamicComponent() {};
+      if (id === './QuantumEdgeMiniChart') return function QuantumEdgeMiniChart() {};
       if (id.endsWith('.module.css')) return {};
       if (id in imports) return imports[id];
       throw new Error(`Unexpected import ${id}`);
@@ -105,7 +106,8 @@ test('QuantumEdge is first, then AQTE, charts and live indices without duplicate
 
 test('QuantumEdge dashboard is autonomous and uses independent index controls', () => {
   const source = readFileSync(path.join(components, 'QuantumEdgeIntradaySection.tsx'), 'utf8');
-  assert.match(source, /QuantumEdge IntraDay Algo — Intraday Algo \| CE \/ PE/);
+  assert.match(source, /QuantumEdge <span>Intraday<\/span>/);
+  assert.match(source, /Python Rules • Price Action • AI Analysis • NIFTY • BANK NIFTY • SENSEX/);
   assert.match(source, /QuantumEdge master auto live/);
   assert.match(source, /independent engine/);
   assert.match(source, /Risk \/ lot/);
@@ -123,8 +125,50 @@ test('QuantumEdge dashboard is autonomous and uses independent index controls', 
   assert.doesNotMatch(source, /MANUAL ORDER|PLACE ORDER/);
   const css = readFileSync(path.join(components, '..', 'app', 'globals.css'), 'utf8');
   assert.match(css, /\.qe-shell\s*\{[^}]*isolation:\s*isolate/s);
+  assert.match(css, /\.qe-topbar\s*\{[^}]*border:\s*1px solid #35e676/s);
   assert.match(css, /grid-template-columns:\s*auto minmax\(44px, 72px\) auto minmax\(72px, 1fr\) auto/);
   assert.match(css, /max-width:\s*420px/);
+});
+
+test('QuantumEdge market status is green when open and red when closed', () => {
+  for (const [phase, label, tone] of [
+    ['NORMAL', 'OPEN', 'qe-market-open'],
+    ['CLOSED', 'CLOSED', 'qe-market-closed'],
+  ]) {
+    const snapshot = { generated_at: Date.now() / 1000, market_phase: phase,
+      indices: {}, signals: {}, ai: { last_result: {} }, positions: [] };
+    const h = harness('QuantumEdgeIntradaySection.tsx', {
+      'lucide-react': require('lucide-react'),
+      '@/lib/api-config': { API_CONFIG: {} },
+      '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
+    }, [snapshot]);
+    const status = elements(h.render({})).find(node => node.props?.className === 'qe-status');
+    const labelNode = elements(status).find(node => node.type === 'b');
+    assert.equal(labelNode.props.children, label);
+    assert.equal(labelNode.props.className, tone);
+  }
+});
+
+test('QuantumEdge active panel keeps Square Off above its historical candlestick chart', () => {
+  const source = readFileSync(path.join(components, 'QuantumEdgeIntradaySection.tsx'), 'utf8');
+  const chart = readFileSync(path.join(components, 'QuantumEdgeMiniChart.tsx'), 'utf8');
+  const css = readFileSync(path.join(components, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(source, /className="qe-active-actions"[\s\S]*?className="qe-square-off"/);
+  assert.match(source, /<QuantumEdgeMiniChart marketData=\{marketData\} \/>/);
+  assert.match(chart, /useChartHistory\(symbol, timeframe\)/);
+  assert.match(chart, /addCandlestickSeries/);
+  assert.match(chart, /addHistogramSeries/);
+  assert.match(chart, /history\.jumpToDate\(dateInput\)/);
+  assert.match(chart, /history\.loadOlder\(\)/);
+  assert.match(chart, /ema\(candles, 9\)/);
+  assert.match(chart, /ema\(candles, 20\)/);
+  assert.match(chart, /ema\(candles, 50\)/);
+  assert.match(chart, /vwap\(candles\)/);
+  assert.match(chart, /rsi\(candles, 14\)/);
+  assert.match(chart, /aria-label="Choose chart index"/);
+  assert.match(css, /\.qe-mini-index-tabs\s*\{[^}]*repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(css, /\.qe-mini-plot\s*\{[^}]*height:\s*270px/);
+  assert.match(css, /@container qe-active \(max-width: 480px\)/);
 });
 
 test('QuantumEdge shows signal, AI rejection and execution blockers without hover', () => {
@@ -145,12 +189,24 @@ test('QuantumEdge shows signal, AI rejection and execution blockers without hove
     '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
   }, [snapshot]);
   const nodes = elements(h.render({}));
+  const heading = nodes.find(node => node.props?.className === 'qe-opp-heading');
+  assert.ok(heading);
+  assert.ok(elements(heading).some(node => node.type === 'p'
+    && node.props.children === 'Auto-detected trading opportunities across major indices'));
+  const table = nodes.find(node => node.props?.['aria-label'] === 'Index opportunities');
+  assert.deepEqual(elements(table).filter(node => node.type === 'th' && node.props.scope === 'col')
+    .map(node => node.props.children.props.children[1]), ['Index', 'Signal', 'Premium', 'Confidence', 'Status']);
+  assert.equal(elements(table).filter(node => node.props?.className === 'qe-opp-details').length, 3);
+  assert.equal(elements(table).filter(node => node.props?.className === 'qe-opp-symbol').length, 3);
   const reasons = nodes.filter(node => node.props?.className === 'qe-wait-reason');
   assert.deepEqual(reasons.map(node => node.props.children).filter(value => typeof value === 'string'), [
     'Trend and breakout are not aligned', 'Claude returned an invalid decision', 'Opening Range Breakout',
     'Daily loss budget exceeded',
   ]);
   assert.ok(nodes.some(node => node.type === 'em' && node.props.children === 'AI REVIEW UNAVAILABLE'));
+  const source = readFileSync(path.join(components, 'QuantumEdgeIntradaySection.tsx'), 'utf8');
+  assert.match(source, /UPDATED \{new Date\(updatedAt\)/);
+  assert.match(source, /strategy: item\.signal\?\.strategy_name/);
   assert.ok(reasons.some(node => node.props.children.includes(
     'Upside 5-bar break · Bullish displacement · Bullish FVG 201.00–205.00')));
   assert.ok(nodes.some(node => node.type === 'b' && node.props.children === 'Daily loss budget exceeded'));
@@ -259,6 +315,25 @@ test('QuantumEdge position summary keeps realized P&L separate and never shows a
     assert.equal(open.props.className, expectedTone);
     assert.equal(count.props.children, String(marks.length));
   }
+});
+
+test('QuantumEdge positions panel has its own live header and helpful empty state', () => {
+  const { render } = harness('QuantumEdgeIntradaySection.tsx', {
+    'lucide-react': require('lucide-react'),
+    '@/lib/api-config': { API_CONFIG: {} },
+    '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
+  }, [{ generated_at: Date.now() / 1000, indices: {}, signals: {}, ai: { last_result: {} },
+    positions: [], daily_pnl: 0 }]);
+  const nodes = elements(render({}));
+  const title = nodes.find(node => node.props?.className === 'qe-positions-title');
+  assert.ok(elements(title).some(node => node.type === 'h3'
+    && node.props.children[0] === 'ALGO POSITIONS '
+    && node.props.children[1].props.children === '(LIVE)'));
+  assert.ok(elements(title).some(node => node.type === 'p'
+    && node.props.children === 'Real-time automated exposure and performance'));
+  assert.ok(nodes.some(node => node.props?.className === 'qe-empty-icon'));
+  assert.ok(nodes.some(node => node.type === 'small'
+    && node.props.children === 'QuantumEdge positions will appear here after a confirmed fill.'));
 });
 
 test('dashboard keeps BTST and removes the retired strategy workspace', () => {
