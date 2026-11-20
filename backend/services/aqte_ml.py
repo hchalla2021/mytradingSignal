@@ -106,7 +106,7 @@ class Sample:
     def label(self) -> int:
         return int(self.net_return > 0)
 
-    def validate(self) -> None:
+    def validate(self, feature_names: tuple[str, ...] = FEATURE_NAMES) -> None:
         times = (self.signal_at, self.entry_at, self.label_at)
         if self.symbol not in SYMBOLS or self.token <= 0 or not all(math.isfinite(v) for v in times):
             raise ValueError("Invalid ML sample identity or timestamp")
@@ -118,7 +118,7 @@ class Sample:
             raise ValueError("ML hypothetical entry exceeds its no-chase order lifetime")
         if not HORIZON_SECONDS <= self.label_at - self.entry_at <= HORIZON_SECONDS + 5:
             raise ValueError("ML label horizon differs from the feature/target contract")
-        if len(self.features) != len(FEATURE_NAMES) or not all(math.isfinite(v) for v in self.features):
+        if len(self.features) != len(feature_names) or not all(math.isfinite(v) for v in self.features):
             raise ValueError("ML feature schema mismatch")
         if not math.isfinite(self.net_return):
             raise ValueError("Invalid ML net return")

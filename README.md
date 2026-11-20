@@ -20,6 +20,92 @@ rule setups place real one-lot orders.
 See [AQTE architecture,
 APIs, storage, validation and staged rollout](docs/AQTE.md).
 
+**QuantumEdge IntraDay** uses completed-candle Python rules and Claude Haiku
+before submitting a qualifying order through the shared Zerodha controller.
+The positions and realized P&L in this panel are QuantumEdge-only. A completed
+manual Kite trade does not count toward QuantumEdge limits or block a new
+signal. Open manual exposure or working orders exclude only that contract
+from selection; broker cash and margin checks still apply.
+The per-index risk cap does not override the separate ₹1,500 QuantumEdge daily
+loss budget. If the nearest liquid strike fails sizing, depth, or net
+reward/risk, QuantumEdge checks other fresh subscribed strikes of the same
+side and expiry in distance order. It sends only a qualifying contract to
+Claude; approval is not transferable between strikes. `AI_APPROVED` is not
+a broker order; `ENTRY_BLOCKED` shows the execution check that prevented
+submission. The live opportunities panel and Claude review use the same
+completed one-minute futures price-action context: breaks of the prior
+five-bar range, ATR-relative displacement, and the most recent open fair
+value gap detected in the lookback. Missing or stale context is not treated
+as confirmation. These observations are not a separate entry gate and do
+not override risk controls. `AI_UNAVAILABLE` means no usable Claude decision
+was received; it does not approve an entry.
+Python computes the estimated INR loss at the stop and net profit at the
+target for the full quantity. Claude receives the gross amounts and
+estimated costs for each leg, rather than recalculating risk from the
+per-unit premiums. Haiku 5.5 uses low effort, thinking disabled, and a
+structured verdict; unfinished or invalid replies cannot approve a trade.
+Live Opportunities refreshes in place with fixed-height rows. On narrow
+screens the fields stack; long status details can be scrolled inside each row.
+Active Trade shows the option LTP from the same status snapshot as the live
+positions table. The stop-to-target bar marks that LTP, not the fixed entry
+price. P&L is green for profits, red for losses, and neutral for
+zero or unavailable values. QuantumEdge requests status every second while
+a position is open and every three seconds otherwise, without overlapping
+requests. Actual option quote freshness depends on the market feed.
+Algo Positions shows individually bordered summary cards for realized P&L, open P&L,
+and open position count. Open P&L is unavailable if an open position has
+no broker mark, rather than showing a partial total.
+Each live position value has its own bordered cell. The table scrolls
+horizontally on narrow screens.
+
+With Master Trade enabled, any one of the 14 strategies in
+[the QuantumEdge strategy registry](backend/services/quantumedge_strategies.py)
+can qualify for contract checks and Claude review. The registry order
+breaks ties for the same direction; opposing matches stand aside. Signals
+use completed candles, including closed 5m/15m bars for trend alignment.
+Prior-day, CPR and Camarilla breakouts use aligned spot candles and
+dated previous-session spot OHLC, not futures prices. The order-flow
+rule uses signed candle volume as a proxy, not aggressor-side trade delta.
+The strategy is tied to
+the approval and checked again before order submission. The same candle,
+contract and quantity can use a lower rechecked entry limit if estimated
+risk does not increase and all live checks still pass. Higher prices or
+risk are blocked. A normal Claude rejection appears on the affected
+opportunity rather than as an engine error. The selected
+setup appears in Live Opportunities. The shortlist is not a win-rate
+ranking; it has not been validated for profitability.
+The scanner tries the first approved setup immediately instead of waiting
+for reviews on the remaining indices. It still rechecks the entry window,
+contract and risk before submitting. Review and final confirmation times
+are recorded separately in the AQTE latency diagnostics.
+
+It can also require a QuantumEdge-specific LightGBM veto check:
+
+- `QUANTUMEDGE_ML_MODE=off` (default): preserve rules + Claude behavior.
+- `QUANTUMEDGE_ML_MODE=shadow`: show the score without affecting orders.
+- `QUANTUMEDGE_ML_MODE=gate`: require Python rules, LightGBM and Claude to agree.
+  An unavailable, stale or unsupported model blocks new QuantumEdge entries.
+  The expanded strategy set requires a v4 artifact and 21 fresh bars for
+  ML features. The three prior-session spot-level rules cannot pass the
+  ML gate because historical spot OHLC is not available in the tick replay.
+
+Train offline from complete, dated Kite tick journal backups using the backend
+environment. From `backend` in PowerShell, for example:
+
+```powershell
+..\.venv\Scripts\python.exe -m services.quantumedge_ml_training --db C:\backups\aqte.sqlite3 --from-day YYYY-MM-DD --to-day YYYY-MM-DD --max-ticks 3000000 --output C:\backups\quantumedge-model.json
+```
+
+The replay needs at least six labelled historical IST sessions (newest two held
+out), 200 training observations and 50 holdout observations. It tests a
+predefined 0.60 score threshold and reports which index/option sides pass the
+holdout checks. The score is not a calibrated probability. Replay models
+one-lot setups with a ₹1,000 risk cap and a cost-adjusted five-minute exit, not
+actual broker fills, stop/trailing performance or profitability. Review the
+report in shadow mode first. Set `QUANTUMEDGE_ML_MODEL_PATH` to an absolute path
+readable by the backend (inside the container if deployed), restart the backend
+and check the dashboard's ML status before manually approving live trading.
+
 **Strategy Workspace** groups MarketEdge Intelligence, Trend Base (Higher-Low Structure),
 Expiry Explosion Zone, and CRT-Based BTST Strategies into four section tabs. The selector uses
 two columns on phones/iPads and four on desktop, consistent sans-serif typography, readable

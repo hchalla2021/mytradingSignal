@@ -6,8 +6,8 @@ const vm = require('node:vm');
 const ts = require('typescript');
 
 const components = path.join(__dirname, '..', 'components');
-function harness(filename, imports = {}) {
-  const states = [];
+function harness(filename, imports = {}, initialStates = [], runtime = {}) {
+  const states = [...initialStates];
   let cursor = 0;
   let focused;
   const react = {
@@ -18,7 +18,8 @@ function harness(filename, imports = {}) {
     },
     useMemo: fn => fn(),
     useCallback: fn => fn,
-    useEffect: () => {},
+    useEffect: runtime.useEffect ?? (() => {}),
+    useRef: initial => ({ current: initial }),
     memo: component => component,
   };
   const compiled = ts.transpileModule(readFileSync(path.join(components, filename), 'utf8'), {
@@ -28,6 +29,7 @@ function harness(filename, imports = {}) {
     },
   }).outputText;
   const context = {
+    ...runtime.globals,
     exports: {},
     document: { getElementById: id => ({ focus: () => { focused = id; } }) },
     require: id => {
@@ -41,6 +43,7 @@ function harness(filename, imports = {}) {
   };
   vm.runInNewContext(compiled, context);
   return {
+    setState: (index, value) => { states[index] = value; },
     render: props => {
       cursor = 0;
       return context.exports.default(props);
@@ -122,6 +125,140 @@ test('QuantumEdge dashboard is autonomous and uses independent index controls', 
   assert.match(css, /\.qe-shell\s*\{[^}]*isolation:\s*isolate/s);
   assert.match(css, /grid-template-columns:\s*auto minmax\(44px, 72px\) auto minmax\(72px, 1fr\) auto/);
   assert.match(css, /max-width:\s*420px/);
+});
+
+test('QuantumEdge shows signal, AI rejection and execution blockers without hover', () => {
+  const snapshot = {
+    generated_at: Date.now() / 1000, enabled: true, market_phase: 'NORMAL',
+    indices: {}, signals: {
+      NIFTY: { decision: 'WAIT', status: 'WAIT_SIGNAL', reason: 'Trend and breakout are not aligned' },
+      BANKNIFTY: { decision: 'BUY CE', status: 'AI_UNAVAILABLE', reason: 'Claude returned an invalid decision',
+        strategy_name: 'Opening Range Breakout',
+        price_action: { structure: 'BULLISH', displacement: 'BULLISH', fvg: { side: 'BULLISH', low: 201, high: 205 } } },
+      SENSEX: { decision: 'BUY CE', side: 'CE', status: 'ENTRY_BLOCKED', reason: 'Daily loss budget exceeded' },
+    },
+    ai: { last_result: {} }, positions: [],
+  };
+  const h = harness('QuantumEdgeIntradaySection.tsx', {
+    'lucide-react': require('lucide-react'),
+    '@/lib/api-config': { API_CONFIG: {} },
+    '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
+  }, [snapshot]);
+  const nodes = elements(h.render({}));
+  const reasons = nodes.filter(node => node.props?.className === 'qe-wait-reason');
+  assert.deepEqual(reasons.map(node => node.props.children).filter(value => typeof value === 'string'), [
+    'Trend and breakout are not aligned', 'Claude returned an invalid decision', 'Opening Range Breakout',
+    'Daily loss budget exceeded',
+  ]);
+  assert.ok(nodes.some(node => node.type === 'em' && node.props.children === 'AI REVIEW UNAVAILABLE'));
+  assert.ok(reasons.some(node => node.props.children.includes(
+    'Upside 5-bar break · Bullish displacement · Bullish FVG 201.00–205.00')));
+  assert.ok(nodes.some(node => node.type === 'b' && node.props.children === 'Daily loss budget exceeded'));
+  const confidence = nodes.find(node => node.props?.className === 'qe-confidence');
+  assert.equal(confidence.props.children[1].props.children, '—');
+});
+
+test('QuantumEdge displays option LTP and tones P&L in the active card and positions table', () => {
+  for (const [ltp, pnl, tone, expectedLtp, expectedPnl, expectedReturn, marker] of [
+    [110.10, 565.50, 'profit', '₹110.10', '₹565.50', '+8.58%', 45.58],
+    [98.45, -191.75, 'loss', '₹98.45', '₹-191.75', '-2.91%', 26.68],
+    [101.40, 0, 'flat', '₹101.40', '₹0.00', '0.00%', 31.47],
+    [80, null, 'flat', '₹80.00', '—', '—', 0],
+    [150, null, 'flat', '₹150.00', '—', '—', 100],
+    [null, null, 'flat', '—', '—', '—', null],
+  ]) {
+    const active = { id: 'trade-1', symbol: 'NIFTY', state: 'PROTECTED', entry_price: 101.40,
+      contract: { trading_symbol: 'NIFTY26NOV25800CE', lot_size: 65 },
+      stop: 82, target: 143.65, filled: 65, quantity: 65, ltp, unrealized: pnl };
+    const { render } = harness('QuantumEdgeIntradaySection.tsx', {
+      'lucide-react': require('lucide-react'),
+      '@/lib/api-config': { API_CONFIG: {} },
+      '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
+    }, [{ generated_at: Date.now() / 1000, indices: {}, signals: {}, ai: { last_result: {} },
+      active, positions: [active], daily_pnl: pnl }]);
+    const nodes = elements(render({}));
+    const tile = nodes.find(node => node.props?.className === 'qe-level qe-level-ltp');
+    assert.equal(tile.props.children[0].props.children, 'LTP');
+    assert.equal(tile.props.children[1].props.children, expectedLtp);
+    const caption = nodes.find(node => node.props?.className === 'qe-track-caption');
+    assert.equal([caption.props.children.props.children].flat().join(''), `LTP ${expectedLtp}`);
+    const dot = nodes.find(node => node.props?.className === 'qe-track-marker');
+    if (marker == null) assert.equal(dot, undefined);
+    else assert.ok(Math.abs(parseFloat(dot.props.style.left) - marker) < 0.01);
+    const pnlTile = nodes.find(node => node.props?.className === `qe-level qe-pnl qe-pnl-${tone}`);
+    assert.equal(pnlTile.props.children[1].props.children, expectedPnl);
+    assert.equal(pnlTile.props.children[2].props.children, pnl == null ? 'Awaiting mark' : expectedReturn);
+    const positionRow = nodes.find(node => node.type === 'tr' && node.key === 'trade-1');
+    const cells = positionRow.props.children;
+    assert.equal(cells.length, 12);
+    for (const cell of cells) {
+      assert.equal(cell.type, 'td');
+      assert.equal(cell.props.children.props.className, 'qe-position-value');
+    }
+    assert.equal(cells.find(node => node.props.className === 'qe-position-ltp')
+      .props.children.props.children, expectedLtp);
+    assert.deepEqual(nodes.filter(node => node.type === 'td' && node.props.className === `qe-pnl-${tone}`)
+      .map(node => node.props.children.props.children), [expectedPnl, expectedReturn]);
+    assert.ok(nodes.some(node => node.type === 'dd' && node.props.className === `qe-pnl-${tone}`
+      && node.props.children === expectedPnl));
+  }
+});
+
+test('QuantumEdge switches to faster status polling only while a position is open', () => {
+  const effects = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  const snapshot = { generated_at: Date.now() / 1000, indices: {}, signals: {},
+    ai: { last_result: {} }, positions: [] };
+  const h = harness('QuantumEdgeIntradaySection.tsx', {
+    'lucide-react': require('lucide-react'),
+    '@/lib/api-config': { API_CONFIG: {} },
+    '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
+  }, [snapshot], {
+    useEffect: effect => effects.push(effect),
+    globals: {
+      setInterval: (callback, delay) => { timers.set(++nextTimer, { callback, delay }); return nextTimer; },
+      clearInterval: id => timers.delete(id),
+    },
+  });
+  let stopPolling;
+  for (const [positions, delay] of [[[], 3000], [[{
+    id: 'trade1', symbol: 'NIFTY', contract: { trading_symbol: 'NIFTYCE' },
+  }], 1000], [[], 3000]]) {
+    stopPolling?.();
+    effects.length = 0;
+    h.setState(0, { ...snapshot, positions });
+    h.render({});
+    stopPolling = effects[1]();
+    assert.deepEqual([...timers.values()].map(timer => timer.delay), [delay]);
+  }
+  stopPolling();
+  assert.equal(timers.size, 0);
+});
+
+test('QuantumEdge position summary keeps realized P&L separate and never shows a partial open P&L total', () => {
+  const trade = { symbol: 'NIFTY', contract: { trading_symbol: 'NIFTYCE' } };
+  for (const [marks, expectedOpen, expectedTone] of [
+    [[200, -300], '₹-100.00', 'qe-pnl-loss'],
+    [[200, null], '—', 'qe-pnl-flat'],
+    [[], '₹0.00', 'qe-pnl-flat'],
+  ]) {
+    const { render } = harness('QuantumEdgeIntradaySection.tsx', {
+      'lucide-react': require('lucide-react'),
+      '@/lib/api-config': { API_CONFIG: {} },
+      '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
+    }, [{ generated_at: Date.now() / 1000, indices: {}, signals: {}, ai: { last_result: {} },
+      positions: marks.map((unrealized, id) => ({ ...trade, id, unrealized })), daily_pnl: 50 }]);
+    const summary = elements(render({})).find(node => node.props?.className === 'qe-positions-summary');
+    assert.deepEqual(elements(summary).filter(node => node.type === 'dt').map(node => node.props.children),
+      ['Realized P&L', 'Open P&L', 'Open positions']);
+    const [realized, open, count] = elements(summary).filter(node => node.type === 'dd');
+    assert.equal(realized.props.children, '₹50.00');
+    assert.equal(realized.props.className, 'qe-pnl-profit');
+    assert.equal(open.props.children, expectedOpen);
+    assert.equal(open.props.className, expectedTone);
+    assert.equal(count.props.children, String(marks.length));
+  }
 });
 
 test('dashboard keeps BTST and removes the retired strategy workspace', () => {

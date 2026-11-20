@@ -34,7 +34,8 @@ class Pending:
     last_received_at: float | None = None
 
 
-def build_samples(ticks: Iterable[Tick], contracts: Iterable[Contract]) -> tuple[list[Sample], dict[str, int]]:
+def build_samples(ticks: Iterable[Tick], contracts: Iterable[Contract], *,
+                  select=None, feature_names=FEATURE_NAMES) -> tuple[list[Sample], dict[str, int]]:
     engine = AQTEEngine(paper_enabled=False, research_only=True)
     engine.contracts = {c.token: c for c in contracts}
     pending: list[Pending] = []
@@ -105,23 +106,30 @@ def build_samples(ticks: Iterable[Tick], contracts: Iterable[Contract]) -> tuple
                 engine.costs(exit_price, candidate.lot))
             sample = Sample(candidate.symbol, candidate.token, candidate.signal_at, candidate.entry_at,
                             tick.received, candidate.features, net / (entry_price * candidate.lot))
-            sample.validate()
+            sample.validate(feature_names)
             samples.append(sample)
         pending = alive
         engine.ingest(tick)
         engine.events.clear()
         if tick.kind != "future":
             continue
-        signal = engine.snapshot(tick.received)["data"][tick.symbol]
-        if signal["decision"] == "WAIT" or not signal["entry"]:
-            continue
+        if select is None:
+            signal = engine.snapshot(tick.received)["data"][tick.symbol]
+            if signal["decision"] == "WAIT" or not signal["entry"]:
+                continue
+            candle_at = signal["intelligence"]["at"]
+        else:
+            signal = select(engine, tick)
+            if signal is None:
+                continue
+            candle_at = signal["signal_at"]
         contract = signal["contract"]
-        candle_at = signal["intelligence"]["at"]
         if seen.get(tick.symbol) == candle_at:
             continue
         seen[tick.symbol] = candle_at
         try:
-            features = feature_vector(signal, engine.options[contract["token"]])
+            features = (feature_vector(signal, engine.options[contract["token"]])
+                        if select is None else tuple(signal["ml_features"]))
         except MLUnavailable:
             counts["unusable_features"] += 1
             continue
@@ -136,7 +144,8 @@ def build_samples(ticks: Iterable[Tick], contracts: Iterable[Contract]) -> tuple
     return sorted(samples, key=lambda item: item.signal_at), dict(counts)
 
 
-def samples_from_database(path: Path, first_day: str, last_day: str, max_ticks: int) -> tuple[list[Sample], dict[str, int]]:
+def samples_from_database(path: Path, first_day: str, last_day: str, max_ticks: int, *,
+                          select=None, feature_names=FEATURE_NAMES) -> tuple[list[Sample], dict[str, int]]:
     start = datetime.strptime(first_day, "%Y-%m-%d").replace(tzinfo=IST)
     end = datetime.strptime(last_day, "%Y-%m-%d").replace(tzinfo=IST) + timedelta(days=1)
     if end <= start or max_ticks <= 0:
@@ -158,16 +167,18 @@ def samples_from_database(path: Path, first_day: str, last_day: str, max_ticks: 
                 "SELECT payload FROM aqte_contract_history WHERE session_day=?", (current.date().isoformat(),))]
             rows = db.execute("SELECT payload FROM aqte_ticks WHERE received>=? AND received<? ORDER BY received,id",
                               (current.timestamp(), next_day.timestamp()))
-            daily_samples, daily_counts = build_samples((Tick(**json.loads(row[0])) for row in rows), contracts)
+            daily_samples, daily_counts = build_samples(
+                (Tick(**json.loads(row[0])) for row in rows), contracts,
+                select=select, feature_names=feature_names)
             samples.extend(daily_samples)
             counts.update(daily_counts)
             current = next_day
         return samples, dict(counts)
 
 
-def split_samples(samples: list[Sample]) -> tuple[list[Sample], list[Sample]]:
+def split_samples(samples: list[Sample], feature_names=FEATURE_NAMES) -> tuple[list[Sample], list[Sample]]:
     for sample in samples:
-        sample.validate()
+        sample.validate(feature_names)
     keys = [(s.symbol, s.token, s.signal_at) for s in samples]
     if len(keys) != len(set(keys)):
         raise ValueError("Duplicate ML observations would overweight training/evaluation")
@@ -189,11 +200,13 @@ def split_samples(samples: list[Sample]) -> tuple[list[Sample], list[Sample]]:
     return train, test
 
 
-def collect_samples(paths: list[Path], first_day: str, last_day: str, max_ticks: int) -> tuple[list[Sample], dict[str, int]]:
+def collect_samples(paths: list[Path], first_day: str, last_day: str, max_ticks: int, *,
+                    select=None, feature_names=FEATURE_NAMES) -> tuple[list[Sample], dict[str, int]]:
     observations: dict[tuple[str, int, float], Sample] = {}
     counts: Counter[str] = Counter()
     for path in paths:
-        samples, extracted = samples_from_database(path, first_day, last_day, max_ticks)
+        samples, extracted = samples_from_database(
+            path, first_day, last_day, max_ticks, select=select, feature_names=feature_names)
         counts.update(extracted)
         for sample in samples:
             key = (sample.symbol, sample.token, sample.signal_at)
@@ -217,14 +230,15 @@ def metrics(labels, predictions) -> dict[str, float]:
                 brier=float(np.mean((scores - truth) ** 2)), accuracy=float(np.mean((scores >= 0.5) == truth)))
 
 
-def train_bundle(samples: list[Sample]) -> dict[str, Any]:
+def train_bundle(samples: list[Sample], *, feature_names=FEATURE_NAMES, schema=SCHEMA, target=TARGET,
+                 gate_threshold: float | None = None) -> dict[str, Any]:
     import lightgbm as lgb
     import numpy as np
 
-    train, test = split_samples(samples)
+    train, test = split_samples(samples, feature_names)
     x = np.asarray([sample.features for sample in train], dtype=np.float64)
     labels = np.asarray([sample.label for sample in train])
-    dataset = lgb.Dataset(x, label=labels, feature_name=list(FEATURE_NAMES))
+    dataset = lgb.Dataset(x, label=labels, feature_name=list(feature_names))
     # Holdout never participates in tuning, early stopping or refitting.
     booster = lgb.train(dict(objective="binary", learning_rate=0.04, num_leaves=7,
                              min_data_in_leaf=20, lambda_l2=2, verbosity=-1,
@@ -241,8 +255,8 @@ def train_bundle(samples: list[Sample]) -> dict[str, Any]:
         per_symbol[symbol] = dict(samples=int(mask.sum()),
                                   **metrics(np.asarray(truth)[mask], probability[mask]))
     model_text = booster.model_to_string()
-    return dict(
-        schema=SCHEMA, target=TARGET, features=list(FEATURE_NAMES), mode="SHADOW",
+    bundle = dict(
+        schema=schema, target=target, features=list(feature_names), mode="SHADOW",
         validated=False, calibrated=False, affects_orders=False,
         symbols=sorted({sample.symbol for sample in train}),
         coverage=sorted({f"{sample.symbol}:{'CE' if sample.features[3] else 'PE'}" for sample in train}),
@@ -255,7 +269,7 @@ def train_bundle(samples: list[Sample]) -> dict[str, Any]:
             evaluation=evaluation, constant_baseline=baseline_metrics, by_symbol=per_symbol,
             beats_baseline=evaluation["log_loss"] < baseline_metrics["log_loss"] and (
                 evaluation["brier"] < baseline_metrics["brier"]),
-            feature_importance=dict(zip(FEATURE_NAMES, booster.feature_importance(importance_type="gain").tolist())),
+            feature_importance=dict(zip(feature_names, booster.feature_importance(importance_type="gain").tolist())),
             library_versions=dict(lightgbm=lgb.__version__, numpy=np.__version__),
             limitations=[
                 "Research-only, uncalibrated probabilities; passing these metrics does not approve live use.",
@@ -268,6 +282,20 @@ def train_bundle(samples: list[Sample]) -> dict[str, Any]:
             ],
         ),
     )
+    if gate_threshold is not None:
+        by_side = {}
+        for key in bundle["coverage"]:
+            rows = [(s, float(p)) for s, p in zip(test, probability)
+                    if key == f"{s.symbol}:{'CE' if s.features[3] else 'PE'}"]
+            kept = [s for s, p in rows if p >= gate_threshold]
+            discarded = [s for s, p in rows if p < gate_threshold]
+            by_side[key] = dict(
+                holdout_samples=len(rows), passed=len(kept), blocked=len(discarded),
+                passed_mean_return=float(np.mean([s.net_return for s in kept])) if kept else None,
+                unfiltered_mean_return=float(np.mean([s.net_return for s, _ in rows])) if rows else None,
+            )
+        bundle["report"]["gate"] = dict(threshold=gate_threshold, by_side=by_side)
+    return bundle
 
 
 def main() -> None:

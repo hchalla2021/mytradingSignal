@@ -13,10 +13,17 @@ const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 type SymbolName = (typeof SYMBOLS)[number];
 type Signal = {
   decision: string; side?: 'CE' | 'PE'; reason?: string; setup_key?: string;
+  alternate_strike?: boolean;
   status?: string;
+  strategy_name?: string;
   contract?: { trading_symbol?: string; lot_size?: number };
   entry?: { maximum?: number; stop?: number; target?: number; quantity?: number; reward_risk?: number };
   risk?: number; metrics?: Record<string, number | null>;
+  price_action?: {
+    structure: 'BULLISH' | 'BEARISH' | 'INSIDE_RANGE';
+    displacement: 'BULLISH' | 'BEARISH' | null;
+    fvg: { side: 'BULLISH' | 'BEARISH'; low: number; high: number } | null;
+  } | null;
 };
 type IndexConfig = { enabled: boolean; lots: number; risk_per_lot: number };
 type LiveTrade = {
@@ -24,6 +31,7 @@ type LiveTrade = {
   stop: number; target: number; filled: number; quantity: number; entry_price: number;
   entry_at?: number; ltp?: number | null; unrealized?: number | null;
   trailing_active?: boolean; initial_stop?: number;
+  execution_context?: { confidence?: number | null };
 };
 type Snapshot = {
   generated_at: number; ready: boolean; enabled: boolean; armed: boolean; entry_window: boolean;
@@ -35,19 +43,50 @@ type Snapshot = {
   ai: {
     enabled: boolean; model: string; busy: boolean; daily_calls: number;
     daily_cost_usd: number; processed: number; last_error: string | null;
-    last_result: Record<string, { confidence?: number; reason?: string; state?: string; setup_key?: string }>;
+    ml?: { mode: string; ready: boolean; model_id: string | null; error: string | null; eligible_sides: string[] };
+    last_result: Record<string, { confidence?: number; reason?: string; state?: string; setup_key?: string;
+      ml?: { state: string; score?: number | null } }>;
   };
 };
 
 const displayName = (symbol: SymbolName) => symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol;
+const decimal = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const money = (value: number | null | undefined) =>
-  Number.isFinite(value) ? `₹${Number(value).toLocaleString('en-IN', {
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  })}` : '—';
-const number = (value: number | null | undefined, digits = 2) =>
-  Number.isFinite(value) ? Number(value).toLocaleString('en-IN', {
+  value != null && Number.isFinite(value) ? `₹${decimal.format(value)}` : '—';
+function number(value: number | null | undefined, digits = 2) {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return digits === 2 ? decimal.format(value) : value.toLocaleString('en-IN', {
     minimumFractionDigits: digits, maximumFractionDigits: digits,
-  }) : '—';
+  });
+}
+
+function pnlTone(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || Math.round(Math.abs(value) * 100) === 0) return 'qe-pnl-flat';
+  return value > 0 ? 'qe-pnl-profit' : 'qe-pnl-loss';
+}
+
+function tradeReturn(trade: LiveTrade | null | undefined) {
+  return trade?.unrealized != null && trade.entry_price > 0 && trade.quantity > 0
+    ? trade.unrealized * 100 / (trade.entry_price * trade.quantity) : null;
+}
+
+function returnLabel(value: number | null) {
+  return value != null && Number.isFinite(value) ? `${pnlTone(value) === 'qe-pnl-profit' ? '+' : ''}${number(value)}%` : '—';
+}
+
+function priceActionLabel(evidence: Signal['price_action']) {
+  if (!evidence) return null;
+  const { structure, displacement, fvg } = evidence;
+  return [
+    structure === 'INSIDE_RANGE' ? 'Inside 5-bar range' : `${structure === 'BULLISH' ? 'Upside' : 'Downside'} 5-bar break`,
+    ...(displacement ? [`${displacement === 'BULLISH' ? 'Bullish' : 'Bearish'} displacement`] : []),
+    fvg ? `${fvg.side === 'BULLISH' ? 'Bullish' : 'Bearish'} FVG ${number(fvg.low)}–${number(fvg.high)}` : 'No open FVG detected',
+  ].join(' · ');
+}
+
+const opportunityLabels: Record<string, string> = {
+  WAIT_SIGNAL: 'NO ENTRY', REJECTED: 'AI REJECTED', AI_UNAVAILABLE: 'AI REVIEW UNAVAILABLE',
+};
 
 async function api(path: 'status' | 'approval' | 'index' | 'exit',
   body?: unknown, signal?: AbortSignal): Promise<Snapshot> {
@@ -94,6 +133,7 @@ export default function QuantumEdgeIntradaySection({
   const request = useRef<AbortController | null>(null);
   const generation = useRef(0);
   const mutating = useRef(false);
+  const hasOpenPosition = Boolean(snapshot?.positions.length);
 
   const load = useCallback(async () => {
     if (request.current || mutating.current) return;
@@ -117,10 +157,14 @@ export default function QuantumEdgeIntradaySection({
 
   useEffect(() => {
     void load();
-    const poll = setInterval(() => void load(), 3000);
     const timer = setInterval(() => setClock(Date.now()), 1000);
-    return () => { clearInterval(poll); clearInterval(timer); request.current?.abort(); };
+    return () => { clearInterval(timer); request.current?.abort(); };
   }, [load]);
+
+  useEffect(() => {
+    const poll = setInterval(() => void load(), hasOpenPosition ? 1000 : 3000);
+    return () => clearInterval(poll);
+  }, [hasOpenPosition, load]);
 
   const apply = useCallback(async (path: 'approval' | 'index' | 'exit', body: unknown) => {
     generation.current += 1;
@@ -175,9 +219,13 @@ export default function QuantumEdgeIntradaySection({
       side: signal?.side ?? null,
       premium: signal?.entry?.maximum ?? null,
       confidence: ai?.confidence ?? null,
-      reason: signal?.reason ?? 'Awaiting market data',
+      reason: signal?.reason === 'ValueError' ? 'Claude returned an invalid decision'
+        : signal?.reason ?? 'Awaiting market data',
       status: signal?.decision === 'BUY CE' || signal?.decision === 'BUY PE'
-        ? signal.status ?? (ai?.state === 'APPROVED' ? 'READY' : ai?.state === 'REJECTED' ? 'REJECTED' : 'VALIDATING')
+        ? signal.status === 'REJECTED' && signal.reason === 'ValueError' ? 'AI_UNAVAILABLE'
+          : signal.status === 'READY' ? 'AI_APPROVED'
+          : signal.status ?? (ai?.state === 'APPROVED' ? 'AI_APPROVED'
+            : ai?.state === 'REJECTED' || ai?.state === 'AI_UNAVAILABLE' ? ai.state : 'VALIDATING')
         : signal?.status ?? (snapshot?.market_phase === 'NORMAL' ? 'WAITING' : snapshot?.market_phase === 'PRE_OPEN'
           ? 'PRE-OPEN' : snapshot?.market_phase === 'AUCTION_FREEZE' ? 'AUCTION'
             : snapshot?.market_phase === 'CLOSING_AUCTION' ? 'MANAGE'
@@ -185,10 +233,55 @@ export default function QuantumEdgeIntradaySection({
     };
   }), [snapshot]);
 
-  const pnl = active?.unrealized ?? null;
-  const pnlPct = pnl != null && active?.entry_price && active.quantity
-    ? pnl * 100 / (active.entry_price * active.quantity)
+  const pending = opportunities.find(item => item.side && item.status === 'ENTRY_BLOCKED')
+    ?? opportunities.find(item => item.side && item.status === 'AI_APPROVED');
+  const activeConfidence = active?.execution_context?.confidence;
+  const ltp = active?.ltp;
+  const ltpPosition = active && ltp != null && Number.isFinite(ltp)
+    && Number.isFinite(active.stop) && Number.isFinite(active.target) && active.target > active.stop
+    ? Math.max(0, Math.min(100, (ltp - active.stop) / (active.target - active.stop) * 100))
     : null;
+  const activeLevels = useMemo(() => {
+    const pnl = active?.unrealized;
+    return <div className="qe-level-grid">
+      {[
+        ['Entry', 'entry', money(active?.entry_price)],
+        ['LTP', 'ltp', money(active?.ltp)],
+        ['Stop Loss', 'stop', money(active?.stop)],
+        ['Trailing SL', 'trail', money(active?.trailing_active ? active.stop : active?.initial_stop ?? active?.stop)],
+        ['Target', 'target', money(active?.target)],
+      ].map(([label, key, value]) => <div key={key} className={`qe-level qe-level-${key}`}>
+        <small>{label}</small><b title={value}>{value}</b>
+      </div>)}
+      <div className={`qe-level qe-pnl ${pnlTone(pnl)}`}>
+        <small>P&L</small><b title={money(pnl)}>{money(pnl)}</b>
+        <span>{pnl == null ? active ? 'Awaiting mark' : 'No position' : returnLabel(tradeReturn(active))}</span>
+      </div>
+    </div>;
+  }, [active]);
+  const positions = snapshot?.positions;
+  const openPnl = useMemo(() => positions?.reduce<number | null>((total, trade) => {
+    const mark = trade.unrealized;
+    return total != null && mark != null && Number.isFinite(mark) ? total + mark : null;
+  }, 0) ?? null, [positions]);
+  const realizedPnl = snapshot?.daily_pnl;
+  const positionRows = useMemo(() => positions?.length ? positions.map((trade, index) => {
+    const tone = pnlTone(trade.unrealized);
+    return <tr key={trade.id}>
+      <td><span className="qe-position-value">{index + 1}</span></td>
+      <td><span className="qe-position-value">{trade.symbol}</span></td>
+      <td><span className="qe-position-value" title={trade.contract.trading_symbol}>{trade.contract.trading_symbol}</span></td>
+      <td><span className="qe-position-value">{trade.contract.lot_size ? number(trade.quantity / trade.contract.lot_size, 0) : '—'}</span></td>
+      <td><span className="qe-position-value">{money(trade.entry_price)}</span></td>
+      <td className="qe-position-ltp"><span className="qe-position-value">{money(trade.ltp)}</span></td>
+      <td className="qe-position-stop"><span className="qe-position-value">{money(trade.initial_stop ?? trade.stop)}</span></td>
+      <td className="qe-position-trail"><span className="qe-position-value">{money(trade.stop)}</span></td>
+      <td className="qe-position-target"><span className="qe-position-value">{money(trade.target)}</span></td>
+      <td className={tone}><span className="qe-position-value">{money(trade.unrealized)}</span></td>
+      <td className={tone}><span className="qe-position-value">{returnLabel(tradeReturn(trade))}</span></td>
+      <td className="qe-position-status"><span className="qe-position-value">• LIVE</span></td>
+    </tr>;
+  }) : <tr className="qe-empty-row"><td colSpan={12}>No QuantumEdge-owned live positions.</td></tr>, [positions]);
 
   return <section aria-label="QuantumEdge IntraDay Algo" className="qe-shell">
     <header className="qe-topbar">
@@ -198,7 +291,8 @@ export default function QuantumEdgeIntradaySection({
         <i />
         <div className="qe-title">
           <h2><span className="sr-only">QuantumEdge IntraDay Algo — Intraday Algo | CE / PE</span>INTRADAY ALGO | CE / PE</h2>
-          <p>AI + ML Powered • NIFTY • BANK NIFTY • SENSEX</p>
+          <p>Python Rules + Price Action + Claude{snapshot?.ai.ml?.ready && snapshot.ai.ml.mode !== 'off'
+            ? ` + LightGBM (${snapshot.ai.ml.mode})` : ''} • NIFTY • BANK NIFTY • SENSEX</p>
         </div>
       </div>
       <div className="qe-top-controls">
@@ -285,30 +379,26 @@ export default function QuantumEdgeIntradaySection({
       <section className="qe-panel qe-active" aria-label="QuantumEdge active trade">
         <div className="qe-panel-head">
           <h3><i /> ACTIVE TRADE</h3>
-          <span>{active ? `${active.state.replaceAll('_', ' ')} · ${activeSymbolLabel(active)}` : 'WAITING FOR QUALIFIED SIGNAL'}</span>
+          <span>{active ? `${active.state.replaceAll('_', ' ')} · ${activeSymbolLabel(active)}`
+            : pending ? `${displayName(pending.symbol)} · ${pending.status === 'ENTRY_BLOCKED' ? 'ENTRY BLOCKED' : 'AI APPROVED · NO ORDER YET'}`
+            : 'WAITING FOR QUALIFIED SIGNAL'}</span>
         </div>
         <div className="qe-trade-identity">
           <strong className={active?.contract.trading_symbol.endsWith('PE') ? 'qe-pe' : ''}>
             {active ? active.symbol + ' ' + (active.contract.trading_symbol.endsWith('PE') ? 'PE' : 'CE') : 'NO POSITION'}
           </strong>
-          <b>{active?.contract.trading_symbol ?? 'QuantumEdge is monitoring completed-candle signals'}</b>
+          <b>{active?.contract.trading_symbol ?? (pending?.status === 'ENTRY_BLOCKED' ? pending.reason
+            : pending ? 'Awaiting execution checks' : 'QuantumEdge is monitoring completed-candle signals')}</b>
           <span className="qe-buy">{active ? 'BUY' : 'AUTO'}</span>
-          <span className="qe-confidence">AI <b>✓ {active ? number(snapshot?.ai.last_result[active.symbol]?.confidence, 0) : 0}%</b></span>
+          <span className="qe-confidence">AI <b>{activeConfidence == null ? '—' : `${number(activeConfidence, 0)}%`}</b></span>
           <small>{active?.entry_at ? `Opened ${new Date(active.entry_at * 1000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })}` : 'Signal-triggered AI only'}</small>
         </div>
-        <div className="qe-level-grid">
-          {[
-            ['Entry', money(active?.entry_price)],
-            ['Stop Loss', money(active?.stop)],
-            ['Trailing SL', money(active?.trailing_active ? active.stop : active?.initial_stop ?? active?.stop)],
-            ['Target', money(active?.target)],
-          ].map(([name, value], index) => <div key={name} className={`qe-level qe-level-${index}`}>
-            <small>{name}</small><b>{value}</b>
-          </div>)}
-          <div className="qe-level qe-pnl"><small>P&L</small><b>{pnl == null ? '—' : money(pnl)}</b><span>{pnlPct == null ? 'Awaiting broker mark' : `${pnlPct >= 0 ? '+' : ''}${number(pnlPct)}%`}</span></div>
-        </div>
+        {activeLevels}
         <div className="qe-risk-track">
-          <div className="qe-track-fill"><span>{active ? money(active.entry_price) : 'ENTRY'}</span></div>
+          <div className="qe-track-caption"><span>LTP {money(ltp)}</span></div>
+          <div className={`qe-track-fill${ltpPosition == null ? '' : ' qe-track-marked'}`} aria-hidden="true">
+            {ltpPosition != null && <i className="qe-track-marker" style={{ left: `${ltpPosition}%` }} />}
+          </div>
           <div className="qe-track-labels"><span>{money(active?.stop)}<small>(SL)</small></span><span>{money(active?.target)}<small>(Target)</small></span></div>
         </div>
         <button type="button" className="qe-square-off" disabled={!active || busy || stale}
@@ -320,41 +410,70 @@ export default function QuantumEdgeIntradaySection({
 
       <section className="qe-panel qe-opportunities" aria-label="QuantumEdge live opportunities">
         <div className="qe-panel-head"><h3><Zap /> LIVE OPPORTUNITIES (AUTO)</h3></div>
-        <table className="qe-opp-table">
-          <thead><tr><th>Index</th><th>Signal</th><th>Premium</th><th>Confidence</th><th>Status</th></tr></thead>
-          <tbody>{opportunities.map(item => <tr key={item.symbol}>
-            <td><i /> {displayName(item.symbol)}</td>
-            <td><span className={item.side === 'PE' ? 'qe-side-pe' : item.side === 'CE' ? 'qe-side-ce' : 'qe-side-wait'}>{item.side ?? '—'}</span></td>
-            <td>{money(item.premium)}</td>
-            <td className="qe-confidence-cell"><span>{item.confidence == null ? '—' : `${number(item.confidence, 0)}%`}</span><i><b style={{ width: `${item.confidence ?? 0}%` }} /></i></td>
-            <td><em title={item.reason}
-              className={['LIVE', 'LIVE_POSITION', 'READY'].includes(item.status)
-                ? 'qe-state-live' : item.status === 'REJECTED' ? 'qe-state-reject' : 'qe-state-wait'}>{item.status}</em></td>
+        <table className="qe-opp-table" role="table" aria-label="Index opportunities">
+          <thead role="rowgroup"><tr role="row">{['Index', 'Signal', 'Premium', 'Confidence', 'Status'].map(label =>
+            <th key={label} role="columnheader" scope="col">{label}</th>)}</tr></thead>
+          <tbody role="rowgroup">{opportunities.map(item => <tr key={item.symbol} role="row">
+            <th scope="row" role="rowheader"><i aria-hidden="true" /> {displayName(item.symbol)}</th>
+            <td role="cell"><span className="qe-opp-mobile-label" aria-hidden="true">Signal</span><span className={item.side === 'PE' ? 'qe-side-pe' : item.side === 'CE' ? 'qe-side-ce' : 'qe-side-wait'}>{item.side ?? '—'}</span></td>
+            <td role="cell"><span className="qe-opp-mobile-label" aria-hidden="true">Premium</span><span className="qe-opp-premium" title={money(item.premium)}>{money(item.premium)}</span></td>
+            <td role="cell" className="qe-confidence-cell"><span className="qe-opp-mobile-label" aria-hidden="true">Confidence</span><span>{item.confidence == null ? '—' : `${number(item.confidence, 0)}%`}</span><i aria-hidden="true"><b style={{ width: `${item.confidence ?? 0}%` }} /></i></td>
+            <td role="cell" className="qe-opp-status"><div className="qe-opp-badge"><em title={item.reason}
+              className={['LIVE', 'LIVE_POSITION'].includes(item.status)
+                ? 'qe-state-live' : ['REJECTED', 'AI_UNAVAILABLE', 'ML_BLOCKED', 'ENTRY_BLOCKED'].includes(item.status) ? 'qe-state-reject' : 'qe-state-wait'}>{opportunityLabels[item.status] ?? item.status.replaceAll('_', ' ')}</em></div>
+              <div className="qe-opp-details" tabIndex={0} role="region" aria-label={`${displayName(item.symbol)} status details`}>
+              {['WAIT_SIGNAL', 'REJECTED', 'AI_UNAVAILABLE', 'ML_BLOCKED', 'ENTRY_BLOCKED'].includes(item.status) && <small className="qe-wait-reason">{item.reason}</small>}
+              {!stale && item.signal?.strategy_name &&
+                <small className="qe-wait-reason">{item.signal.strategy_name}</small>}
+              {item.signal?.alternate_strike && item.signal.contract?.trading_symbol &&
+                <small className="qe-wait-reason" title="Next eligible same-expiry strike">{item.signal.contract.trading_symbol}</small>}
+              {!stale && item.signal?.price_action &&
+                <small className="qe-wait-reason"><b>1m futures:</b> {priceActionLabel(item.signal.price_action)}</small>}
+              {item.ai?.ml?.score != null && <small className="qe-wait-reason">LightGBM {number(item.ai.ml.score, 3)} · {item.ai.ml.state}</small>}
+              </div>
+            </td>
           </tr>)}</tbody>
         </table>
       </section>
     </div>
 
     <section className="qe-positions" aria-label="QuantumEdge positions">
-      <div className="qe-positions-head"><h3><Layers3 /> <i /> POSITIONS (LIVE)</h3><span>Total P&L: <b>{money(snapshot?.daily_pnl)}</b> <em>(+0.00%)</em></span></div>
-      <table>
-        <thead><tr><th>#</th><th>Index</th><th>Contract</th><th>Lots</th><th>Entry (₹)</th><th>LTP (₹)</th><th>SL (₹)</th><th>Trailing SL (₹)</th><th>Target (₹)</th><th>P&L (₹)</th><th>P&L (%)</th><th>Status</th></tr></thead>
-        <tbody>{snapshot?.positions.length ? snapshot.positions.map((trade, index) => <tr key={trade.id}>
-          <td>{index + 1}</td><td>{trade.symbol}</td><td>{trade.contract.trading_symbol}</td><td>{trade.contract.lot_size ? number(trade.quantity / trade.contract.lot_size, 0) : '—'}</td>
-          <td>{money(trade.entry_price)}</td><td>{money(trade.ltp)}</td><td>{money(trade.initial_stop ?? trade.stop)}</td><td>{money(trade.stop)}</td><td>{money(trade.target)}</td><td>{money(trade.unrealized)}</td><td>{trade.unrealized != null && trade.entry_price && trade.quantity ? `${number(trade.unrealized * 100 / (trade.entry_price * trade.quantity))}%` : '—'}</td><td><span>• LIVE</span></td>
-        </tr>) : <tr className="qe-empty-row"><td colSpan={12}>No QuantumEdge-owned live positions.</td></tr>}</tbody>
-      </table>
+      <div className="qe-positions-head"><h3><Layers3 /> <i /> ALGO POSITIONS (LIVE)</h3>
+        <dl className="qe-positions-summary" aria-label="QuantumEdge position summary">
+          <div className="qe-summary-card qe-summary-realized">
+            <dt>Realized P&L</dt>
+            <dd className={pnlTone(realizedPnl)}>{money(realizedPnl)}</dd>
+          </div>
+          <div className="qe-summary-card qe-summary-open">
+            <dt>Open P&L</dt>
+            <dd className={pnlTone(openPnl)}>{money(openPnl)}</dd>
+          </div>
+          <div className="qe-summary-card qe-summary-count">
+            <dt>Open positions</dt>
+            <dd>{number(positions?.length, 0)}</dd>
+          </div>
+        </dl>
+      </div>
+      <div className="qe-positions-scroll" role="region" aria-label="Live position table" tabIndex={0}>
+        <table className={positions?.length ? 'qe-positions-populated' : undefined}>
+          <thead><tr>{['#', 'Index', 'Contract', 'Lots', 'Entry (₹)', 'LTP (₹)', 'SL (₹)', 'Trailing SL (₹)', 'Target (₹)', 'P&L (₹)', 'P&L (%)', 'Status'].map(label =>
+            <th key={label} scope="col">{label}</th>)}</tr></thead>
+          <tbody>{positionRows}</tbody>
+        </table>
+      </div>
     </section>
 
     <footer className="qe-footer">
       <span className="qe-engine-chip"><Sparkles /> Engine <b>{snapshot?.enabled ? 'ON' : 'OFF'}</b></span>
       <span><Layers3 /> Independent parallel signal engines (NIFTY / BANK NIFTY / SENSEX)</span>
       <span><Bot /> AI validation on qualified signals ({snapshot?.ai.model ?? 'model from env'})</span>
+      {snapshot?.ai.ml && <span>LightGBM: {snapshot.ai.ml.mode === 'off' ? 'OFF'
+        : snapshot.ai.ml.ready ? snapshot.ai.ml.mode.toUpperCase() : 'UNAVAILABLE'}</span>}
       <span><ShieldCheck /> Risk guards, SL, trailing SL, target, position & exposure control</span>
       <span title={snapshot?.market_detail ?? ''}><Sparkles /> {snapshot?.market_detail ?? 'Market session status unavailable'}</span>
     </footer>
-    {(error || snapshot?.error || snapshot?.ai.last_error) && <p role="alert" className="qe-error">
-      <AlertTriangle /> {error || snapshot?.error || snapshot?.ai.last_error}
+    {(error || snapshot?.error || snapshot?.ai.ml?.error || snapshot?.ai.last_error) && <p role="alert" className="qe-error">
+      <AlertTriangle /> {error || snapshot?.error || snapshot?.ai.ml?.error || snapshot?.ai.last_error}
     </p>}
   </section>;
 }

@@ -1,4 +1,4 @@
-"""Owner controls for the independent QuantumEdge IntraDay Algo."""
+"""Owner controls for QuantumEdge IntraDay."""
 
 from typing import Literal
 
