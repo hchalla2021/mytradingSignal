@@ -20,6 +20,12 @@ type Signal = {
   contract?: { trading_symbol?: string; lot_size?: number };
   entry?: { maximum?: number; stop?: number; target?: number; quantity?: number; reward_risk?: number };
   risk?: number; metrics?: Record<string, number | null>;
+  advisory?: {
+    available: boolean; engine_count: number; aligned: number; opposed: number;
+    supporting: string[]; conflicting: string[]; reason?: string;
+    advanced?: { smc_verdict?: string; smc_confidence?: number | null; smc_available: boolean;
+      order_flow_available: boolean };
+  };
   price_action?: {
     structure: 'BULLISH' | 'BEARISH' | 'INSIDE_RANGE';
     displacement: 'BULLISH' | 'BEARISH' | null;
@@ -497,6 +503,14 @@ export default function QuantumEdgeIntradaySection({
                 <small className="qe-wait-reason" title="Next eligible same-expiry strike">{item.signal.contract.trading_symbol}</small>}
               {!stale && item.signal?.price_action &&
                 <small className="qe-wait-reason"><b>1m futures:</b> {priceActionLabel(item.signal.price_action)}</small>}
+              {!stale && item.signal?.advisory?.available &&
+                <small className="qe-wait-reason"
+                  title={[...item.signal.advisory.supporting, ...item.signal.advisory.conflicting].join(', ')}>
+                  Independent engines: {item.signal.advisory.aligned} aligned · {item.signal.advisory.opposed} opposed
+                  {item.signal.advisory.advanced?.smc_available &&
+                    ` · SMC ${item.signal.advisory.advanced.smc_verdict ?? 'MONITORING'} ${item.signal.advisory.advanced.smc_confidence == null ? '' : `${item.signal.advisory.advanced.smc_confidence}%`}`}
+                  {item.signal.advisory.advanced?.order_flow_available && ' · Flow LIVE'}
+                </small>}
               {item.ai?.ml?.score != null && <small className="qe-wait-reason">LightGBM {number(item.ai.ml.score, 3)} · {item.ai.ml.state}</small>}
               </div>
             </td>

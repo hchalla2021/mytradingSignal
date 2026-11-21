@@ -70,6 +70,12 @@ function nextConfig(env) {
   return context.module.exports;
 }
 
+test('development and production use isolated Next build directories', () => {
+  assert.equal(nextConfig({ NODE_ENV: 'development' }).distDir, '.next-dev');
+  assert.equal(nextConfig({ NODE_ENV: 'production' }).distDir, '.next');
+  assert.equal(nextConfig({ NODE_ENV: 'production', NEXT_DIST_DIR: '.next-check' }).distDir, '.next-check');
+});
+
 test('proxy sends API and WebSocket namespaces to HTTPS before any local API route can execute', async () => {
   const config = nextConfig({ ...shared, DEV_PRODUCTION_ORIGIN: 'https://mydailytradesignals.com/' });
   assert.deepEqual(JSON.parse(JSON.stringify(await config.rewrites())), {

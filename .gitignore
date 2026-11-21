@@ -29,6 +29,7 @@ ENV/
 # Node
 node_modules/
 .next/
+.next-dev/
 .next-validation/
 out/
 build/

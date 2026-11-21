@@ -102,9 +102,12 @@ predefined 0.60 score threshold and reports which index/option sides pass the
 holdout checks. The score is not a calibrated probability. Replay models
 one-lot setups with a ₹1,000 risk cap and a cost-adjusted five-minute exit, not
 actual broker fills, stop/trailing performance or profitability. Review the
-report in shadow mode first. Set `QUANTUMEDGE_ML_MODEL_PATH` to an absolute path
-readable by the backend (inside the container if deployed), restart the backend
-and check the dashboard's ML status before manually approving live trading.
+report in shadow mode first. For production, store the artifact under the
+persistent AQTE volume and set
+`QUANTUMEDGE_ML_MODEL_PATH=data/aqte/quantumedge-model.json`. Relative paths are
+resolved from the backend root on both local Windows runs and Linux containers;
+absolute paths remain supported. Restart the backend and check the dashboard's
+ML status before manually approving live trading.
 
 **Strategy Workspace** groups MarketEdge Intelligence, Trend Base (Higher-Low Structure),
 Expiry Explosion Zone, and CRT-Based BTST Strategies into four section tabs. The selector uses

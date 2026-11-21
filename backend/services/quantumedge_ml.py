@@ -36,7 +36,11 @@ class QuantumEdgeML:
         self.sides: set[str] = set()
         self.coverage: set[str] = set()
         self.holdout_end = 0.0
-        self.path = os.getenv("QUANTUMEDGE_ML_MODEL_PATH", "").strip()
+        configured_path = os.getenv("QUANTUMEDGE_ML_MODEL_PATH", "").strip()
+        path = Path(configured_path).expanduser() if configured_path else None
+        if path is not None and not path.is_absolute():
+            path = Path(__file__).resolve().parents[1] / path
+        self.path = str(path) if path is not None else ""
         self.load_attempted = False
 
     @staticmethod

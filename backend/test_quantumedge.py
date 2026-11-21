@@ -2,6 +2,7 @@ import json
 import hashlib
 import os
 import tempfile
+import time
 import unittest
 from dataclasses import asdict
 from pathlib import Path
@@ -17,10 +18,18 @@ from services.aqte_engine import AQTEEngine, Candle, Contract
 from services.quantumedge_intraday import QuantumEdgeIntradayService, _price_action
 from services.quantumedge_strategies import previous_spot_levels, select_setup
 from services.aqte_ml import TARGET
-from services.quantumedge_ml import FEATURE_NAMES, SCHEMA, THRESHOLD
+from services.quantumedge_ml import FEATURE_NAMES, SCHEMA, THRESHOLD, QuantumEdgeML
 
 
 class QuantumEdgeAIReviewTests(unittest.TestCase):
+    def test_model_path_resolves_relative_to_backend_root(self):
+        backend_root = Path(__file__).resolve().parent
+        with mock.patch.dict(os.environ, {
+            "QUANTUMEDGE_ML_MODEL_PATH": "data/aqte/quantumedge-model.json",
+        }):
+            service = QuantumEdgeML()
+        self.assertEqual(Path(service.path), backend_root / "data/aqte/quantumedge-model.json")
+
     def test_claude_review_failure_never_approves_and_is_not_a_strategy_rejection(self):
         approval = '{"action":"BUY_CE","confidence":82,"reason":"Breakout aligned"}'
         cases = [
@@ -340,6 +349,56 @@ class QuantumEdgeControlTests(unittest.TestCase):
         self.assertEqual(status["indices"]["NIFTY"]["lots"], 2)
         self.assertTrue(status["indices"]["BANKNIFTY"]["enabled"])
         self.assertEqual(status["indices"]["SENSEX"]["risk_per_lot"], 500)
+
+    def test_quantumedge_advisory_keeps_twelve_engine_evidence_shadow_only(self):
+        future = mock.Mock(token=7)
+        self.live.market.engine.future = {"NIFTY": future}
+        self.live.market.engine.book.revisions = {("future", 7, 60): 3}
+        self.live.market.evaluators.snapshot.return_value = {
+            ("NIFTY", "momentum"): {"card": {
+                "id": 1, "key": "momentum", "name": "Momentum", "status": "SATISFIED",
+                "side": "CE", "score": 100, "authority": "ADVISORY",
+                "valid_until": time.time() + 5, "source_token": 7, "source_revision": 3,
+            }},
+            ("NIFTY", "order_flow"): {"card": {
+                "id": 5, "key": "order_flow", "name": "Order Flow", "status": "SATISFIED",
+                "side": "PE", "score": 100, "authority": "ADVISORY",
+                "valid_until": time.time() + 5, "source_token": 7, "source_revision": 3,
+            }},
+        }
+        advisory = self.live.quantumedge_advisory("NIFTY", "CE")
+        self.assertEqual(advisory["authority"], "SHADOW")
+        self.assertEqual((advisory["aligned"], advisory["opposed"]), (1, 1))
+        self.assertEqual(advisory["supporting"], ["Momentum"])
+        self.assertEqual(advisory["conflicting"], ["Order Flow"])
+
+    def test_quantumedge_advanced_smc_and_order_flow_remain_advisory(self):
+        smc = {
+            "dataSource": "LIVE", "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
+            "verdict": "BUY", "confidence": 78,
+            "liquidity": {
+                "pools": [{"side": "BSL", "kind": "PDH", "level": 24200, "distancePct": 0.2}],
+                "sweeps": [{"side": "SSL", "trapConfirmed": True, "read": "Confirmed SSL sweep"}],
+            },
+            "zones": {"fvgs": [{"side": "BULLISH", "state": "OPEN", "low": 24090, "high": 24100}]},
+        }
+        flow = {
+            "at": time.time(), "five_level_depth_imbalance": 0.2,
+            "estimated_buy_aggressor_volume": 800, "estimated_sell_aggressor_volume": 200,
+            "volume_data_gap": False,
+        }
+        with mock.patch("services.smc_service.get_smc_service") as smc_service, \
+             mock.patch("services.order_flow_engine.order_flow_engine.live_summary",
+                        return_value=flow):
+            smc_service.return_value.get_snapshot.return_value = {"NIFTY": smc}
+            advanced = self.live.quantumedge_advanced_advisory("NIFTY", "CE")
+        keys = [card["key"] for card in advanced["engines"]]
+        self.assertEqual(keys, [
+            "advanced_liquidity_sweep", "advanced_liquidity_run",
+            "advanced_fvg", "advanced_order_flow",
+        ])
+        self.assertTrue(all(card["authority"] == "ADVISORY" for card in advanced["engines"]))
+        self.assertEqual(len(advanced["supporting"]), 4)
 
     def test_master_toggle_does_not_change_existing_quantedge(self):
         self.live.state["quantedge"]["enabled"] = True

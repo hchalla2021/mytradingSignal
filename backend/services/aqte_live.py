@@ -28,7 +28,7 @@ from services.aqte_engine import (
     CLOCK_SKEW_SECONDS, Contract, IST, Policy, SYMBOLS, day, opportunity_key, round_tick, session,
 )
 from services.aqte_daily_control import IndexControl, SwingSetups, counts, defaults, quality_reason
-from services.aqte_engines import EngineConfig, rank_key, veto_reason
+from services.aqte_engines import ENGINES, EngineConfig, rank_key, veto_reason
 from services.aqte_runtime import Latencies
 from services.aqte_execution_history import bootstrap_executions, capture_context, save_execution
 from services.quantedge_pro import build_candidate
@@ -1532,8 +1532,157 @@ class AQTELiveService:
         budget = self.quantumedge_daily_budget(now)
         if not budget:
             return {"decision": "WAIT", "symbol": symbol, "reason": "QuantumEdge-only daily loss limit reached"}
-        return self.quantumedge.evaluate(self.service(), symbol, now, cfg["lots"], cfg["risk_per_lot"],
-                                         busy, self.costs, daily_budget=budget)
+        candidate = self.quantumedge.evaluate(
+            self.service(), symbol, now, cfg["lots"], cfg["risk_per_lot"],
+            busy, self.costs, daily_budget=budget)
+        if candidate.get("decision") in ("BUY CE", "BUY PE"):
+            candidate["advisory"] = self.quantumedge_advisory(symbol, candidate.get("side"))
+        return candidate
+
+    def quantumedge_advisory(self, symbol, side):
+        """Read the existing twelve AQTE engines without granting them order authority."""
+        market = self.service()
+        evaluators = getattr(market, "evaluators", None)
+        now = time.time()
+        cards = []
+        if evaluators is not None:
+            published = evaluators.snapshot()
+            if isinstance(published, dict):
+                with market.lock:
+                    future = market.engine.future.get(symbol)
+                    revision = (market.engine.book.revisions[("future", future.token, 60)]
+                                if future is not None else None)
+                if future is not None:
+                    for engine in ENGINES:
+                        key = (symbol, engine[1])
+                        state = published.get(key)
+                        card = (state or {}).get("card") if isinstance(state, dict) else None
+                        if not isinstance(card, dict):
+                            continue
+                        if (card.get("valid_until", 0) < now or card.get("source_token") != future.token
+                                or card.get("source_revision") != revision):
+                            continue
+                        cards.append({
+                            "id": card.get("id"), "key": card.get("key"), "name": card.get("name"),
+                            "status": card.get("status"), "side": card.get("side"),
+                            "score": card.get("score"), "authority": card.get("authority"),
+                        })
+        aligned = [card for card in cards
+                   if card.get("status") == "SATISFIED" and card.get("side") == side]
+        opposed = [card for card in cards
+                   if card.get("status") == "SATISFIED" and card.get("side") not in (None, side)]
+        advanced = self.quantumedge_advanced_advisory(symbol, side)
+        cards.extend(advanced["engines"])
+        aligned.extend(card for card in advanced["engines"]
+                       if card.get("status") == "SATISFIED" and card.get("side") == side)
+        opposed.extend(card for card in advanced["engines"]
+                       if card.get("status") == "SATISFIED" and card.get("side") not in (None, side))
+        supporting = sorted(card["name"] for card in aligned if card.get("name"))
+        conflicting = sorted(card["name"] for card in opposed if card.get("name"))
+        return {
+            "available": bool(cards), "authority": "SHADOW", "engine_count": len(cards),
+            "aligned": len(aligned), "opposed": len(opposed), "supporting": supporting,
+            "conflicting": conflicting, "engines": cards, "advanced": advanced,
+            "reason": "Advisory evidence only; QuantumEdge order rules remain authoritative"
+            if cards else "Awaiting fresh independent engine evaluations",
+        }
+
+    @staticmethod
+    def quantumedge_advanced_advisory(symbol, side):
+        from services.order_flow_engine import order_flow_engine
+        from services.smc_service import get_smc_service
+
+        engines = []
+        smc_state = get_smc_service().get_snapshot().get(symbol)
+        smc = smc_state if isinstance(smc_state, dict) else {}
+        smc_fresh = False
+        if smc and smc.get("dataSource") == "LIVE":
+            try:
+                smc_at = datetime.fromisoformat(str(smc.get("timestamp"))).timestamp()
+                smc_fresh = 0 <= time.time() - smc_at <= 15
+            except (TypeError, ValueError, OverflowError):
+                smc_fresh = False
+        if not smc_fresh:
+            smc = {}
+        expected_side = side
+
+        def smc_card(key, name, direction, score, detail):
+            matched = "CE" if direction == "BULLISH" else "PE" if direction == "BEARISH" else None
+            engines.append({
+                "id": len(engines) + 101, "key": key, "name": name,
+                "status": "SATISFIED" if matched else "MONITORING",
+                "side": matched, "score": score, "authority": "ADVISORY",
+                "detail": detail,
+            })
+
+        sweeps = (smc.get("liquidity") or {}).get("sweeps") or ()
+        recent_sweep = next((
+            sweep for sweep in sweeps
+            if isinstance(sweep, dict) and sweep.get("trapConfirmed")
+        ), None)
+        if recent_sweep:
+            sweep_side = recent_sweep.get("side")
+            direction = "BULLISH" if sweep_side == "SSL" else "BEARISH" if sweep_side == "BSL" else None
+            smc_card(
+                "advanced_liquidity_sweep", "SMC Liquidity Sweep", direction,
+                100 if direction else None, recent_sweep.get("read"),
+            )
+
+        pools = (smc.get("liquidity") or {}).get("pools") or ()
+        nearest_pool = min(
+            (pool for pool in pools if isinstance(pool, dict) and pool.get("distancePct") is not None),
+            key=lambda pool: abs(float(pool["distancePct"])), default=None,
+        )
+        if nearest_pool:
+            direction = "BULLISH" if nearest_pool.get("side") == "BSL" else "BEARISH"
+            smc_card(
+                "advanced_liquidity_run", "SMC Liquidity Run", direction, 100,
+                f'{nearest_pool.get("kind")} at {nearest_pool.get("level")}',
+            )
+
+        fvgs = (smc.get("zones") or {}).get("fvgs") or ()
+        open_fvg = next((
+            fvg for fvg in fvgs
+            if isinstance(fvg, dict) and fvg.get("state") == "OPEN" and fvg.get("side") in ("BULLISH", "BEARISH")
+        ), None)
+        if open_fvg:
+            smc_card(
+                "advanced_fvg", "SMC FVG Imbalance", open_fvg.get("side"), 100,
+                f'{open_fvg.get("side")} {open_fvg.get("low")}–{open_fvg.get("high")}',
+            )
+
+        flow = order_flow_engine.live_summary(symbol)
+        if isinstance(flow, dict):
+            age = max(0.0, time.time() - float(flow.get("at") or 0))
+            imbalance = flow.get("five_level_depth_imbalance")
+            buy_volume = float(flow.get("estimated_buy_aggressor_volume") or 0)
+            sell_volume = float(flow.get("estimated_sell_aggressor_volume") or 0)
+            flow_total = buy_volume + sell_volume
+            aggressor_imbalance = ((buy_volume - sell_volume) / flow_total) if flow_total else None
+            direction = None
+            if age <= 10 and isinstance(imbalance, (int, float)):
+                combined = imbalance * 0.6 + (aggressor_imbalance or 0.0) * 0.4
+                if combined >= 0.10:
+                    direction = "BULLISH"
+                elif combined <= -0.10:
+                    direction = "BEARISH"
+            smc_card(
+                "advanced_order_flow", "Advanced Estimated Order Flow", direction,
+                round(abs((aggressor_imbalance or imbalance or 0) * 100)), 
+                f'age {age:.1f}s; depth/aggressor estimates; data gaps '
+                f'{"present" if flow.get("volume_data_gap") else "absent"}',
+            )
+
+        supporting = [card["name"] for card in engines
+                      if card.get("status") == "SATISFIED" and card.get("side") == expected_side]
+        conflicting = [card["name"] for card in engines
+                       if card.get("status") == "SATISFIED"
+                       and card.get("side") not in (None, expected_side)]
+        return {
+            "smc_verdict": smc.get("verdict"), "smc_confidence": smc.get("confidence"),
+            "supporting": supporting, "conflicting": conflicting, "engines": engines,
+            "smc_available": bool(smc), "order_flow_available": isinstance(flow, dict),
+        }
 
     def quantumedge_proposal(self, symbol, busy=None):
         with self.lock:
@@ -1553,10 +1702,12 @@ class AQTELiveService:
                 "setup_key": signal["setup_key"],
                 "side": signal["contract"]["side"],
                 "ml_features": signal.get("ml_features", ()),
+                "advisory": copy.deepcopy(signal.get("advisory")),
                 "execution_context": {
                     "strategy_name": signal.get("strategy_name") or signal["strategy"],
                     "entry_engine": "QuantumEdge IntraDay independent engine",
-                    "reason": signal["reason"], "supporting_engines": [],
+                    "reason": signal["reason"],
+                    "supporting_engines": list((signal.get("advisory") or {}).get("supporting") or []),
                     "confidence": self.quantumedge.last_result.get(symbol, {}).get("confidence"),
                     "captured_at": time.time(),
                 },

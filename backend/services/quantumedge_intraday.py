@@ -264,7 +264,10 @@ class QuantumEdgeIntradayService:
                 result = {"approved": False, "state": "ML_BLOCKED", "reason": ml["reason"], "attempted": False}
             else:
                 # Claude reviews the market/risk evidence independently, not LightGBM's score.
-                result = self._call_ai({k: v for k, v in candidate.items() if k != "ml_features"})
+                result = self._call_ai({
+                    k: v for k, v in candidate.items()
+                    if k not in ("ml_features", "advisory")
+                })
             result = {**result, "ml": ml}
             with self.lock:
                 if result.get("attempted"):

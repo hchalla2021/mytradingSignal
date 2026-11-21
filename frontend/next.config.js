@@ -1,7 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  distDir: process.env.NEXT_DIST_DIR || '.next',
+  // Keep dev and production webpack/server chunks isolated. Running `next dev`
+  // beside `next start` must never overwrite the production build.
+  distDir: process.env.NEXT_DIST_DIR ||
+    (process.env.NODE_ENV === 'development' ? '.next-dev' : '.next'),
   // Use git-based build ID in production, stable ID in dev (so webpack cache persists across restarts)
   generateBuildId: async () => {
     if (process.env.NODE_ENV === 'production') {
