@@ -16,6 +16,7 @@ import { getOrCreateVisitorId } from '@/lib/visitor-id';
 // Dynamic imports for components that use live data - prevents SSR issues
 const AutonomiqProSection = dynamic(() => import('@/components/AutonomiqProSection'), { ssr: false });
 const QuantumEdgeIntradaySection = dynamic(() => import('@/components/QuantumEdgeIntradaySection'), { ssr: false });
+const OpeningEdgeSection = dynamic(() => import('@/components/OpeningEdgeSection'), { ssr: false });
 const AQTESection = dynamic(() => import('@/components/AQTESection'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
 
@@ -260,6 +261,7 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-[1820px] flex-col">
         <div style={{ order: -14 }} className="min-w-0">
           <QuantumEdgeIntradaySection marketData={marketData} isConnected={isConnected} />
+          <OpeningEdgeSection />
         </div>
         <div style={{ order: -13 }} className="min-w-0">
           <AutonomiqProSection marketData={marketData} isConnected={isConnected} />

@@ -88,6 +88,23 @@ services:
       retries: 3
       start_period: 20s
 
+  openingedge-api:
+    build:
+      context: ./openingedge
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - OPENINGEDGE_DB_PATH=/app/data/openingedge.sqlite3
+      - OPENINGEDGE_BACKEND_ENV_FILE=/run/backend/.env
+    volumes:
+      - openingedge-data:/app/data
+      - ${BACKEND_ENV_FILE:-./backend/.env}:/run/backend/.env:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8012/health', timeout=5).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # Frontend Next.js Server
   frontend:
     build:
@@ -104,6 +121,7 @@ services:
       # the frontend uses same-origin API/WebSocket URLs; proxy /api and /ws to backend.
       - NODE_ENV=production
       - MORNINGEDGE_API_URL=http://morningedge-api:8010
+      - OPENINGEDGE_API_URL=http://openingedge-api:8012
       - BACKEND_API_URL=http://backend:8000
     depends_on:
       - backend
@@ -128,5 +146,6 @@ volumes:
   aqte-data:
   expiryedge-data:
   morningedge-data:
+  openingedge-data:
   zerodha-auth-data:
     name: mytrading-zerodha-auth
