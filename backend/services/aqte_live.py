@@ -12,12 +12,13 @@ import sqlite3
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from statistics import fmean
+from typing import Any
 from uuid import uuid4
 
 import requests
@@ -25,7 +26,7 @@ from kiteconnect import KiteConnect
 
 from config import get_settings
 from services.aqte_engine import (
-    CLOCK_SKEW_SECONDS, Contract, IST, Policy, SYMBOLS, day, opportunity_key, round_tick, session,
+    CLOCK_SKEW_SECONDS, Candle, Contract, IST, Policy, SYMBOLS, day, opportunity_key, round_tick, session,
 )
 from services.aqte_daily_control import IndexControl, SwingSetups, counts, defaults, quality_reason
 from services.aqte_engines import ENGINES, EngineConfig, rank_key, veto_reason
@@ -224,7 +225,8 @@ class AQTELiveService:
         self.ip_check = ip_check or outbound_ip
         self.lock = threading.RLock()
         self.state = {"armed_day": None, "automation_on": False, "automation_wanted": False, "killed": False,
-                      "account": None, "active": None, "trades": [], "used": [], "daily_controls": defaults(),
+                      "account": None, "active": None, "quantumedge_positions": [],
+                      "trades": [], "used": [], "daily_controls": defaults(),
                       "daily_entries": [], "daily_controls_version": DAILY_CONTROL_DEFAULTS_VERSION,
                       "automation_approval_version": AUTOMATION_APPROVAL_VERSION,
                       "quantedge": {"enabled": False, "lots": 1},
@@ -327,6 +329,25 @@ class AQTELiveService:
                 "SELECT opportunity_key,payload FROM live_opportunities ORDER BY at DESC LIMIT 512").fetchall())}
         self.state["armed_day"] = None
         self.state["automation_on"] = False
+        self.state.setdefault("quantumedge_positions", [])
+        extra_positions = self.state["quantumedge_positions"]
+        active = self.state.get("active")
+        if (not isinstance(extra_positions, list) or any(
+            not isinstance(position, dict) or position.get("owner") != "QUANTUMEDGE"
+            for position in extra_positions
+        )):
+            raise LiveBlocked("Invalid saved QuantumEdge positions; journal requires repair before trading")
+        if active is None and extra_positions:
+            self.state["active"] = extra_positions.pop(0)
+            active = self.state["active"]
+        if (active and active.get("owner") != "QUANTUMEDGE" and extra_positions) or (
+            len(extra_positions) + (1 if active and active.get("owner") == "QUANTUMEDGE" else 0) > len(SYMBOLS)
+        ):
+            raise LiveBlocked("Inconsistent saved QuantumEdge positions; journal requires repair before trading")
+        quantumedge_positions = ([active] if active and active.get("owner") == "QUANTUMEDGE" else []) + extra_positions
+        if (len({position.get("symbol") for position in quantumedge_positions}) != len(quantumedge_positions)
+                or len({position.get("id") for position in quantumedge_positions}) != len(quantumedge_positions)):
+            raise LiveBlocked("Duplicate saved QuantumEdge positions; journal requires repair before trading")
         self.state.setdefault("daily_controls", defaults())
         self.state.setdefault("daily_entries", [])
         self.state.setdefault("quantedge", {"enabled": False, "lots": 1})
@@ -589,8 +610,33 @@ class AQTELiveService:
 
     def pins(self):
         with self.lock:
-            active = self.state["active"]
-            return {active["contract"]["token"]: Contract(**active["contract"])} if active else {}
+            return {
+                trade["contract"]["token"]: Contract(**trade["contract"])
+                for trade in self.active_trades()
+            }
+
+    def active_trades(self):
+        active = self.state.get("active")
+        return ([active] if active else []) + list(self.state.get("quantumedge_positions", ()))
+
+    def quantumedge_positions(self):
+        active = self.state.get("active")
+        return ([active] if active and active.get("owner") == "QUANTUMEDGE" else []) + list(
+            self.state.get("quantumedge_positions", ()))
+
+    def find_active_trade(self, trade_id):
+        return next((trade for trade in self.active_trades() if trade.get("id") == trade_id), None)
+
+    def quantumedge_slot_reason(self, symbol):
+        active = self.state.get("active")
+        if active and active.get("owner") != "QUANTUMEDGE":
+            return "The shared execution manager is occupied by another strategy"
+        positions = self.quantumedge_positions()
+        if any(position["symbol"] == symbol for position in positions):
+            return f"QuantumEdge already has an active {symbol} position"
+        if len(positions) >= len(SYMBOLS):
+            return "All three QuantumEdge index slots are occupied"
+        return None
 
     def effective(self, symbol, signal):
         return self.select_entry(symbol, signal)["signal"]
@@ -967,7 +1013,11 @@ class AQTELiveService:
             raise LiveBlocked("Live trading is not armed for this session")
         if not session(now) or datetime.fromtimestamp(now, IST).hour * 60 + datetime.fromtimestamp(now, IST).minute >= 915:
             raise LiveBlocked("Live entries permitted only from 09:15 until 15:15 IST")
-        if self.state["active"]:
+        active = self.state.get("active")
+        if active and not (
+            owner == "QUANTUMEDGE" and active.get("owner") == "QUANTUMEDGE"
+            and len(self.quantumedge_positions()) < len(SYMBOLS)
+        ):
             raise LiveBlocked("Only one live trade may be pending/open across all indices")
         if self.checked_outbound_ip() != cfg.aqte_live_static_ip:
             self.state["armed_day"] = None
@@ -1507,7 +1557,18 @@ class AQTELiveService:
     def quantumedge_daily_budget(self, now: float) -> float:
         pnl = sum(trade["net_pnl"] for trade in self.state["trades"]
                   if trade.get("owner") == "QUANTUMEDGE" and day(trade["entry_at"]) == day(now))
-        return max(0, QUANTUMEDGE_DAILY_LOSS_LIMIT + pnl)
+        reserved = 0.0
+        for trade in self.quantumedge_positions():
+            risk = trade.get("risk")
+            if isinstance(risk, (int, float)) and math.isfinite(risk) and risk > 0:
+                reserved += risk
+                continue
+            entry = float(trade.get("entry_price") or trade.get("limit") or 0)
+            stop = float(trade.get("initial_stop") or trade.get("stop") or 0)
+            quantity = int(trade.get("filled") or trade.get("quantity") or 0)
+            if entry > stop > 0 and quantity > 0:
+                reserved += (entry - stop) * quantity + self.costs(entry, quantity) + self.costs(stop, quantity)
+        return max(0, QUANTUMEDGE_DAILY_LOSS_LIMIT + pnl - reserved)
 
     def quantumedge_loss_budget_reason(self, risk):
         budget = self.quantumedge_daily_budget(time.time())
@@ -1689,8 +1750,9 @@ class AQTELiveService:
             self.config_guard()
             if not self.state["quantumedge"]["enabled"]:
                 raise LiveBlocked("QuantumEdge IntraDay master live approval is OFF")
-            if self.state["active"]:
-                raise EntrySkipped("The shared centralized broker slot is occupied")
+            slot_reason = self.quantumedge_slot_reason(symbol)
+            if slot_reason:
+                raise EntrySkipped(slot_reason)
             signal = self.quantumedge_candidate(symbol, busy)
             if signal.get("decision") not in ("BUY CE", "BUY PE") or not signal.get("entry"):
                 raise EntrySkipped(signal.get("reason") or "No qualified QuantumEdge signal")
@@ -1701,12 +1763,16 @@ class AQTELiveService:
                 "signal_at": signal["signal_at"], "expires_at": time.time() + 15,
                 "setup_key": signal["setup_key"],
                 "side": signal["contract"]["side"],
+                **({"futures_invalidation": copy.deepcopy(signal["futures_invalidation"])}
+                   if signal.get("futures_invalidation") else {}),
                 "ml_features": signal.get("ml_features", ()),
                 "advisory": copy.deepcopy(signal.get("advisory")),
                 "execution_context": {
                     "strategy_name": signal.get("strategy_name") or signal["strategy"],
                     "entry_engine": "QuantumEdge IntraDay independent engine",
                     "reason": signal["reason"],
+                    **({"futures_invalidation": copy.deepcopy(signal["futures_invalidation"])}
+                       if signal.get("futures_invalidation") else {}),
                     "supporting_engines": list((signal.get("advisory") or {}).get("supporting") or []),
                     "confidence": self.quantumedge.last_result.get(symbol, {}).get("confidence"),
                     "captured_at": time.time(),
@@ -1725,6 +1791,8 @@ class AQTELiveService:
             reason = "strategy candle changed"
         elif fresh["contract"] != approved["contract"]:
             reason = "option contract changed"
+        elif fresh.get("futures_invalidation") != approved.get("futures_invalidation"):
+            reason = "price-action stop changed"
         elif entry["quantity"] != approved_entry["quantity"]:
             reason = "quantity changed"
         elif entry["maximum"] > approved_entry["maximum"]:
@@ -1744,6 +1812,9 @@ class AQTELiveService:
         active = self.state.get("active")
         if not active or active.get("owner") != "QUANTUMEDGE":
             return None
+        return self.quantumedge_position(active)
+
+    def quantumedge_position(self, active):
         result = copy.deepcopy(active)
         market = self.service()
         with market.lock:
@@ -1759,6 +1830,9 @@ class AQTELiveService:
             if ltp is not None and open_quantity > 0 and entry_price > 0 else None
         )
         return result
+
+    def quantumedge_open_positions(self):
+        return [self.quantumedge_position(active) for active in self.quantumedge_positions()]
 
     def quantumedge_status(self):
         with self.lock:
@@ -1803,6 +1877,8 @@ class AQTELiveService:
                         "reason": f"Signal unavailable ({type(exc).__name__})",
                     }
             active = self.quantumedge_active()
+            positions = self.quantumedge_open_positions()
+            position_symbols = {position["symbol"] for position in positions}
             auth_connected = auth_state_manager.is_authenticated
             for symbol, signal in signals.items():
                 ai_result = self.quantumedge.last_result.get(symbol) or {}
@@ -1810,7 +1886,7 @@ class AQTELiveService:
                 budget_reason = (self.quantumedge_loss_budget_reason(signal["risk"])
                                  if "risk" in signal else None)
                 attempt_block = self.quantumedge_entry_blocks.get(symbol)
-                if active and active.get("owner") == "QUANTUMEDGE" and active.get("symbol") == symbol:
+                if symbol in position_symbols:
                     signal["status"] = "LIVE_POSITION"
                 elif market_phase != "NORMAL":
                     signal["status"] = "WAIT_SESSION"
@@ -1836,8 +1912,12 @@ class AQTELiveService:
                     signal["status"] = ai_result["state"]
                     signal["reason"] = ai_result.get("reason") or signal.get("reason")
                 elif ai_result.get("state") == "APPROVED":
-                    signal["status"] = ("AI_APPROVED" if self.state["armed_day"] == day(now)
-                                        and not active else "WAIT_BROKER")
+                    slot_reason = self.quantumedge_slot_reason(symbol)
+                    if slot_reason:
+                        signal.update(status="ENTRY_BLOCKED", reason=slot_reason)
+                    else:
+                        signal["status"] = ("AI_APPROVED" if self.state["armed_day"] == day(now)
+                                            else "WAIT_BROKER")
             trades = [copy.deepcopy(trade) for trade in self.state["trades"]
                       if trade.get("owner") == "QUANTUMEDGE" and day(trade["entry_at"]) == day(now)]
             entries = [entry for entry in self.state["daily_entries"]
@@ -1848,8 +1928,8 @@ class AQTELiveService:
                 "indices": copy.deepcopy(cfg["indices"]),
                 "signals": signals, "ai": self.quantumedge.status(),
                 "active": active,
-                "positions": [active] if active and int(active.get("filled") or 0)
-                > int(active.get("exited") or 0) else [],
+                "positions": [position for position in positions if int(position.get("filled") or 0)
+                              > int(position.get("exited") or 0)],
                 "trades": trades, "daily_trades": len(entries),
                 "daily_pnl": round(sum(trade["net_pnl"] for trade in trades), 2),
                 "daily_loss_limit": QUANTUMEDGE_DAILY_LOSS_LIMIT, "max_trades": 5,
@@ -1915,7 +1995,7 @@ class AQTELiveService:
 
     def request_quantumedge_exit(self, trade_id):
         with self.lock:
-            active = self.state.get("active")
+            active = self.find_active_trade(trade_id)
             if (not active or active.get("owner") != "QUANTUMEDGE"
                     or active.get("id") != trade_id):
                 raise LiveBlocked("The selected QuantumEdge trade is no longer active")
@@ -1947,12 +2027,17 @@ class AQTELiveService:
             now = time.time()
             if not self.state["quantumedge"]["enabled"] or not entry_window(now):
                 return
-            if self.state.get("active") or self.state.get("flatten_pending") or self.state["killed"]:
+            active = self.state.get("active")
+            if (active and active.get("owner") != "QUANTUMEDGE") or self.state.get(
+                    "flatten_pending") or self.state["killed"]:
+                return
+            active_symbols = {position["symbol"] for position in self.quantumedge_positions()}
+            if len(active_symbols) >= len(SYMBOLS):
                 return
             busy = self.book(self.broker())["busy"]
             qualified = []
             for symbol in SYMBOLS:
-                if not self.state["quantumedge"]["indices"][symbol]["enabled"]:
+                if (symbol in active_symbols or not self.state["quantumedge"]["indices"][symbol]["enabled"]):
                     continue
                 candidate = self.quantumedge_candidate(symbol, busy)
                 if candidate.get("decision") in ("BUY CE", "BUY PE") and not (
@@ -1995,7 +2080,9 @@ class AQTELiveService:
                     continue
                 self.quantumedge_entry_blocks.pop(candidate["symbol"], None)
                 self.quantumedge.consume_approved(candidate["setup_key"])
-                return
+                active_symbols.add(candidate["symbol"])
+                if len(active_symbols) >= len(SYMBOLS):
+                    return
             if not activated:
                 self.quantumedge_activate(time.time())
 
@@ -2886,6 +2973,10 @@ class AQTELiveService:
                 current["entry"]["maximum"] > proposal["entry"]["maximum"]
             ):
                 raise EntrySkipped("Signal or entry levels changed; review a new proposal")
+            if owner == "QUANTUMEDGE" and (
+                current.get("futures_invalidation") != proposal.get("futures_invalidation")
+            ):
+                raise EntrySkipped("Price-action stop changed; review a new proposal")
             if current["risk"] > proposal["risk"]:
                 raise EntrySkipped("Rechecked risk exceeds the approved risk; review a new proposal")
             if owner == "QUANTUMEDGE" and current["entry"]["quantity"] != proposal["entry"]["quantity"]:
@@ -2958,6 +3049,10 @@ class AQTELiveService:
                     quote.ask > latest["entry"]["maximum"] or quote.ask <= latest["entry"]["stop"]
                 ):
                     raise EntrySkipped("Latest signal/risk no longer fits the approved broker quote")
+                if owner == "QUANTUMEDGE" and (
+                    latest.get("futures_invalidation") != proposal.get("futures_invalidation")
+                ):
+                    raise EntrySkipped("Latest price-action stop changed; review a new proposal")
                 if time.time() >= proposal["expires_at"]:
                     raise EntrySkipped("Approval expired during final signal checks")
                 if owner == "QUANTUMEDGE":
@@ -2992,16 +3087,29 @@ class AQTELiveService:
                 "signal_at": proposal["signal_at"],
                 "setup_key": proposal["setup_key"],
                 "entry_day": day(now), "exit_requested": None, "error": None,
+                **({"risk": proposal["risk"]} if owner == "QUANTUMEDGE" else {}),
+                **({
+                    "trailing_mode": "SMART_ATR_STRUCTURE",
+                    "trailing_status": "WAITING_FOR_1R",
+                } if owner == "QUANTUMEDGE" and self.quantumedge.smart_trailing_stop_enabled() else {}),
+                **({
+                    "futures_invalidation": copy.deepcopy(proposal["futures_invalidation"]),
+                    "structure_checked_at": proposal["futures_invalidation"]["signal_bar_at"],
+                    "futures_invalidation_status": "MONITORING",
+                } if owner == "QUANTUMEDGE" and proposal.get("futures_invalidation") else {}),
             }
             if owner == "EXPIRYEDGE":
                 active["algo"] = proposal["algo"]
-            self.state["active"] = active
+            if owner == "QUANTUMEDGE" and self.state.get("active"):
+                self.state["quantumedge_positions"].append(active)
+            else:
+                self.state["active"] = active
             self.state["daily_entries"].append(dict(id=active["id"], owner=owner, symbol=active["symbol"], at=now,
                                                    filled=False, pending=True, token=c["token"], price=entry["maximum"]))
             if owner == "EXPIRYEDGE":
                 self.state["daily_entries"][-1]["algo"] = proposal["algo"]
             self.state["used"].append(proposal["setup_key"])
-            self.save("ENTRY_INTENT", proposal=proposal, tag=active["id"] + "E")
+            self.save("ENTRY_INTENT", proposal=proposal, tag=active["id"] + "E", execution=active)
             self.metrics.observe("execution.signal_to_intent", max(0, now - proposal["signal_at"]) * 1000)
             self.metrics.increment("orders_submitted")
             try:
@@ -3013,13 +3121,13 @@ class AQTELiveService:
                 if not order_id:
                     raise ValueError("Broker did not return an order ID")
                 active.update(entry_id=str(order_id), entry_ack_at=time.time(), state="ENTRY_PENDING")
-                self.save("ENTRY_ACK", order_id=str(order_id))
+                self.save("ENTRY_ACK", order_id=str(order_id), execution=active)
                 self.metrics.increment("orders_acknowledged")
             except Exception:
                 logger.exception("AQTE live entry outcome uncertain; automatic resubmission prohibited")
                 active["error"] = "Entry outcome uncertain; reconcile broker order book. Do not retry."
                 self.state["armed_day"] = None
-                self.save("ENTRY_UNCERTAIN")
+                self.save("ENTRY_UNCERTAIN", execution=active)
                 self.metrics.increment("orders_unknown")
             return self.status()
 
@@ -3027,7 +3135,7 @@ class AQTELiveService:
         with self.lock:
             if not self.ready:
                 raise LiveBlocked("Live journal is unavailable; manage the position in Kite")
-            active = self.state["active"]
+            active = self.find_active_trade(trade_id)
             owner = (active or {}).get("owner", "AQTE")
             label = OWNER_LABELS.get(owner, "AQTE")
             if self.state["killed"] or self.state.get("flatten_pending"):
@@ -3066,7 +3174,7 @@ class AQTELiveService:
                 active.update(exit_requested="MANUAL_EXIT", exit_request_at=time.time())
             # The monitor reconciles identity/quantity, then modifies only this trade's existing sell order.
             self.save("MANUAL_EXIT_REQUESTED", trade_id=trade_id, scope=f"SELECTED_{owner}_TRADE",
-                      **({"algo": active["algo"]} if active.get("algo") else {}))
+                      execution=active, **({"algo": active["algo"]} if active.get("algo") else {}))
             return self.status()
 
     def find_order(self, orders, active, leg):
@@ -3101,17 +3209,95 @@ class AQTELiveService:
             logger.exception("AQTE live %s failed; preserving existing protection", kind)
             raise
 
+    @staticmethod
+    def quantumedge_price_action_exit(active, bars, now):
+        invalidation = active.get("futures_invalidation")
+        if not isinstance(invalidation, dict):
+            return None, None
+        side = active.get("contract", {}).get("side")
+        level = invalidation.get("level")
+        signal_bar_at = invalidation.get("signal_bar_at")
+        if (side not in ("CE", "PE") or not isinstance(level, (int, float))
+                or not math.isfinite(level) or not isinstance(signal_bar_at, (int, float))
+                or not math.isfinite(signal_bar_at)):
+            return None, None
+        cursor = max(float(signal_bar_at), float(active.get("structure_checked_at") or signal_bar_at))
+        latest_checked = None
+        for index, bar in enumerate(bars):
+            closed_at = float(bar["at"]) + 60
+            if closed_at <= cursor or closed_at > now:
+                continue
+            previous = bars[index - 1] if index else None
+            contiguous = previous is not None and bar["at"] - previous["at"] == 60
+            if contiguous:
+                bearish_confirmation = (
+                    side == "CE" and bar["close"] < level and bar["close"] < bar["open"]
+                    and bar["close"] < previous["close"]
+                )
+                bullish_confirmation = (
+                    side == "PE" and bar["close"] > level and bar["close"] > bar["open"]
+                    and bar["close"] > previous["close"]
+                )
+                if bearish_confirmation or bullish_confirmation:
+                    return "PRICE_ACTION_INVALIDATION", closed_at
+            cursor = closed_at
+            latest_checked = closed_at
+        return None, latest_checked
+
     def reconcile(self):
+        with self.lock:
+            if not self.ready:
+                return
+            trade_ids = [trade["id"] for trade in self.active_trades()]
+            if not trade_ids:
+                return
+            broker = self.broker()
+            account = broker.profile()["user_id"]
+            orders = broker.orders()
+            positions = broker.positions()["net"]
+            for trade_id in trade_ids:
+                active = self.find_active_trade(trade_id)
+                if active is None:
+                    continue
+                if account != active["account"]:
+                    raise LiveBlocked("Active live position belongs to a different Kite account")
+                current = self.state.get("active")
+                if current and current.get("id") == trade_id:
+                    self._reconcile_active(broker, orders, positions)
+                    if self.state.get("active") is None and self.state["quantumedge_positions"]:
+                        self.state["active"] = self.state["quantumedge_positions"].pop(0)
+                    continue
+                self._reconcile_extra_trade(trade_id, broker, orders, positions)
+
+    def _reconcile_extra_trade(self, trade_id, broker, orders, positions):
+        extra_positions = self.state["quantumedge_positions"]
+        active = next((trade for trade in extra_positions if trade.get("id") == trade_id), None)
+        if active is None:
+            return
+        previous = self.state.get("active")
+        extra_positions.remove(active)
+        if previous is not None:
+            extra_positions.insert(0, previous)
+        self.state["active"] = active
+        try:
+            self._reconcile_active(broker, orders, positions)
+        finally:
+            current = self.state.get("active")
+            if previous is not None:
+                extra_positions.remove(previous)
+                self.state["active"] = previous
+                if current is not None and current.get("id") == trade_id:
+                    extra_positions.append(current)
+            elif current is None and extra_positions:
+                self.state["active"] = extra_positions.pop(0)
+
+    def _reconcile_active(self, broker, orders, broker_positions):
         with self.lock:
             active = self.state["active"]
             if not active or not self.ready:
                 return
-            broker = self.broker()
-            if broker.profile()["user_id"] != active["account"]:
-                raise LiveBlocked("Active live position belongs to a different Kite account")
             if active["entry_day"] != day(time.time()):
                 raise LiveBlocked("Previous-session live trade requires reconciliation in Kite before any further orders")
-            orders = broker.orders()
             entry = self.find_order(orders, active, "E")
             if entry is None:
                 raise LiveBlocked("Entry outcome unknown: no tagged order in broker book; no retry will be sent")
@@ -3158,8 +3344,8 @@ class AQTELiveService:
                 active["fill_at"] = time.time()
                 self.metrics.observe("execution.intent_to_confirmed_fill", max(0, active["fill_at"] - active["entry_at"]) * 1000)
                 self.metrics.increment("orders_filled")
-            positions = broker.positions()["net"]
-            matches = [p for p in positions if int(p["instrument_token"]) == active["contract"]["token"] and p["product"] == "MIS"]
+            matches = [p for p in broker_positions
+                       if int(p["instrument_token"]) == active["contract"]["token"] and p["product"] == "MIS"]
             quantity = sum(int(p["quantity"]) for p in matches)
             protection = self.find_order(orders, active, "S")
             active["protection_confirmed"] = bool(
@@ -3228,10 +3414,29 @@ class AQTELiveService:
                     self.save("TRAIL_CONFIRMED", stop=broker_stop, order_id=active["protect_id"])
             market = self.service()
             with market.lock:
-                quote = market.engine.options.get(active["contract"]["token"])
-                fresh = market.engine.fresh(quote, time.time())
+                check_at = time.time()
+                engine = market.engine
+                quote = engine.options.get(active["contract"]["token"])
+                fresh = engine.fresh(quote, check_at)
+                future = engine.future.get(active["symbol"])
+                future_fresh = engine.fresh(future, check_at)
+                future_bars = (
+                    tuple(engine.book.closed.get(("future", future.token, 60), ()))
+                    if future is not None else ()
+                )
+                option_bars = tuple(engine.book.closed.get(
+                    ("option", active["contract"]["token"], 60),
+                ))
                 healthy = market.started and not market.failed.is_set()
             now = time.time()
+            has_price_action_stop = (
+                active.get("owner") == "QUANTUMEDGE" and active.get("futures_invalidation")
+            )
+            if has_price_action_stop:
+                active["futures_invalidation_status"] = (
+                    "MONITORING" if healthy and fresh and future_fresh else
+                    "FUTURES_FEED_UNAVAILABLE" if not future_fresh else "MARKET_DATA_UNAVAILABLE"
+                )
             minute = datetime.fromtimestamp(now, IST).hour * 60 + datetime.fromtimestamp(now, IST).minute
             reason = active["exit_requested"]
             if self.state["killed"]:
@@ -3245,6 +3450,15 @@ class AQTELiveService:
                 return
             if not 0 < quote.bid <= quote.ask:
                 raise LiveBlocked("Live bid/ask invalid; retaining broker stop")
+            if has_price_action_stop and future_fresh:
+                invalidation_reason, checked_at = self.quantumedge_price_action_exit(
+                    active, future_bars, now,
+                )
+                if checked_at is not None:
+                    active["structure_checked_at"] = checked_at
+                if invalidation_reason:
+                    active["futures_invalidation_status"] = "TRIGGERED"
+                    reason = reason or invalidation_reason
             daily_pnl = sum(t["net_pnl"] for t in self.state["trades"] if day(t["entry_at"]) == day(now))
             marked_pnl = daily_pnl + (quote.bid - active["entry_price"]) * filled - self.costs(
                 active["entry_price"], filled) - self.costs(quote.bid, filled)
@@ -3268,6 +3482,21 @@ class AQTELiveService:
                 morning = self.morning_service()
                 if morning is not None:
                     reason = reason or morning.exit_reason(active, now)
+            smart_stop = None
+            smart_status = None
+            if (not reason and protection["status"] == "TRIGGER PENDING"
+                    and active.get("trailing_mode") == "SMART_ATR_STRUCTURE"):
+                active["peak"] = max(active.get("peak", 0), quote.bid)
+                smart_stop, smart_status = self.quantumedge_smart_trailing_stop(
+                    active, option_bars, now,
+                )
+                active["trailing_status"] = smart_status
+                if smart_stop is not None:
+                    smart_stop = round_tick(smart_stop, active["contract"]["tick_size"], up=True)
+                    if smart_stop > active["stop"] + active["contract"]["tick_size"] / 2 \
+                            and quote.bid <= smart_stop:
+                        active["trailing_status"] = "SMART_TRAIL_CROSSED"
+                        reason = "SMART_TRAIL_CROSSED"
             # Modify the SAME sell order, never create a competing target/exit order.
             c = active["contract"]
             if reason or protection["status"] == "OPEN":
@@ -3290,7 +3519,9 @@ class AQTELiveService:
                 trail_gap = distance * active.get("trail_gap_r", 1.0)
                 trail_start = distance * active.get("trail_start_r", 1.0)
                 if distance > 0 and remaining > 0 and active["peak"] >= active["entry_price"] + trail_start:
-                    if active.get("breakeven_on_start"):
+                    if smart_stop is not None:
+                        stop_candidate = smart_stop
+                    elif active.get("breakeven_on_start"):
                         trail_gap_threshold = active["entry_price"] + trail_start + trail_gap
                         stop_candidate = (active["entry_price"] if active["peak"] < trail_gap_threshold
                                           else active["peak"] - trail_gap)
@@ -3312,6 +3543,73 @@ class AQTELiveService:
             self.error = None
             self.save("RECONCILED")
 
+    def quantumedge_smart_trailing_stop(
+        self, active: dict[str, Any], bars: Sequence[Candle], now: float,
+    ) -> tuple[float | None, str]:
+        try:
+            entry = float(active["entry_price"])
+            initial_stop = float(active["initial_stop"])
+            peak = float(active["peak"])
+            entry_at = float(active["entry_at"])
+            tick_size = float(active["contract"]["tick_size"])
+            quantity = int(active.get("filled") or active.get("quantity") or 0)
+            trail_start_r = float(active.get("trail_start_r", 1.0))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None, "R_MULTIPLE_FALLBACK"
+        values = (entry, initial_stop, peak, entry_at, tick_size, trail_start_r)
+        risk = entry - initial_stop
+        if (not all(math.isfinite(value) for value in values) or not math.isfinite(risk)
+                or risk <= 0 or tick_size <= 0 or quantity <= 0 or trail_start_r <= 0):
+            return None, "R_MULTIPLE_FALLBACK"
+
+        gain = peak - entry
+        if gain < risk * trail_start_r:
+            return None, "WAITING_FOR_1R"
+
+        breakeven = entry + 2 * self.costs(entry, quantity) / quantity
+        breakeven = min(breakeven, peak - 2 * tick_size)
+        if gain < risk * (trail_start_r + 0.5):
+            return max(entry, breakeven), "BREAKEVEN"
+
+        first_full_bar = math.ceil(entry_at / 60) * 60
+        recent = [
+            bar for bar in bars
+            if bar["at"] >= first_full_bar and day(bar["at"]) == day(now)
+            and session(bar["at"]) and bar["at"] + 60 <= now
+        ][-9:]
+        if (len(recent) < 9 or any(right["at"] - left["at"] != 60
+                                   for left, right in zip(recent, recent[1:]))
+                or not 0 <= now - (recent[-1]["at"] + 60) <= 90):
+            return None, "R_MULTIPLE_FALLBACK"
+        for bar in recent:
+            candle = (bar["open"], bar["high"], bar["low"], bar["close"])
+            if (not all(math.isfinite(value) for value in candle) or bar["low"] <= 0
+                    or bar["low"] > min(bar["open"], bar["close"])
+                    or bar["high"] < max(bar["open"], bar["close"])):
+                return None, "R_MULTIPLE_FALLBACK"
+        true_ranges = [
+            max(bar["high"] - bar["low"], abs(bar["high"] - previous["close"]),
+                abs(bar["low"] - previous["close"]))
+            for previous, bar in zip(recent, recent[1:])
+        ]
+        atr = fmean(true_ranges)
+        if not math.isfinite(atr) or atr <= 0:
+            return None, "R_MULTIPLE_FALLBACK"
+
+        pivot_low = next((
+            recent[index]["low"] for index in range(len(recent) - 2, max(1, len(recent) - 7), -1)
+            if recent[index]["low"] < recent[index - 1]["low"]
+            and recent[index]["low"] <= recent[index + 1]["low"]
+        ), None)
+        volatility_stop = peak - max(1.5 * atr, 0.75 * risk)
+        structure_stop = pivot_low - 0.25 * atr if pivot_low is not None else volatility_stop
+        profit_floor = entry + max(0.0, gain - risk * trail_start_r) * 0.25
+        candidate = max(entry, profit_floor, min(volatility_stop, structure_stop))
+        candidate = min(candidate, peak - 2 * tick_size)
+        if not math.isfinite(candidate) or candidate <= 0:
+            return None, "R_MULTIPLE_FALLBACK"
+        return candidate, "SMART_ATR_STRUCTURE"
+
     def audit(self, kind, **payload):
         # Emergency square-off must continue even when the journal cannot be written.
         try:
@@ -3330,8 +3628,8 @@ class AQTELiveService:
             self.waiting = None
             self.proposals.clear()
             self.kill_sent.clear()
-            if self.state["active"]:
-                self.state["active"]["exit_requested"] = "EMERGENCY_STOP"
+            for active in self.active_trades():
+                active["exit_requested"] = "EMERGENCY_STOP"
             self.audit("EMERGENCY_STOP", scope="TAGGED_ALGORITHM_POSITIONS_AND_ORDERS")
             try:
                 self.emergency_flatten()
@@ -3423,9 +3721,8 @@ class AQTELiveService:
             self.error = "; ".join(problems) or "Emergency square-off in progress; verify in Kite"
 
     def finish_emergency(self, orders):
-        active = self.state["active"]
-        execution = None
-        if active:
+        executions = []
+        for active in self.active_trades():
             entry = next((o for o in orders if o.get("tag") == active["id"] + "E"), None)
             if entry and entry.get("order_id") is not None:
                 active["entry_id"] = str(entry["order_id"])
@@ -3445,17 +3742,25 @@ class AQTELiveService:
                                              "exit_at": time.time(), "exit_price": exit_price,
                                              "exit_reason": "EMERGENCY_STOP", "net_pnl": net,
                                              "exit_unverified": exit_price is None})
-                execution = self.state["trades"][-1]
+                executions.append(self.state["trades"][-1])
             else:
-                execution = {**active, "state": "UNVERIFIED",
-                             "broker_status": entry["status"] if entry else None,
-                             "status_message": entry.get("status_message") if entry else "Broker outcome not recorded"}
-            self.state["active"] = None
+                executions.append({**active, "state": "UNVERIFIED",
+                                   "broker_status": entry["status"] if entry else None,
+                                   "status_message": entry.get("status_message")
+                                   if entry else "Broker outcome not recorded"})
+        self.state["active"] = None
+        self.state["quantumedge_positions"] = []
         self.state["flatten_pending"] = False
         self.kill_sent.clear()
         self.error = None
-        self.audit("EMERGENCY_FLAT", note="Kite reports no open AQTE positions or AQTE orders; owner trades untouched",
-                   execution=execution)
+        note = "Kite reports no open AQTE positions or AQTE orders; owner trades untouched"
+        if len(executions) == 1:
+            self.audit("EMERGENCY_FLAT", execution=executions[0], note=note)
+        else:
+            for execution in executions:
+                self.audit("EMERGENCY_FLAT_TRADE", execution=execution)
+            self.audit("EMERGENCY_FLAT", note=note,
+                       trade_ids=[execution.get("id") for execution in executions])
 
     def reset_emergency(self):
         with self.lock:
@@ -3463,7 +3768,7 @@ class AQTELiveService:
                 raise LiveBlocked("Live journal is unavailable")
             if not self.state["killed"]:
                 raise LiveBlocked("Emergency stop is not latched")
-            if self.state.get("flatten_pending") or self.state["active"]:
+            if self.state.get("flatten_pending") or self.active_trades():
                 raise LiveBlocked("Emergency square-off still in progress; wait until Kite shows no open AQTE positions or AQTE orders")
             self.state.update(killed=False, armed_day=None, automation_on=False, automation_wanted=False)
             self.state["quantedge"]["enabled"] = False

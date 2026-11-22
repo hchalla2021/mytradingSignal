@@ -9,7 +9,7 @@ import os
 import threading
 import time
 from dataclasses import asdict
-from statistics import mean
+from statistics import mean, median
 from typing import Any
 
 import httpx
@@ -101,6 +101,149 @@ class QuantumEdgeIntradayService:
     def model() -> str:
         return os.getenv("QUANTUMEDGE_AI_MODEL", "claude-haiku-5-5").strip()
 
+    @staticmethod
+    def advanced_strike_selection_enabled() -> bool:
+        return os.getenv("QUANTUMEDGE_ADVANCED_STRIKE_SELECTION", "false").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+
+    @staticmethod
+    def price_action_stop_enabled() -> bool:
+        return os.getenv("QUANTUMEDGE_PRICE_ACTION_STOP", "false").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+
+    @staticmethod
+    def smart_trailing_stop_enabled() -> bool:
+        return os.getenv("QUANTUMEDGE_SMART_TRAILING_STOP", "false").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+
+    @staticmethod
+    def _price_action_stop(bars: list[dict[str, Any]], side: str) -> dict[str, Any] | None:
+        recent = bars[-16:]
+        if len(recent) < 16 or any(
+            right["at"] - left["at"] != 60 for left, right in zip(recent, recent[1:])
+        ):
+            return None
+        true_ranges = [
+            max(bar["high"] - bar["low"], abs(bar["high"] - previous["close"]),
+                abs(bar["low"] - previous["close"]))
+            for previous, bar in zip(recent[-16:-2], recent[-15:-1])
+        ]
+        atr = mean(true_ranges)
+        if not math.isfinite(atr) or atr <= 0:
+            return None
+
+        lookback = recent[-11:-1]
+        pivot = None
+        for index in range(len(lookback) - 2, 0, -1):
+            previous, bar, following = lookback[index - 1:index + 2]
+            is_pivot = (
+                bar["low"] <= previous["low"] and bar["low"] <= following["low"]
+                if side == "CE" else
+                bar["high"] >= previous["high"] and bar["high"] >= following["high"]
+            )
+            if is_pivot:
+                pivot = bar
+                break
+        reference = pivot or (
+            min(lookback[-5:], key=lambda bar: bar["low"])
+            if side == "CE" else max(lookback[-5:], key=lambda bar: bar["high"])
+        )
+        reference_price = float(reference["low"] if side == "CE" else reference["high"])
+        buffer = 0.25 * atr
+        level = reference_price - buffer if side == "CE" else reference_price + buffer
+        if not math.isfinite(level) or level <= 0:
+            return None
+        return {
+            "level": round(level, 2),
+            "reference": round(reference_price, 2),
+            "buffer": round(buffer, 2),
+            "basis": "SWING_LOW" if side == "CE" else "SWING_HIGH",
+            "signal_bar_at": float(recent[-1]["at"] + 60),
+        }
+
+    @staticmethod
+    def _percentile_score(value: float, values: list[float]) -> float:
+        return (sum(other < value for other in values)
+                + 0.5 * sum(other == value for other in values)) / len(values)
+
+    @classmethod
+    def _rank_option_candidates(cls, engine, symbol, side, now, spot, lots, busy):
+        today = day(now)
+        listed = [
+            contract for contract in engine.contracts.values()
+            if contract.symbol == symbol and contract.expiry >= today
+        ]
+        if not listed:
+            return []
+        nearest_expiry = min(contract.expiry for contract in listed)
+        expiry_contracts = [contract for contract in listed if contract.expiry == nearest_expiry]
+        nearby_strikes = sorted(
+            {contract.strike for contract in expiry_contracts},
+            key=lambda strike: abs(strike - spot.price),
+        )[:5]
+        strike_gaps = sorted(
+            right - left for left, right in zip(sorted(nearby_strikes), sorted(nearby_strikes)[1:])
+            if right > left
+        )
+        strike_step = median(strike_gaps) if strike_gaps else spot.price * 0.0025
+        expiry_day = nearest_expiry == today
+        max_distance = strike_step * (1 if expiry_day else 2)
+        spread_limit = float(getattr(engine.policy, "spread_fraction", 0.03))
+        if not math.isfinite(strike_step) or strike_step <= 0 or not math.isfinite(spread_limit) or spread_limit <= 0:
+            return []
+
+        candidates = []
+        for contract in expiry_contracts:
+            if contract.side != side or contract.token in busy:
+                continue
+            distance = abs(contract.strike - spot.price)
+            if distance > max_distance:
+                continue
+            quote = engine.options.get(contract.token)
+            quantity = int(contract.lot_size) * lots
+            if (not engine.fresh(quote, now) or not 0 < quote.bid <= quote.ask
+                    or quote.ask_quantity < quantity or quote.volume <= 0):
+                continue
+            spread_fraction = (float(quote.ask) - float(quote.bid)) / float(quote.ask)
+            if spread_fraction > spread_limit:
+                continue
+            candidates.append({
+                "contract": contract, "quote": quote, "quantity": quantity,
+                "distance": distance, "spread_fraction": spread_fraction,
+                "depth": min(int(quote.bid_quantity), int(quote.ask_quantity)) / quantity,
+                "volume": float(quote.volume),
+                "oi": float(quote.oi) if type(quote.oi) is int and quote.oi > 0 else None,
+            })
+        if not candidates:
+            return []
+
+        volumes = [candidate["volume"] for candidate in candidates]
+        open_interest = [candidate["oi"] for candidate in candidates if candidate["oi"] is not None]
+        for candidate in candidates:
+            distance_score = max(0.0, 1 - candidate["distance"] / max_distance)
+            spread_score = max(0.0, 1 - candidate["spread_fraction"] / spread_limit)
+            depth_score = min(1.0, candidate["depth"] / 3)
+            volume_score = cls._percentile_score(candidate["volume"], volumes)
+            oi_score = (cls._percentile_score(candidate["oi"], open_interest)
+                        if candidate["oi"] is not None and open_interest else 0.5)
+            candidate["score"] = (
+                0.40 * distance_score
+                + 0.25 * spread_score
+                + 0.20 * depth_score
+                + 0.10 * volume_score
+                + 0.05 * oi_score
+            )
+        return sorted(
+            candidates,
+            key=lambda candidate: (
+                -candidate["score"], candidate["distance"],
+                candidate["spread_fraction"], candidate["contract"].token,
+            ),
+        )
+
     def evaluate(self, market, symbol: str, now: float, lots: int, risk_per_lot: float,
                  busy: set[int], costs, *, daily_budget: float | None = None) -> dict[str, Any]:
         with market.lock:
@@ -122,6 +265,15 @@ class QuantumEdgeIntradayService:
             if setup is None:
                 return {"decision": "WAIT", "symbol": symbol, "price_action": price_action, "reason": reason}
             side = setup["side"]
+            futures_invalidation = None
+            if self.price_action_stop_enabled():
+                futures_invalidation = self._price_action_stop(bars, side)
+                if futures_invalidation is None:
+                    return {
+                        "decision": "WAIT", "symbol": symbol, "price_action": price_action,
+                        **{"strategy": setup["id"], "strategy_name": setup["name"]},
+                        "reason": "Need 16 consecutive completed futures candles for the price-action stop",
+                    }
             closes = [float(bar["close"]) for bar in bars]
             ema_fast = self._ema(closes, 9)
             ema_slow = self._ema(closes, 21)
@@ -132,16 +284,32 @@ class QuantumEdgeIntradayService:
             candle_at = float(current["at"])
             setup_key = f"QUANTUMEDGE:{symbol}:{int(candle_at)}:{side}:{setup['id']}"
             identity = {"strategy": setup["id"], "strategy_name": setup["name"]}
+            advanced_selection = self.advanced_strike_selection_enabled()
+            candidates = self._rank_option_candidates(
+                engine, symbol, side, now, spot, lots, set(busy),
+            ) if advanced_selection else None
+            if advanced_selection and not candidates:
+                return {"decision": "WAIT", "symbol": symbol, "setup_key": setup_key,
+                        "price_action": price_action, **identity,
+                        "reason": f"No eligible near-ATM fresh, liquid {side} strike"}
             excluded = set(busy)
             first_rejection = None
+            selected = None
             while True:
-                picked = engine.pick(symbol, side, now, spot, exclude=excluded)
-                if picked is None:
-                    return {"decision": "WAIT", "symbol": symbol, "setup_key": setup_key,
-                            "price_action": price_action, **identity,
-                            "reason": first_rejection or f"No liquid fresh {side} contract"}
-                _, contract, quote = picked
-                quantity = int(contract.lot_size) * lots
+                if advanced_selection:
+                    if not candidates:
+                        break
+                    candidate = candidates.pop(0)
+                    contract, quote = candidate["contract"], candidate["quote"]
+                    quantity = candidate["quantity"]
+                else:
+                    picked = engine.pick(symbol, side, now, spot, exclude=excluded)
+                    if picked is None:
+                        reason = first_rejection or f"No liquid fresh {side} contract"
+                        return {"decision": "WAIT", "symbol": symbol, "setup_key": setup_key,
+                                "price_action": price_action, **identity, "reason": reason}
+                    _, contract, quote = picked
+                    quantity = int(contract.lot_size) * lots
                 maximum = round_tick(float(quote.ask), contract.tick_size, up=True)
                 stop = round_tick(max(contract.tick_size, maximum * 0.8), contract.tick_size)
                 target = round_tick(maximum + 2 * (maximum - stop), contract.tick_size, up=True)
@@ -161,17 +329,29 @@ class QuantumEdgeIntradayService:
                 elif daily_budget is not None and round(risk, 2) >= daily_budget:
                     rejection = f"Risk ₹{risk:,.2f} ≥ algo budget ₹{daily_budget:,.2f}"
                 else:
+                    selected = (contract, quote, quantity, maximum, stop, target,
+                                gross_loss, gross_profit, entry_cost, stop_cost, target_cost, risk, reward)
                     break
                 if not first_rejection:
                     first_rejection = rejection
                     if daily_budget is not None:
-                        first_rejection = f"No eligible same-expiry {side} strike. Nearest: {rejection}"
-                        excluded.update(c.token for c in engine.contracts.values() if c.expiry != contract.expiry)
-                if daily_budget is not None:
+                        label = "Best-ranked candidate" if advanced_selection else "Nearest"
+                        first_rejection = f"No eligible same-expiry {side} strike. {label}: {rejection}"
+                        if not advanced_selection:
+                            excluded.update(
+                                c.token for c in engine.contracts.values() if c.expiry != contract.expiry
+                            )
+                if daily_budget is None:
+                    return {"decision": "WAIT", "symbol": symbol, "setup_key": setup_key,
+                            "reason": rejection, "price_action": price_action, **identity}
+                if not advanced_selection:
                     excluded.add(contract.token)
-                    continue
+            if selected is None:
                 return {"decision": "WAIT", "symbol": symbol, "setup_key": setup_key,
-                        "reason": rejection, "price_action": price_action, **identity}
+                        "reason": first_rejection or f"No liquid fresh {side} contract",
+                        "price_action": price_action, **identity}
+            (contract, quote, quantity, maximum, stop, target, gross_loss, gross_profit,
+             entry_cost, stop_cost, target_cost, risk, reward) = selected
             spread = (float(quote.ask) - float(quote.bid)) / float(quote.ask)
             ml_features = self.ml_features(
                 symbol, side, bars, ema_fast, ema_slow, rsi, volume_ratio,
@@ -209,6 +389,7 @@ class QuantumEdgeIntradayService:
                 "reason": ("QuantumEdge selected the next eligible same-expiry strike"
                            if first_rejection else setup["reason"]),
                 "alternate_strike": first_rejection is not None,
+                **({"futures_invalidation": futures_invalidation} if futures_invalidation else {}),
             }
 
     @staticmethod

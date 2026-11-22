@@ -2544,6 +2544,7 @@ h1, h2, h3, h4, h5, h6 {
 .qe-level-stop b { color: #ff9eaa; }
 .qe-level-trail { --qe-accent: #d7a552; }
 .qe-level-trail b { color: #ffd279; }
+.qe-level-trail .qe-level-note { display: block; margin-top: 3px; color: #c9b57f; font-size: 10px; line-height: 1.2; }
 .qe-level-target { --qe-accent: #72c982; }
 .qe-pnl-profit { --qe-pnl-color: #91f7a5; }
 .qe-pnl-loss { --qe-pnl-color: #ff929f; }
@@ -2801,6 +2802,9 @@ h1, h2, h3, h4, h5, h6 {
 .qe-positions td:is(.qe-pnl-profit, .qe-pnl-loss) { font-weight: 700; }
 .qe-positions td:nth-child(2) { color: #f3f8f4; font-weight: 800; }
 .qe-positions td.qe-position-status { --qe-position-edge: #436e55; --qe-position-tint: #142a21; color: #a4f6b6; font-weight: 700; }
+.qe-position-exit { width: 100%; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.qe-position-exit:disabled { cursor: not-allowed; opacity: .55; }
+.qe-position-exit:not(:disabled):hover { border-color: #9ce7a8; color: #d7ffe0; }
 .qe-empty-row td { height: 94px; color: #dce5eb; text-align: center; }
 .qe-empty-row td > span { display: block; }
 .qe-empty-row .qe-empty-icon { display: grid; width: 27px; height: 27px; margin: 0 auto 5px; place-items: center; border: 1px solid #3b5948; border-radius: 8px; color: #9cce91; background: #111e19; }

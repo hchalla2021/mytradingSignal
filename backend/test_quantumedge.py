@@ -97,6 +97,24 @@ class QuantumEdgeAIReviewTests(unittest.TestCase):
         bars[-1]["at"] += 60
         self.assertIsNone(_price_action(bars, 23 * 60))
 
+    def test_price_action_stop_uses_contiguous_completed_futures_bars(self):
+        bars = [{"at": i * 60, "open": 100, "high": 102, "low": 98, "close": 100}
+                for i in range(16)]
+        service = QuantumEdgeIntradayService()
+        ce = service._price_action_stop(bars, "CE")
+        pe = service._price_action_stop(bars, "PE")
+        self.assertEqual((ce["basis"], ce["level"], ce["buffer"]), ("SWING_LOW", 97, 1))
+        self.assertEqual((pe["basis"], pe["level"], pe["buffer"]), ("SWING_HIGH", 103, 1))
+        self.assertIsNone(service._price_action_stop(bars[:-1], "CE"))
+        bars[-1]["at"] += 60
+        self.assertIsNone(service._price_action_stop(bars, "PE"))
+
+    def test_smart_trailing_stop_is_opt_in(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(QuantumEdgeIntradayService.smart_trailing_stop_enabled())
+        with mock.patch.dict(os.environ, {"QUANTUMEDGE_SMART_TRAILING_STOP": "true"}, clear=True):
+            self.assertTrue(QuantumEdgeIntradayService.smart_trailing_stop_enabled())
+
     def test_gate_requires_lightgbm_then_exact_claude_review(self):
         import lightgbm as lgb
         import numpy as np
@@ -213,16 +231,60 @@ class QuantumEdgeAIReviewTests(unittest.TestCase):
         engine = market.engine
         engine.spot, engine.future = {"NIFTY": mock.Mock()}, {"NIFTY": mock.Mock(token=1)}
         engine.fresh.return_value = True
+        engine.spot["NIFTY"].price = 24500
         engine.book.closed = {("future", 1, 60): [
             {"at": now - (45 - i) * 60, "open": 100, "high": 104 if i == 44 else 101,
              "low": 99, "close": 103 if i == 44 else 100, "volume": 150 if i == 44 else 100}
             for i in range(45)
         ]}
-        engine.pick.return_value = (1, mock.Mock(lot_size=65, tick_size=0.05),
-                                    mock.Mock(ask=100, ask_quantity=130))
-        signal = service.evaluate(market, "NIFTY", now, 2, 1000, set(), lambda price, qty: 20)
+        engine.contracts = {
+            1: Contract("NIFTY", 1, "NIFTYTESTCE", "NFO", "CE", 24500, "2026-03-19", 65, 0.05),
+        }
+        engine.options = {
+            1: mock.Mock(bid=99, ask=100, bid_quantity=65, ask_quantity=130, volume=100, oi=None),
+        }
+        engine.policy = mock.Mock(spread_fraction=0.03)
+        engine.pick.return_value = (1, engine.contracts[1], engine.options[1])
+        with mock.patch.dict(os.environ, {"QUANTUMEDGE_ADVANCED_STRIKE_SELECTION": "false"}):
+            signal = service.evaluate(market, "NIFTY", now, 2, 1000, set(), lambda price, qty: 20)
         self.assertEqual(signal["decision"], "WAIT")
         self.assertEqual(signal["reason"], "Estimated risk ₹1,320.00/lot exceeds the ₹1,000/lot cap")
+        engine.pick.assert_called_once()
+
+    def test_strike_ranking_balances_moneyness_and_liquidity_and_tightens_on_expiry(self):
+        service = QuantumEdgeIntradayService()
+        now = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 3, 10, 10, 0)).timestamp()
+        engine = mock.Mock()
+        engine.fresh.return_value = True
+        engine.policy = mock.Mock(spread_fraction=0.03)
+        engine.contracts = {}
+        engine.options = {}
+        for token, strike, expiry, bid, ask, depth, volume, oi in (
+            (1, 64000, "2026-03-19", 98, 100, 30, 100, None),
+            (2, 64100, "2026-03-19", 99.9, 100, 90, 10000, 20000),
+            (3, 64200, "2026-03-19", 99, 100, 90, 10000, 20000),
+            (4, 64100, "2026-03-26", 99.9, 100, 900, 100000, 200000),
+        ):
+            engine.contracts[token] = Contract("BANKNIFTY", token, f"BANKNIFTY{token}CE", "NFO",
+                                               "CE", strike, expiry, 30, 0.05)
+            engine.options[token] = mock.Mock(
+                bid=bid, ask=ask, bid_quantity=depth, ask_quantity=depth,
+                volume=volume, oi=oi,
+            )
+        spot = mock.Mock(price=64000)
+
+        normal = service._rank_option_candidates(
+            engine, "BANKNIFTY", "CE", now, spot, 1, set(),
+        )
+        self.assertEqual(normal[0]["contract"].token, 2)
+        self.assertIn(1, [candidate["contract"].token for candidate in normal])
+        self.assertNotIn(4, [candidate["contract"].token for candidate in normal])
+
+        expiry_now = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 3, 19, 10, 0)).timestamp()
+        expiry_day = service._rank_option_candidates(
+            engine, "BANKNIFTY", "CE", expiry_now, spot, 1, set(),
+        )
+        self.assertNotIn(3, [candidate["contract"].token for candidate in expiry_day])
 
     def test_selects_nearest_risk_fit_without_switching_expiry(self):
         service = QuantumEdgeIntradayService()
@@ -246,7 +308,8 @@ class QuantumEdgeAIReviewTests(unittest.TestCase):
             engine.options[token] = mock.Mock(at=now, received=now, bid=ask - 1, ask=ask,
                                               bid_quantity=60, ask_quantity=60, volume=100)
         market = mock.Mock(lock=mock.MagicMock(), engine=engine)
-        signal = service.evaluate(market, symbol, now, 1, 3000, set(), engine.costs, daily_budget=1500)
+        with mock.patch.dict(os.environ, {"QUANTUMEDGE_ADVANCED_STRIKE_SELECTION": "true"}):
+            signal = service.evaluate(market, symbol, now, 1, 3000, set(), engine.costs, daily_budget=1500)
         self.assertEqual((signal["decision"], signal["contract"]["token"]), ("BUY CE", 3))
         self.assertEqual(signal["strategy"], "vwap_pullback")
         self.assertTrue(signal["setup_key"].endswith(":CE:vwap_pullback"))
@@ -261,7 +324,8 @@ class QuantumEdgeAIReviewTests(unittest.TestCase):
         self.assertAlmostEqual(amounts["net_profit_at_target_inr"], amounts["gross_profit_at_target_inr"]
                                - amounts["entry_cost_inr"] - amounts["target_exit_cost_inr"], delta=.01)
         self.assertEqual(signal["entry"]["reward_risk"], round(amounts["net_profit_at_target_inr"] / signal["risk"], 2))
-        blocked = service.evaluate(market, symbol, now, 1, 3000, {3}, engine.costs, daily_budget=1500)
+        with mock.patch.dict(os.environ, {"QUANTUMEDGE_ADVANCED_STRIKE_SELECTION": "true"}):
+            blocked = service.evaluate(market, symbol, now, 1, 3000, {3}, engine.costs, daily_budget=1500)
         self.assertEqual(blocked["decision"], "WAIT")
         self.assertIn("No eligible same-expiry CE strike", blocked["reason"])
         self.assertIn("algo budget ₹1,500.00", blocked["reason"])
@@ -341,6 +405,44 @@ class QuantumEdgeControlTests(unittest.TestCase):
         self.addCleanup(self.live.release_owner)
         self.live.ready = True
         self.live.save = mock.Mock()
+
+    def test_index_slots_and_daily_budget_include_open_quantumedge_risk(self):
+        self.live.state["active"] = {
+            "id": "QEI1111111111111", "owner": "QUANTUMEDGE", "symbol": "NIFTY", "risk": 500,
+        }
+        self.live.state["quantumedge_positions"] = [{
+            "id": "QEI2222222222222", "owner": "QUANTUMEDGE", "symbol": "SENSEX", "risk": 500,
+        }]
+        self.assertIsNone(self.live.quantumedge_slot_reason("BANKNIFTY"))
+        self.assertIn("NIFTY", self.live.quantumedge_slot_reason("NIFTY"))
+        self.assertEqual(self.live.quantumedge_daily_budget(time.time()), 500)
+        self.assertIsNone(self.live.quantumedge_loss_budget_reason(499))
+        self.assertIn("remaining budget", self.live.quantumedge_loss_budget_reason(500))
+
+        self.live.state["quantumedge_positions"].append({
+            "id": "QEI3333333333333", "owner": "QUANTUMEDGE", "symbol": "BANKNIFTY", "risk": 100,
+        })
+        self.assertIn("All three", self.live.quantumedge_slot_reason("OTHER"))
+        self.live.state["active"]["owner"] = "AQTE"
+        self.live.state["quantumedge_positions"] = []
+        self.assertIn("another strategy", self.live.quantumedge_slot_reason("SENSEX"))
+
+    def test_quantumedge_proposal_allows_other_indices_but_not_a_second_same_index_trade(self):
+        self.live.state["quantumedge"]["enabled"] = True
+        self.live.state["active"] = {
+            "id": "QEI1111111111111", "owner": "QUANTUMEDGE", "symbol": "NIFTY", "risk": 200,
+        }
+        self.live.config_guard = mock.Mock()
+        self.live.quantumedge_candidate = mock.Mock(return_value={
+            "decision": "BUY CE", "symbol": "SENSEX", "side": "CE",
+            "contract": {"side": "CE", "token": 10}, "strategy": "test",
+            "entry": {"maximum": 100, "stop": 90, "target": 120, "quantity": 1},
+            "risk": 100, "signal_at": 1, "setup_key": "SENSEX:setup", "reason": "qualified",
+        })
+        proposal = self.live.quantumedge_proposal("SENSEX", set())
+        self.assertEqual(proposal["symbol"], "SENSEX")
+        with self.assertRaisesRegex(Exception, "active NIFTY position"):
+            self.live.quantumedge_proposal("NIFTY", set())
 
     def test_index_controls_are_independent(self):
         status = self.live.set_quantumedge_index("NIFTY", False, 2, 750)
@@ -465,29 +567,39 @@ class QuantumEdgeControlTests(unittest.TestCase):
         self.assertFalse(self.live.state["quantumedge"]["enabled"])
         self.assertTrue(self.live.state["quantedge"]["enabled"])
 
-    def test_active_trade_pauses_ai_reviews_to_protect_reconciliation(self):
+    def test_open_index_does_not_block_a_different_quantumedge_index(self):
         self.live.state["quantumedge"]["enabled"] = True
-        self.live.state["active"] = {"owner": "QUANTUMEDGE", "id": "QEI0123456789abc"}
+        self.live.state["active"] = {
+            "owner": "QUANTUMEDGE", "id": "QEI0123456789abc", "symbol": "NIFTY",
+            "risk": 400, "filled": 0, "quantity": 1,
+        }
         candidate = {
             "decision": "BUY CE", "symbol": "SENSEX", "side": "CE",
             "setup_key": "QUANTUMEDGE:SENSEX:1:CE", "signal_at": 1,
             "entry": {"reward_risk": 2, "quantity": 1, "maximum": 100, "stop": 90, "target": 120},
             "risk": 1000, "contract": {}, "strategy": "test",
         }
-        self.live.quantumedge_candidate = mock.Mock(side_effect=[
-            {"decision": "WAIT"}, {"decision": "WAIT"}, candidate,
-        ])
+        self.live.quantumedge_candidate = mock.Mock(side_effect=lambda symbol, busy: (
+            candidate if symbol == "SENSEX" else {"decision": "WAIT", "symbol": symbol}))
         self.live.quantumedge.review = mock.Mock(return_value={
-            "approved": True, "state": "APPROVED", "attempted": True,
+            "approved": True, "state": "APPROVED", "attempted": True, "ml": {"state": "OFF"},
         })
         self.live.book = mock.Mock(return_value={"busy": set()})
+        self.live.quantumedge_activate = mock.Mock(return_value=True)
+        self.live.config_guard = mock.Mock()
+        self.live.quantumedge_proposal_for_approval = mock.Mock(return_value={"id": "sensex-proposal"})
+        self.live.confirm = mock.Mock()
+        self.live.quantumedge.consume_approved = mock.Mock()
         with mock.patch("services.aqte_live.entry_window", return_value=True):
             self.live.automated_quantumedge_entry()
-        self.live.quantumedge.review.assert_not_called()
-        self.live.quantumedge.consume_approved = mock.Mock()
+        self.assertEqual(self.live.quantumedge_candidate.call_args_list, [
+            mock.call("BANKNIFTY", set()), mock.call("SENSEX", set()),
+        ])
+        self.live.quantumedge.review.assert_called_once()
+        self.live.confirm.assert_called_once_with("sensex-proposal")
         self.assertIsNotNone(self.live.state["active"])
 
-    def test_first_approval_reaches_confirmation_without_reviewing_other_indices(self):
+    def test_entry_scan_can_confirm_each_qualified_index_once(self):
         live = self.live
         live.state["quantumedge"]["enabled"] = True
         live.book = mock.Mock(return_value={"busy": set()})
@@ -508,9 +620,13 @@ class QuantumEdgeControlTests(unittest.TestCase):
 
         with mock.patch("services.aqte_live.time.time", return_value=now):
             live.automated_quantumedge_entry()
-        self.assertEqual([call[0] for call in calls.mock_calls], ["review", "propose", "confirm"])
-        self.assertEqual(calls.review.call_args.args[0]["symbol"], "NIFTY")
-        calls.confirm.assert_called_once_with("test-proposal")
+        self.assertEqual([call[0] for call in calls.mock_calls], [
+            "review", "propose", "confirm", "review", "propose", "confirm", "review", "propose", "confirm",
+        ])
+        self.assertEqual(calls.review.call_args_list[0].args[0]["symbol"], "NIFTY")
+        self.assertEqual(calls.confirm.call_count, 3)
+        self.assertEqual([call.args[0]["symbol"] for call in calls.review.call_args_list],
+                         ["NIFTY", "BANKNIFTY", "SENSEX"])
 
         calls.reset_mock()
         with mock.patch("services.aqte_live.time.time", return_value=now), mock.patch(
@@ -706,7 +822,8 @@ class QuantumEdgeControlTests(unittest.TestCase):
         with mock.patch("services.aqte_live.time.time", return_value=now), mock.patch(
             "services.aqte_service.normalize", return_value=mock.Mock(
                 token=7, at=now, bid=99, ask=99.95, ask_quantity=65),
-        ), mock.patch.object(ml, "assess", side_effect=[
+        ), mock.patch.dict(os.environ, {"QUANTUMEDGE_SMART_TRAILING_STOP": "true"}), \
+             mock.patch.object(ml, "assess", side_effect=[
             {"allows_review": False}, {"allows_review": True, "state": "PASS", "score": 0.8},
         ]) as assess:
             proposal = live.quantumedge_proposal_for_approval(approved, set())
@@ -722,6 +839,7 @@ class QuantumEdgeControlTests(unittest.TestCase):
         self.assertEqual(len(live.state["daily_entries"]), 1)
         self.assertEqual(broker.place_order.call_args.kwargs["validity"], "IOC")
         self.assertEqual(live.state["active"]["execution_context"]["quantumedge_ml"]["score"], 0.8)
+        self.assertEqual(live.state["active"]["trailing_mode"], "SMART_ATR_STRUCTURE")
 
     def test_emergency_paths_revoke_quantumedge_standing_approval(self):
         self.live.state["quantumedge"]["enabled"] = True

@@ -26,19 +26,55 @@ The positions and realized P&L in this panel are QuantumEdge-only. A completed
 manual Kite trade does not count toward QuantumEdge limits or block a new
 signal. Open manual exposure or working orders exclude only that contract
 from selection; broker cash and margin checks still apply.
+QuantumEdge IntraDay can hold one position per index, up to three total;
+other automated strategy lanes remain mutually exclusive with QuantumEdge.
+Open QuantumEdge risk is reserved against its existing daily loss budget.
 The per-index risk cap does not override the separate ₹1,500 QuantumEdge daily
-loss budget. If the nearest liquid strike fails sizing, depth, or net
-reward/risk, QuantumEdge checks other fresh subscribed strikes of the same
-side and expiry in distance order. It sends only a qualifying contract to
-Claude; approval is not transferable between strikes. `AI_APPROVED` is not
-a broker order; `ENTRY_BLOCKED` shows the execution check that prevented
-submission. The live opportunities panel and Claude review use the same
+loss budget. The advanced strike selector is opt-in with
+`QUANTUMEDGE_ADVANCED_STRIKE_SELECTION=true`; unset or false preserves the
+existing picker. When enabled, it scores fresh subscribed contracts on the
+nearest expiry: 40% spot distance, 25% relative spread, 20% two-sided depth,
+10% volume rank and 5% open-interest rank. Missing open interest is neutral,
+not a blocker. Normal-day candidates must be within two observed strike
+intervals of spot; on expiry day they must be within one, keeping selection
+near ATM. Contracts must also pass quantity, spread, risk and cost-adjusted
+reward/risk checks. If one fails, the next-ranked same-expiry strike is checked.
+It sends only a qualifying contract to Claude; approval is not transferable
+between strikes. `AI_APPROVED` is not a broker order;
+`ENTRY_BLOCKED` shows the execution check that prevented submission. The live
+opportunities panel and Claude review use the same
 completed one-minute futures price-action context: breaks of the prior
 five-bar range, ATR-relative displacement, and the most recent open fair
 value gap detected in the lookback. Missing or stale context is not treated
 as confirmation. These observations are not a separate entry gate and do
 not override risk controls. `AI_UNAVAILABLE` means no usable Claude decision
 was received; it does not approve an entry.
+The separate price-action stop is opt-in with
+`QUANTUMEDGE_PRICE_ACTION_STOP=true`; unset or false preserves the existing
+execution behavior. When enabled, new entries require 16 contiguous completed
+one-minute futures candles. For CE trades, the invalidation is below a recent
+swing low by 0.25 ATR; for PE trades, it is above a recent swing high by
+0.25 ATR. A subsequent completed futures candle must close beyond that level
+in the opposing direction and beyond the previous candle close to trigger an
+exit. The existing option-premium broker stop remains the hard-loss protection;
+the futures level is shown separately in the active card. The controller
+modifies that trade's existing protective sell order for an exit rather than
+placing a competing order. If the futures feed becomes unavailable, the card
+reports it while the broker stop remains active. A stop cannot guarantee that
+it will not be hit or that a trade will be profitable.
+The separate smart trailing mode is opt-in with
+`QUANTUMEDGE_SMART_TRAILING_STOP=true` and applies only to new QuantumEdge
+positions opened while enabled. It keeps the initial broker stop, moves to
+estimated fee-adjusted breakeven after +1R, then allows a further half-R
+breakeven phase before using nine contiguous, fresh one-minute option candles
+to calculate ATR and a confirmed three-candle premium swing low. It combines
+the lower of peak-minus-`max(1.5 × ATR, 0.75R)` and the confirmed swing low
+minus 0.25 ATR, then floors the stop at estimated breakeven plus 25% of gains
+beyond the initial 1R trigger. The stop only ratchets upward. If candles are unavailable,
+stale or discontinuous, the existing R-multiple trailing logic remains the
+fallback. The controller still modifies the same protective sell order and
+respects Kite's order modification limit. This mode does not guarantee a fill
+at the stop price or profit; gaps, slippage and reversals can still cause losses.
 Python computes the estimated INR loss at the stop and net profit at the
 target for the full quantity. Claude receives the gross amounts and
 estimated costs for each leg, rather than recalculating risk from the

@@ -249,7 +249,7 @@ test('QuantumEdge displays option LTP and tones P&L in the active card and posit
     assert.equal(cells.length, 12);
     for (const cell of cells) {
       assert.equal(cell.type, 'td');
-      assert.equal(cell.props.children.props.className, 'qe-position-value');
+      assert.match(cell.props.children.props.className, /qe-position-value/);
     }
     assert.equal(cells.find(node => node.props.className === 'qe-position-ltp')
       .props.children.props.children, expectedLtp);
@@ -258,6 +258,52 @@ test('QuantumEdge displays option LTP and tones P&L in the active card and posit
     assert.ok(nodes.some(node => node.type === 'dd' && node.props.className === `qe-pnl-${tone}`
       && node.props.children === expectedPnl));
   }
+});
+
+test('QuantumEdge shows futures invalidation separately from its option-premium stop', () => {
+  const active = {
+    id: 'trade-1', symbol: 'NIFTY', state: 'PROTECTED', entry_price: 101.40,
+    contract: { trading_symbol: 'NIFTY26NOV25800CE', lot_size: 65 },
+    stop: 82, target: 143.65, filled: 65, quantity: 65,
+    trailing_mode: 'SMART_ATR_STRUCTURE', trailing_status: 'SMART_ATR_STRUCTURE',
+    futures_invalidation: { level: 22000, reference: 22005, buffer: 5, basis: 'SWING_LOW' },
+    futures_invalidation_status: 'MONITORING',
+  };
+  const { render } = harness('QuantumEdgeIntradaySection.tsx', {
+    'lucide-react': require('lucide-react'),
+    '@/lib/api-config': { API_CONFIG: {} },
+    '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
+  }, [{ generated_at: Date.now() / 1000, indices: {}, signals: {}, ai: { last_result: {} },
+    active, positions: [active] }]);
+  const nodes = elements(render({}));
+  const invalidation = nodes.find(node => node.props?.className === 'qe-level qe-level-invalidation');
+  assert.equal(invalidation.props.children[0].props.children, 'Futures Invalidation');
+  assert.equal(invalidation.props.children[1].props.children, '22,000.00');
+  assert.match(invalidation.props.children[2].props.children, /SWING LOW/);
+  const stop = nodes.find(node => node.props?.className === 'qe-level qe-level-stop');
+  assert.equal(stop.props.children[1].props.children, '₹82.00');
+  const trail = nodes.find(node => node.props?.className === 'qe-level qe-level-trail');
+  assert.equal(trail.props.children[2].props.children, 'ATR + confirmed option swing');
+});
+
+test('QuantumEdge exposes a separate square-off action for every open index position', () => {
+  const positions = ['NIFTY26NOV25800CE', 'SENSEX26NOV82000PE'].map((trading_symbol, index) => ({
+    id: `trade-${index}`, symbol: index ? 'SENSEX' : 'NIFTY',
+    state: 'PROTECTED', entry_price: 101, contract: { trading_symbol, lot_size: 10 },
+    stop: 82, target: 143, filled: 10, quantity: 10, ltp: 100, unrealized: -10,
+  }));
+  const { render } = harness('QuantumEdgeIntradaySection.tsx', {
+    'lucide-react': require('lucide-react'),
+    '@/lib/api-config': { API_CONFIG: {} },
+    '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
+  }, [{ generated_at: Date.now() / 1000, indices: {}, signals: {}, ai: { last_result: {} },
+    active: positions[0], positions }]);
+  const nodes = elements(render({}));
+  const rows = nodes.filter(node => node.type === 'tr' && node.key?.startsWith('trade-'));
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map(row => row.props.children[11].props.children.props['aria-label']), [
+    'Square off NIFTY26NOV25800CE', 'Square off SENSEX26NOV82000PE',
+  ]);
 });
 
 test('QuantumEdge switches to faster status polling only while a position is open', () => {
@@ -330,7 +376,7 @@ test('QuantumEdge positions panel has its own live header and helpful empty stat
     && node.props.children[0] === 'ALGO POSITIONS '
     && node.props.children[1].props.children === '(LIVE)'));
   assert.ok(elements(title).some(node => node.type === 'p'
-    && node.props.children === 'Real-time automated exposure and performance'));
+    && node.props.children === 'Up to one position per index · three maximum'));
   assert.ok(nodes.some(node => node.props?.className === 'qe-empty-icon'));
   assert.ok(nodes.some(node => node.type === 'small'
     && node.props.children === 'QuantumEdge positions will appear here after a confirmed fill.'));

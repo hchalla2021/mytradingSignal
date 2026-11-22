@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import closing
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -151,6 +151,128 @@ class LiveTests(unittest.TestCase):
         self.live.reconcile()
         self.orders[1].update(status="TRIGGER PENDING")
         self.live.reconcile()
+
+    def test_quantumedge_price_action_exit_requires_a_post_signal_confirmation(self):
+        ce_active = {
+            "contract": {"side": "CE"},
+            "futures_invalidation": {"level": 100, "signal_bar_at": 120},
+            "structure_checked_at": 120,
+        }
+        bars = [
+            {"at": 60, "open": 107, "high": 108, "low": 104, "close": 105},
+            {"at": 120, "open": 104, "high": 106, "low": 98, "close": 99},
+        ]
+        self.assertEqual(AQTELiveService.quantumedge_price_action_exit(ce_active, bars, 180),
+                         ("PRICE_ACTION_INVALIDATION", 180))
+        bars[1]["close"] = 100
+        self.assertEqual(AQTELiveService.quantumedge_price_action_exit(ce_active, bars, 180),
+                         (None, 180))
+        bars[1]["close"] = 99
+        ce_active["futures_invalidation"]["signal_bar_at"] = 180
+        ce_active["structure_checked_at"] = 180
+        self.assertEqual(AQTELiveService.quantumedge_price_action_exit(ce_active, bars, 180),
+                         (None, None))
+
+        pe_active = {
+            "contract": {"side": "PE"},
+            "futures_invalidation": {"level": 110, "signal_bar_at": 120},
+            "structure_checked_at": 120,
+        }
+        bullish = [
+            {"at": 60, "open": 98, "high": 101, "low": 97, "close": 100},
+            {"at": 120, "open": 105, "high": 112, "low": 104, "close": 111},
+        ]
+        self.assertEqual(AQTELiveService.quantumedge_price_action_exit(pe_active, bullish, 180),
+                         ("PRICE_ACTION_INVALIDATION", 180))
+        bullish[1]["at"] += 60
+        self.assertEqual(AQTELiveService.quantumedge_price_action_exit(pe_active, bullish, 240),
+                         (None, 240))
+
+    def test_quantumedge_invalidation_modifies_the_existing_protection_order(self):
+        self.protect()
+        active = self.live.state["active"]
+        active["owner"] = "QUANTUMEDGE"
+        active["contract"]["side"] = "CE"
+        active["futures_invalidation"] = {
+            "level": 22000, "reference": 22005, "buffer": 5,
+            "basis": "SWING_LOW", "signal_bar_at": NOW,
+        }
+        active["structure_checked_at"] = NOW
+        active["futures_invalidation_status"] = "MONITORING"
+
+        current = self.market.engine.book.current[("future", 20, 60)]
+        current.update(open=22020, high=22030, low=21980, close=21990)
+        self.market.engine.ingest(tick(at=NOW + 60, price=21990))
+        self.market.engine.ingest(tick("option", at=NOW + 60, price=99, bid=98, ask=99))
+        placed_before = self.broker.place_order.call_count
+        self.broker.modify_order.reset_mock()
+
+        with patch("services.aqte_live.time.time", return_value=NOW + 60):
+            self.live.reconcile()
+
+        self.assertEqual(active["exit_requested"], "PRICE_ACTION_INVALIDATION")
+        self.assertEqual(active["futures_invalidation_status"], "TRIGGERED")
+        self.assertEqual(self.broker.modify_order.call_count, 1)
+        self.assertEqual(self.broker.modify_order.call_args.kwargs["order_id"], "2")
+        self.assertEqual(self.broker.modify_order.call_args.kwargs["order_type"], "LIMIT")
+        self.assertEqual(self.broker.place_order.call_count, placed_before)
+
+    def test_reconcile_manages_each_quantumedge_index_and_promotes_remaining_trade(self):
+        self.protect()
+        primary = self.live.state["active"]
+        primary.update(owner="QUANTUMEDGE", risk=400)
+        contract = replace(
+            CONTRACT, symbol="SENSEX", token=40, trading_symbol="SENSEX26NOV82000CE",
+            exchange="BFO", strike=82000, lot_size=10,
+        )
+        self.market.engine.contracts[contract.token] = contract
+        self.market.engine.options[contract.token] = tick(
+            "option", symbol="SENSEX", token=contract.token, at=NOW,
+        )
+        extra = copy.deepcopy(primary)
+        extra.update(
+            id="QEI" + "a" * 13, symbol="SENSEX", contract=asdict(contract),
+            quantity=contract.lot_size, filled=contract.lot_size, risk=300,
+            entry_id="3", protect_id="4",
+        )
+        self.live.state["quantumedge_positions"].append(extra)
+        self.orders.extend([
+            {
+                **self.orders[0], "order_id": "3", "tag": extra["id"] + "E",
+                "exchange": contract.exchange, "tradingsymbol": contract.trading_symbol,
+                "quantity": contract.lot_size, "instrument_token": contract.token,
+                "status": "COMPLETE", "filled_quantity": contract.lot_size,
+                "average_price": 99,
+            },
+            {
+                **self.orders[1], "order_id": "4", "tag": extra["id"] + "S",
+                "exchange": contract.exchange, "tradingsymbol": contract.trading_symbol,
+                "quantity": contract.lot_size, "instrument_token": contract.token,
+                "status": "TRIGGER PENDING", "filled_quantity": 0, "average_price": 0,
+            },
+        ])
+        self.positions.append({
+            "instrument_token": contract.token, "product": "MIS", "quantity": contract.lot_size,
+            "exchange": contract.exchange, "tradingsymbol": contract.trading_symbol, "last_price": 99,
+        })
+
+        self.live.reconcile()
+
+        self.assertEqual(self.live.state["active"]["id"], primary["id"])
+        self.assertEqual([position["id"] for position in self.live.state["quantumedge_positions"]],
+                         [extra["id"]])
+        self.assertEqual(extra["state"], "PROTECTED")
+        self.assertEqual(self.broker.place_order.call_count, 2)
+
+        self.orders[1].update(status="COMPLETE", filled_quantity=CONTRACT.lot_size, average_price=95)
+        self.positions[0]["quantity"] = 0
+        self.live.reconcile()
+
+        self.assertEqual(self.live.state["active"]["id"], extra["id"])
+        self.assertEqual(self.live.state["quantumedge_positions"], [])
+        self.assertEqual(len(self.live.state["trades"]), 1)
+        self.assertEqual(self.live.state["trades"][0]["id"], primary["id"])
+        self.assertEqual(self.broker.place_order.call_count, 2)
 
     def test_completed_protective_order_retains_confirmation_timestamp(self):
         from services.aqte_execution_history import read_executions
@@ -1372,6 +1494,88 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.live.state["active"]["stop"], params["trigger_price"])
         self.assertTrue(self.live.state["active"]["trailing_active"])
         self.assertEqual(self.broker.modify_order.call_count, 1, "A breakeven trail must not cause a premature exit")
+
+    def test_quantumedge_smart_trailing_uses_breakeven_then_fresh_atr_and_structure(self):
+        active = {
+            "entry_price": 100, "initial_stop": 80, "entry_at": NOW - 600,
+            "contract": {"tick_size": 0.05}, "quantity": 65, "filled": 65,
+            "trail_start_r": 1, "peak": 120,
+        }
+        breakeven, status = self.live.quantumedge_smart_trailing_stop(active, (), NOW)
+        self.assertEqual(status, "BREAKEVEN")
+        self.assertGreater(breakeven, active["entry_price"])
+
+        active["peak"] = 140
+        lows = [130, 132, 131, 133, 132, 135, 134, 137, 138]
+        bars = [
+            {"at": NOW - 9 * 60 + index * 60, "open": low + 1, "high": low + 4,
+             "low": low, "close": low + 2, "volume": 0}
+            for index, low in enumerate(lows)
+        ]
+        candidate, status = self.live.quantumedge_smart_trailing_stop(active, bars, NOW)
+        self.assertEqual(status, "SMART_ATR_STRUCTURE")
+        self.assertGreater(candidate, active["peak"] - (active["entry_price"] - active["initial_stop"]))
+        self.assertLess(candidate, active["peak"])
+
+        bars[-1] = {**bars[-1], "at": bars[-1]["at"] + 60}
+        candidate, status = self.live.quantumedge_smart_trailing_stop(active, bars, NOW)
+        self.assertIsNone(candidate)
+        self.assertEqual(status, "R_MULTIPLE_FALLBACK")
+
+    def test_quantumedge_smart_trailing_modifies_only_confirmed_existing_stop(self):
+        self.protect()
+        active = self.live.state["active"]
+        active.update(
+            owner="QUANTUMEDGE", trailing_mode="SMART_ATR_STRUCTURE", entry_at=NOW - 600,
+        )
+        self.market.engine.options[CONTRACT.token] = tick(
+            "option", at=NOW, price=130, bid=130, ask=131,
+        )
+        lows = [119, 121, 120, 122, 121, 124, 123, 126, 127]
+        self.market.engine.book.closed[("option", CONTRACT.token, 60)].extend([
+            {"at": NOW - 9 * 60 + index * 60, "open": low + 1,
+             "high": low + 4, "low": low, "close": low + 2, "volume": 0}
+            for index, low in enumerate(lows)
+        ])
+
+        self.live.reconcile()
+
+        params = self.broker.modify_order.call_args.kwargs
+        self.assertEqual((params["order_id"], params["order_type"]), ("2", "SL"))
+        self.assertGreater(params["trigger_price"], active["entry_price"])
+        self.assertEqual(active["trailing_status"], "SMART_ATR_STRUCTURE")
+        self.assertEqual(self.broker.place_order.call_count, 2)
+        self.assertNotEqual(active["stop"], params["trigger_price"])
+
+        self.live.reconcile()
+
+        self.assertEqual(active["stop"], params["trigger_price"])
+        self.assertEqual(self.broker.modify_order.call_count, 1)
+
+    def test_quantumedge_smart_trail_crossing_exits_through_existing_protection(self):
+        self.protect()
+        active = self.live.state["active"]
+        active.update(
+            owner="QUANTUMEDGE", trailing_mode="SMART_ATR_STRUCTURE",
+            entry_at=NOW - 600, peak=130,
+        )
+        self.market.engine.options[CONTRACT.token] = tick(
+            "option", at=NOW, price=110, bid=110, ask=111,
+        )
+        lows = [119, 121, 120, 122, 121, 124, 123, 126, 127]
+        self.market.engine.book.closed[("option", CONTRACT.token, 60)].extend([
+            {"at": NOW - 9 * 60 + index * 60, "open": low + 1,
+             "high": low + 4, "low": low, "close": low + 2, "volume": 0}
+            for index, low in enumerate(lows)
+        ])
+
+        self.live.reconcile()
+
+        params = self.broker.modify_order.call_args.kwargs
+        self.assertEqual((params["order_id"], params["order_type"]), ("2", "LIMIT"))
+        self.assertEqual(active["exit_requested"], "SMART_TRAIL_CROSSED")
+        self.assertEqual(active["trailing_status"], "SMART_TRAIL_CROSSED")
+        self.assertEqual(self.broker.place_order.call_count, 2)
 
     def test_broker_filled_trailing_stop_records_reason_without_requesting_an_exit(self):
         from services.aqte_execution_history import read_executions

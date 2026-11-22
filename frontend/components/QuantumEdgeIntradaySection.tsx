@@ -38,6 +38,11 @@ type LiveTrade = {
   stop: number; target: number; filled: number; quantity: number; entry_price: number;
   entry_at?: number; ltp?: number | null; unrealized?: number | null;
   trailing_active?: boolean; initial_stop?: number;
+  trailing_mode?: 'SMART_ATR_STRUCTURE';
+  trailing_status?: 'WAITING_FOR_1R' | 'BREAKEVEN' | 'R_MULTIPLE_FALLBACK'
+    | 'SMART_ATR_STRUCTURE' | 'SMART_TRAIL_CROSSED';
+  futures_invalidation?: { level: number; reference: number; buffer: number; basis: string };
+  futures_invalidation_status?: 'MONITORING' | 'FUTURES_FEED_UNAVAILABLE' | 'MARKET_DATA_UNAVAILABLE' | 'TRIGGERED';
   execution_context?: { confidence?: number | null };
 };
 type Snapshot = {
@@ -292,11 +297,28 @@ export default function QuantumEdgeIntradaySection({
         ['Target', 'target', money(active?.target)],
       ].map(([label, key, value]) => <div key={key} className={`qe-level qe-level-${key}`}>
         <small>{label}</small><b title={value}>{value}</b>
+        {key === 'trail' && active?.trailing_mode === 'SMART_ATR_STRUCTURE' && <span className="qe-level-note">
+          {active.trailing_status === 'WAITING_FOR_1R' ? 'Arms after +1R'
+            : active.trailing_status === 'BREAKEVEN' ? 'Estimated breakeven locked'
+              : active.trailing_status === 'R_MULTIPLE_FALLBACK' ? 'R-trail fallback · waiting for candles'
+                : active.trailing_status === 'SMART_TRAIL_CROSSED' ? 'Crossed · exiting through existing order'
+                  : 'ATR + confirmed option swing'}
+        </span>}
       </div>)}
       <div className={`qe-level qe-pnl ${pnlTone(pnl)}`}>
         <small>P&L</small><b title={money(pnl)}>{money(pnl)}</b>
         <span>{pnl == null ? active ? 'Awaiting mark' : 'No position' : returnLabel(tradeReturn(active))}</span>
       </div>
+      {active?.futures_invalidation && <div className="qe-level qe-level-invalidation">
+        <small>Futures Invalidation</small>
+        <b title={number(active.futures_invalidation.level)}>{number(active.futures_invalidation.level)}</b>
+        <span>{active.futures_invalidation_status === 'FUTURES_FEED_UNAVAILABLE'
+          || active.futures_invalidation_status === 'MARKET_DATA_UNAVAILABLE'
+          ? 'Data unavailable · option hard stop active'
+          : active.futures_invalidation_status === 'TRIGGERED'
+            ? 'Triggered · exit via existing order'
+            : `${active.futures_invalidation.basis.replace('_', ' ')} · confirmed 1m close`}</span>
+      </div>}
     </div>;
   }, [active]);
   const positions = snapshot?.positions;
@@ -319,13 +341,18 @@ export default function QuantumEdgeIntradaySection({
       <td className="qe-position-target"><span className="qe-position-value">{money(trade.target)}</span></td>
       <td className={tone}><span className="qe-position-value">{money(trade.unrealized)}</span></td>
       <td className={tone}><span className="qe-position-value">{returnLabel(tradeReturn(trade))}</span></td>
-      <td className="qe-position-status"><span className="qe-position-value">• LIVE</span></td>
+      <td className="qe-position-status">
+        <button type="button" className="qe-position-value qe-position-exit" disabled={busy || stale}
+          aria-label={`Square off ${trade.contract.trading_symbol}`}
+          onClick={() => window.confirm(`Square off QuantumEdge trade ${trade.contract.trading_symbol}?`)
+            && void apply('exit', { trade_id: trade.id })}>• LIVE · SQUARE OFF</button>
+      </td>
     </tr>;
   }) : <tr className="qe-empty-row"><td colSpan={12}>
     <span className="qe-empty-icon"><Layers3 aria-hidden="true" /></span>
     <span>No open algo positions</span>
     <small>QuantumEdge positions will appear here after a confirmed fill.</small>
-  </td></tr>, [positions]);
+  </td></tr>, [positions, busy, stale, apply]);
 
   return <section aria-label="QuantumEdge IntraDay Algo" className="qe-shell">
     <header className="qe-topbar">
@@ -526,7 +553,7 @@ export default function QuantumEdgeIntradaySection({
           <span className="qe-positions-icon"><Layers3 aria-hidden="true" /></span>
           <div>
             <h3>ALGO POSITIONS <span>(LIVE)</span></h3>
-            <p>Real-time automated exposure and performance</p>
+            <p>Up to one position per index · three maximum</p>
           </div>
         </div>
         <dl className="qe-positions-summary" aria-label="QuantumEdge position summary">
@@ -546,7 +573,7 @@ export default function QuantumEdgeIntradaySection({
       </div>
       <div className="qe-positions-scroll" role="region" aria-label="Live position table" tabIndex={0}>
         <table className={positions?.length ? 'qe-positions-populated' : undefined}>
-          <thead><tr>{['#', 'Index', 'Contract', 'Lots', 'Entry (₹)', 'LTP (₹)', 'SL (₹)', 'Trailing SL (₹)', 'Target (₹)', 'P&L (₹)', 'P&L (%)', 'Status'].map(label =>
+          <thead><tr>{['#', 'Index', 'Contract', 'Lots', 'Entry (₹)', 'LTP (₹)', 'SL (₹)', 'Trailing SL (₹)', 'Target (₹)', 'P&L (₹)', 'P&L (%)', 'Status / Exit'].map(label =>
             <th key={label} scope="col">{label}</th>)}</tr></thead>
           <tbody>{positionRows}</tbody>
         </table>
