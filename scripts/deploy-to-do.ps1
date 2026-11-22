@@ -14,9 +14,9 @@ $RemoteArchive = "/tmp/mydailytradingsignals-deploy.tgz"
 $Excludes = @(
     ".git", ".venv", "venv", "node_modules", ".next", ".next-*", "__pycache__",
     ".pytest_cache", ".ruff_cache", "*.log", ".env", ".env.*", "archive/env_backups",
-    "backend/access_token.txt", "backend/data", "backend/logs"
+    "backend/access_token.txt", "backend/data", "backend/logs", "openingedge/data"
 )
-$ServerOnlyEntry = '(^|/)(\.env(\.[^/]*)?|access_token\.txt)/?$'
+$ServerOnlyEntry = '(^|/)(\.env(\.[^/]*)?|access_token\.txt)/?$|(^|/)openingedge/data(/|$)'
 
 Write-Host "Deploying to Digital Ocean: $DropletIP" -ForegroundColor Cyan
 

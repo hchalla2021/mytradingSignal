@@ -41,6 +41,7 @@ try {
         @{ Name = "packaging failure"; Pack = 2; Entries = $sourceEntries; Upload = 0; Remote = 0; Error = "Packaging failed"; Uploads = 0; Calls = 0 },
         @{ Name = "server-only file guard"; Pack = 0; Entries = ($sourceEntries + "./backend/.env"); Upload = 0; Remote = 0; Error = "server-only files (./backend/.env)"; Uploads = 0; Calls = 0 },
         @{ Name = "token file guard"; Pack = 0; Entries = ($sourceEntries + "./backend/access_token.txt"); Upload = 0; Remote = 0; Error = "server-only files"; Uploads = 0; Calls = 0 },
+        @{ Name = "OpeningEdge database guard"; Pack = 0; Entries = ($sourceEntries + "./openingedge/data/openingedge.sqlite3"); Upload = 0; Remote = 0; Error = "server-only files"; Uploads = 0; Calls = 0 },
         @{ Name = "upload failure"; Pack = 0; Entries = $sourceEntries; Upload = 23; Remote = 0; Error = "File upload failed"; Uploads = 1; Calls = 0 },
         @{ Name = "remote failure"; Pack = 0; Entries = $sourceEntries; Upload = 0; Remote = 42; Error = "Remote deployment failed"; Uploads = 1; Calls = 1 },
         @{ Name = "successful dispatch"; Pack = 0; Entries = $sourceEntries; Upload = 0; Remote = 0; Error = $null; Uploads = 1; Calls = 1 }
@@ -67,7 +68,7 @@ try {
         if ($pack[0] -ne "-czf" -or $chdir -lt 0 -or [IO.Path]::GetFullPath($pack[$chdir + 1]) -ne $root -or $pack[-1] -ne ".") {
             throw "Package must contain the repository root"
         }
-        foreach ($exclude in @(".git", "node_modules", ".venv", ".env", ".env.*", "backend/access_token.txt", "backend/data")) {
+        foreach ($exclude in @(".git", "node_modules", ".venv", ".env", ".env.*", "backend/access_token.txt", "backend/data", "openingedge/data")) {
             if ($pack -notcontains "--exclude=$exclude") { throw "Package must exclude $exclude" }
         }
         if ($case.Uploads) {
@@ -94,7 +95,7 @@ try {
         }
         Write-Output "PASS: $($case.Name)"
     }
-    Write-Output "6 deployment wrapper tests passed; no network commands executed."
+    Write-Output "7 deployment wrapper tests passed; no network commands executed."
 } finally {
     Remove-Variable -Name AqteDeploymentTest -Scope Global
 }

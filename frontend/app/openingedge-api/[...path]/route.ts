@@ -4,6 +4,21 @@ import { getApiUrl } from '@/lib/api-config';
 export const dynamic = 'force-dynamic';
 type Context = { params: { path: string[] } };
 
+function isSameOrigin(request: NextRequest): boolean {
+  const origin = request.headers.get('origin');
+  const host = request.headers.get('host');
+  if (!host) return origin === request.nextUrl.origin;
+  const protocol = request.headers.get('x-forwarded-proto') || request.nextUrl.protocol.replace(':', '');
+  if (protocol !== 'http' && protocol !== 'https') return false;
+  try {
+    const expected = new URL(`${protocol}://${host}`);
+    if (expected.username || expected.password || expected.pathname !== '/' || expected.search || expected.hash) return false;
+    return origin === expected.origin;
+  } catch {
+    return false;
+  }
+}
+
 async function proxy(request: NextRequest, context: Context) {
   const path = context.params.path.join('/');
   const allowed = request.method === 'GET' && path === 'api/status'
@@ -14,7 +29,7 @@ async function proxy(request: NextRequest, context: Context) {
   if (request.method === 'PUT' && (
     !((path === 'api/trade-control' && request.headers.get('X-OpeningEdge-Intent') === 'manual-live-control')
       || (path !== 'api/trade-control' && request.headers.get('X-OpeningEdge-Intent') === 'save-configuration'))
-    || request.headers.get('origin') !== request.nextUrl.origin
+    || !isSameOrigin(request)
   )) return NextResponse.json({ detail: 'Invalid configuration request origin or intent.' }, { status: 403 });
 
   let sessionUrl: URL;

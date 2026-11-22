@@ -64,9 +64,37 @@ test('live trade control uses the dedicated manual intent and reaches only the t
     origin: 'https://example.test', cookie: 'app_access_token=example',
     'X-Device-Id': 'device', 'X-OpeningEdge-Intent': 'manual-live-control',
   });
+
   live.text = async () => '{"enabled":true,"confirmation":"START OPENINGEDGE LIVE TRADING"}';
   const result = await h.route.PUT(live, { params: { path: ['api', 'trade-control'] } });
   assert.equal(result.status, 200);
   assert.equal(h.calls[1].url, 'http://openingedge:8012/api/trade-control');
   assert.equal(h.calls[1].options.headers.Cookie, undefined);
+});
+
+test('HTTPS reverse proxy uses the public host and scheme, not the internal Next URL', async () => {
+  const h = harness();
+  const proxied = request('PUT');
+  proxied.nextUrl = { origin: 'http://localhost:3000', protocol: 'http:' };
+  proxied.headers.set('host', 'example.test');
+  proxied.headers.set('x-forwarded-proto', 'https');
+  const result = await h.route.PUT(proxied, { params: { path: ['api', 'config', 'NIFTY'] } });
+  assert.equal(result.status, 200);
+  assert.equal(h.calls.length, 2);
+});
+
+test('proxy origin checks reject foreign origins, invalid schemes and forwarded-host substitution', async () => {
+  for (const headers of [
+    { origin: 'https://other.test', host: 'example.test', 'x-forwarded-proto': 'https' },
+    { origin: 'https://example.test', host: 'example.test', 'x-forwarded-proto': 'https,http' },
+    { origin: 'https://other.test', host: 'example.test', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'other.test' },
+  ]) {
+    const h = harness();
+    const proxied = request('PUT');
+    proxied.nextUrl = { origin: 'http://localhost:3000', protocol: 'http:' };
+    for (const [name, value] of Object.entries(headers)) proxied.headers.set(name, value);
+    const result = await h.route.PUT(proxied, { params: { path: ['api', 'config', 'NIFTY'] } });
+    assert.equal(result.status, 403);
+    assert.equal(h.calls.length, 0);
+  }
 });

@@ -136,4 +136,32 @@ The browser proxy requires the existing dashboard session and device ID;
 configuration writes also require same-origin and an intent header. Do not
 expose port 8012 publicly: the standalone service is not authenticated.
 Production Compose uses private-network services and a persistent database
-volume. PM2 deployments must start the service independently.
+volume. PM2 deployments must start the service independently:
+
+```bash
+cd /var/www/mytradingSignal
+bash scripts/ensure-openingedge.sh
+```
+
+The helper touches only the `openingedge` PM2 process, binds port 8012 to
+loopback, validates the status API, and saves the process list for reboot
+restoration (PM2 startup must already be configured). Healthy processes are
+not restarted. If the virtualenv is elsewhere, set `OPENINGEDGE_VENV_BIN`.
+Install `openingedge/requirements.txt` there if the dependency check fails.
+After changing OpeningEdge Python code, restart only `openingedge` outside the
+pre-open window; a restart loses captured samples and resets approval OFF.
+
+For an HTTPS reverse proxy, the frontend location must overwrite `Host` with
+the public host and `X-Forwarded-Proto` with the external scheme:
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+OpeningEdge writes validate the browser Origin against this host and scheme,
+not Next.js's internal listening address. Dashboard authentication, device ID,
+and intent checks remain required. Never expose the standalone API publicly.
+In Compose, bring up `openingedge-api` explicitly when deploying only selected
+services; starting `backend` alone does not start OpeningEdge. Do not upload
+local `openingedge/data`, environment files or tokens to production.
