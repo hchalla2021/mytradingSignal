@@ -250,12 +250,33 @@ class QuantumEdgeIntradayService:
             engine = market.engine
             spot, future = engine.spot.get(symbol), engine.future.get(symbol)
             if not engine.fresh(spot, now) or not engine.fresh(future, now):
-                return {"decision": "WAIT", "symbol": symbol, "reason": "Fresh spot and futures ticks required"}
+                return {
+                    "decision": "WAIT",
+                    "symbol": symbol,
+                    "reason": "Fresh spot and futures ticks required",
+                    "readiness": {
+                        "spot_fresh": bool(engine.fresh(spot, now)),
+                        "futures_fresh": bool(engine.fresh(future, now)),
+                        "completed_minutes": 0,
+                        "completed_minutes_required": 16,
+                        "opening_minutes": 0,
+                        "opening_minutes_required": 15,
+                        "prior_day_levels": False,
+                    },
+                }
             today = day(now)
             session_bars = [
                 bar for bar in engine.book.closed.get(("future", future.token, 60), ())
                 if bar["at"] + 60 <= now and session(bar["at"]) and day(bar["at"]) == today
             ]
+            opening_bars = session_bars[:15]
+            contiguous_completed = 0
+            expected = int(now // 60) * 60 - 60
+            by_at = {bar["at"]: bar for bar in session_bars}
+            while contiguous_completed < 16:
+                if expected - contiguous_completed * 60 not in by_at:
+                    break
+                contiguous_completed += 1
             prior_spot = previous_spot_levels(engine.previous_day.get(symbol), today)
             spot_bars = engine.book.closed.get(("spot", spot.token, 60), ()) if prior_spot else ()
             latest_spot = (spot_bars[-2], spot_bars[-1]) if len(spot_bars) >= 2 else ()
@@ -263,7 +284,24 @@ class QuantumEdgeIntradayService:
             bars = session_bars[-50:]
             price_action = _price_action(bars, now) if len(bars) >= 21 else None
             if setup is None:
-                return {"decision": "WAIT", "symbol": symbol, "price_action": price_action, "reason": reason}
+                return {
+                    "decision": "WAIT",
+                    "symbol": symbol,
+                    "price_action": price_action,
+                    "reason": reason,
+                    "readiness": {
+                        "spot_fresh": bool(engine.fresh(spot, now)),
+                        "futures_fresh": bool(engine.fresh(future, now)),
+                        "completed_minutes": len(session_bars),
+                        "completed_minutes_required": 16,
+                        "contiguous_completed_minutes": contiguous_completed,
+                        "opening_minutes": len(opening_bars),
+                        "opening_minutes_required": 15,
+                        "prior_day_levels": prior_spot is not None,
+                        "strategy_count": 14,
+                        "qualified_setup_count": 0,
+                    },
+                }
             side = setup["side"]
             futures_invalidation = None
             if self.price_action_stop_enabled():
@@ -353,6 +391,18 @@ class QuantumEdgeIntradayService:
             (contract, quote, quantity, maximum, stop, target, gross_loss, gross_profit,
              entry_cost, stop_cost, target_cost, risk, reward) = selected
             spread = (float(quote.ask) - float(quote.bid)) / float(quote.ask)
+            readiness = {
+                "spot_fresh": bool(engine.fresh(spot, now)),
+                "futures_fresh": bool(engine.fresh(future, now)),
+                "completed_minutes": len(session_bars),
+                "completed_minutes_required": 16,
+                "contiguous_completed_minutes": contiguous_completed,
+                "opening_minutes": len(opening_bars),
+                "opening_minutes_required": 15,
+                "prior_day_levels": prior_spot is not None,
+                "strategy_count": 14,
+                "qualified_setup_count": 1,
+            }
             ml_features = self.ml_features(
                 symbol, side, bars, ema_fast, ema_slow, rsi, volume_ratio,
                 spot.price, contract, quote, spread, reward / risk, now,
@@ -360,6 +410,7 @@ class QuantumEdgeIntradayService:
             return {
                 "decision": f"BUY {side}", "side": side, "symbol": symbol,
                 **identity,
+                "readiness": readiness,
                 "strategy_evidence": setup["reason"],
                 "contract": asdict(contract),
                 "entry": {

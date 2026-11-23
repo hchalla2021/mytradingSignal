@@ -14,6 +14,17 @@ const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 type SymbolName = (typeof SYMBOLS)[number];
 type Signal = {
   decision: string; side?: 'CE' | 'PE'; reason?: string; setup_key?: string;
+  institutional?: {
+    decision_id: string; permission: 'ALLOW' | 'NO_TRADE'; mode: 'shadow' | 'live_gate';
+    score: number; vetoes: string[];
+  };
+  readiness?: {
+    spot_fresh: boolean; futures_fresh: boolean;
+    completed_minutes: number; completed_minutes_required: number;
+    contiguous_completed_minutes?: number;
+    opening_minutes: number; opening_minutes_required: number;
+    prior_day_levels: boolean; strategy_count?: number; qualified_setup_count?: number;
+  };
   alternate_strike?: boolean;
   status?: string;
   strategy_name?: string;
@@ -94,6 +105,18 @@ function priceActionLabel(evidence: Signal['price_action']) {
     ...(displacement ? [`${displacement === 'BULLISH' ? 'Bullish' : 'Bearish'} displacement`] : []),
     fvg ? `${fvg.side === 'BULLISH' ? 'Bullish' : 'Bearish'} FVG ${number(fvg.low)}–${number(fvg.high)}` : 'No open FVG detected',
   ].join(' · ');
+}
+
+function readinessLabel(readiness: Signal['readiness']) {
+  if (!readiness) return null;
+  const parts = [
+    `Spot ${readiness.spot_fresh ? 'fresh' : 'not fresh'}`,
+    `futures ${readiness.futures_fresh ? 'fresh' : 'not fresh'}`,
+    `${readiness.contiguous_completed_minutes ?? readiness.completed_minutes}/${readiness.completed_minutes_required} contiguous 1m`,
+    `${readiness.opening_minutes}/${readiness.opening_minutes_required} opening`,
+    `prior-day ${readiness.prior_day_levels ? 'available' : 'unavailable'}`,
+  ];
+  return `Data: ${parts.join(' · ')}`;
 }
 
 const opportunityLabels: Record<string, string> = {
@@ -247,37 +270,6 @@ export default function QuantumEdgeIntradaySection({
               : snapshot?.market_phase === 'POST_MARKET' ? 'POST-MARKET' : 'CLOSED'),
     };
   }), [snapshot]);
-  const [opportunityUpdatedAt, setOpportunityUpdatedAt] =
-    useState<Partial<Record<SymbolName, number>>>({});
-  const previousOpportunityValues = useRef<Partial<Record<SymbolName, string>>>({});
-  const hasOpportunityBaseline = useRef(false);
-  useEffect(() => {
-    if (!snapshot) return;
-    const changedAt: Partial<Record<SymbolName, number>> = {};
-    for (const item of opportunities) {
-        const signature = JSON.stringify({
-          side: item.side,
-          premium: item.premium,
-          confidence: item.confidence,
-          status: item.status,
-          reason: item.reason,
-          strategy: item.signal?.strategy_name,
-          contract: item.signal?.contract?.trading_symbol,
-          priceAction: item.signal?.price_action,
-          ml: item.ai?.ml && [item.ai.ml.state, item.ai.ml.score],
-        });
-        if (hasOpportunityBaseline.current
-          && previousOpportunityValues.current[item.symbol] !== signature) {
-          changedAt[item.symbol] = Date.now();
-        }
-        previousOpportunityValues.current[item.symbol] = signature;
-    }
-    hasOpportunityBaseline.current = true;
-    if (Object.keys(changedAt).length) {
-        setOpportunityUpdatedAt(previous => ({ ...previous, ...changedAt }));
-    }
-  }, [opportunities, snapshot]);
-
   const pending = opportunities.find(item => item.side && item.status === 'ENTRY_BLOCKED')
     ?? opportunities.find(item => item.side && item.status === 'AI_APPROVED');
   const activeConfidence = active?.execution_context?.confidence;
@@ -491,30 +483,40 @@ export default function QuantumEdgeIntradaySection({
       </section>
 
       <section className="qe-panel qe-opportunities" aria-label="QuantumEdge live opportunities">
-        <div className="qe-opp-heading">
-          <span className="qe-opp-icon"><Zap aria-hidden="true" /></span>
-          <div>
-            <h3>LIVE OPPORTUNITIES <span>(AUTO)</span></h3>
-            <p>Auto-detected trading opportunities across major indices</p>
+        <header className="qe-opp-header">
+          <div className="qe-opp-header-title">
+            <span className="qe-opp-header-icon"><Zap aria-hidden="true" /></span>
+            <div>
+              <h3>LIVE OPPORTUNITIES <span>(AUTO)</span></h3>
+              <p>Market-scanned setups <b>•</b> Multi-factor engine</p>
+            </div>
           </div>
-        </div>
+          <svg className="qe-opp-header-spark" viewBox="0 0 320 92" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="qeOppSparkFill" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stopColor="#62de70" stopOpacity=".34" />
+                <stop offset="1" stopColor="#62de70" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            <path d="M0 72 C48 68 58 64 94 63 C132 62 146 48 184 52 C220 56 248 32 282 24 C300 20 312 12 320 8 L320 92 L0 92 Z"
+              fill="url(#qeOppSparkFill)" />
+            <path d="M0 72 C48 68 58 64 94 63 C132 62 146 48 184 52 C220 56 248 32 282 24 C300 20 312 12 320 8"
+              fill="none" stroke="#72c98a" strokeWidth="2" />
+          </svg>
+          <span className="qe-opp-live"><i /> LIVE</span>
+        </header>
         <table className="qe-opp-table" role="table" aria-label="Index opportunities">
           <thead role="rowgroup"><tr role="row">{[
-            { label: 'Index', Icon: Layers3 }, { label: 'Signal', Icon: Crosshair },
+            { label: 'Index', Icon: BarChart3 }, { label: 'Signal', Icon: Crosshair },
             { label: 'Premium', Icon: Coins }, { label: 'Confidence', Icon: BarChart3 },
             { label: 'Status', Icon: Activity },
           ].map(({ label, Icon }) =>
             <th key={label} role="columnheader" scope="col"><span><Icon aria-hidden="true" />{label}</span></th>)}</tr></thead>
           <tbody role="rowgroup">{opportunities.map(item => {
-            const updatedAt = opportunityUpdatedAt[item.symbol];
             return <tr key={item.symbol} role="row">
             <th scope="row" role="rowheader">
-              <span className="qe-opp-symbol"><i aria-hidden="true" />{displayName(item.symbol)}</span>
-              {updatedAt != null && <small className="qe-opp-updated">
-                UPDATED {new Date(updatedAt).toLocaleTimeString('en-IN', {
-                  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-                })}
-              </small>}
+              <span className="qe-opp-symbol">{displayName(item.symbol)}</span>
+              {item.status === 'WAIT_MASTER' && <small className="qe-opp-index-slash">•</small>}
             </th>
             <td role="cell"><span className="qe-opp-mobile-label" aria-hidden="true">Signal</span><span className={item.side === 'PE' ? 'qe-side-pe' : item.side === 'CE' ? 'qe-side-ce' : 'qe-side-wait'}>{item.side ?? '—'}</span></td>
             <td role="cell"><span className="qe-opp-mobile-label" aria-hidden="true">Premium</span><span className="qe-opp-premium" title={money(item.premium)}>{money(item.premium)}</span></td>
@@ -523,22 +525,18 @@ export default function QuantumEdgeIntradaySection({
               className={['LIVE', 'LIVE_POSITION'].includes(item.status)
                 ? 'qe-state-live' : ['REJECTED', 'AI_UNAVAILABLE', 'ML_BLOCKED', 'ENTRY_BLOCKED'].includes(item.status) ? 'qe-state-reject' : 'qe-state-wait'}>{opportunityLabels[item.status] ?? item.status.replaceAll('_', ' ')}</em></div>
               <div className="qe-opp-details" tabIndex={0} role="region" aria-label={`${displayName(item.symbol)} status details`}>
-              {['WAIT_SIGNAL', 'REJECTED', 'AI_UNAVAILABLE', 'ML_BLOCKED', 'ENTRY_BLOCKED'].includes(item.status) && <small className="qe-wait-reason">{item.reason}</small>}
-              {!stale && item.signal?.strategy_name &&
-                <small className="qe-wait-reason">{item.signal.strategy_name}</small>}
-              {item.signal?.alternate_strike && item.signal.contract?.trading_symbol &&
-                <small className="qe-wait-reason" title="Next eligible same-expiry strike">{item.signal.contract.trading_symbol}</small>}
-              {!stale && item.signal?.price_action &&
-                <small className="qe-wait-reason"><b>1m futures:</b> {priceActionLabel(item.signal.price_action)}</small>}
-              {!stale && item.signal?.advisory?.available &&
-                <small className="qe-wait-reason"
-                  title={[...item.signal.advisory.supporting, ...item.signal.advisory.conflicting].join(', ')}>
-                  Independent engines: {item.signal.advisory.aligned} aligned · {item.signal.advisory.opposed} opposed
-                  {item.signal.advisory.advanced?.smc_available &&
-                    ` · SMC ${item.signal.advisory.advanced.smc_verdict ?? 'MONITORING'} ${item.signal.advisory.advanced.smc_confidence == null ? '' : `${item.signal.advisory.advanced.smc_confidence}%`}`}
-                  {item.signal.advisory.advanced?.order_flow_available && ' · Flow LIVE'}
-                </small>}
-              {item.ai?.ml?.score != null && <small className="qe-wait-reason">LightGBM {number(item.ai.ml.score, 3)} · {item.ai.ml.state}</small>}
+              {!stale && item.signal?.strategy_name && (
+                <small className="qe-wait-reason qe-wait-reason-primary">{item.signal.strategy_name}</small>
+              )}
+              {!stale && item.signal?.price_action && (
+                <small className="qe-wait-reason"><span aria-hidden="true">ⓘ</span> {priceActionLabel(item.signal.price_action)}</small>
+              )}
+              {item.signal?.readiness && (
+                <small className="qe-wait-reason">{readinessLabel(item.signal.readiness)}</small>
+              )}
+              {['WAIT_SIGNAL', 'REJECTED', 'AI_UNAVAILABLE', 'ML_BLOCKED', 'ENTRY_BLOCKED'].includes(item.status) && (
+                <small className="qe-wait-reason">{item.reason}</small>
+              )}
               </div>
             </td>
           </tr>;

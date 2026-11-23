@@ -44,6 +44,7 @@ from services.expiryedge_algos import (
 from services.expiryedge import get_config as get_expiryedge_config
 from services.expiryedge_ai import evaluate_opening_range
 from services.quantumedge_intraday import DAILY_LOSS_LIMIT as QUANTUMEDGE_DAILY_LOSS_LIMIT, QuantumEdgeIntradayService
+from services.quantumedge_institutional import InstitutionalDecisionEngine
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"COMPLETE", "CANCELLED", "REJECTED"}
@@ -253,6 +254,7 @@ class AQTELiveService:
         self.quantumedge_next_activation = 0.0
         self.quantedge_hybrid = QuantEdgeHybridOrchestrator()
         self.quantumedge = QuantumEdgeIntradayService()
+        self.quantumedge_institutional = InstitutionalDecisionEngine()
         self.quantumedge_entry_blocks: dict[str, tuple[str, str]] = {}
         self.proposals = {}
         self.check = None
@@ -1597,6 +1599,46 @@ class AQTELiveService:
             self.service(), symbol, now, cfg["lots"], cfg["risk_per_lot"],
             busy, self.costs, daily_budget=budget)
         if candidate.get("decision") in ("BUY CE", "BUY PE"):
+            market = self.service()
+            with market.lock:
+                engine = market.engine
+                future = engine.future.get(symbol)
+                bars = [
+                    bar for bar in engine.book.closed.get(("future", future.token, 60), ())
+                    if bar["at"] + 60 <= now and session(bar["at"]) and day(bar["at"]) == day(now)
+                ] if future is not None else []
+                spot = engine.spot.get(symbol)
+                contract_data = candidate.get("contract") or {}
+                contract = engine.contracts.get(contract_data.get("token"))
+                quote = engine.options.get(contract_data.get("token")) if contract_data else None
+            pcr = None
+            try:
+                from services.pcr_service import _PCR_CACHE
+                pcr = _PCR_CACHE.get(symbol)
+            except (ImportError, AttributeError):
+                pcr = None
+            order_flow = None
+            try:
+                from services.order_flow_engine import order_flow_engine
+                order_flow = order_flow_engine.live_summary(symbol)
+            except (ImportError, AttributeError):
+                order_flow = None
+            institutional = self.quantumedge_institutional.evaluate(
+                symbol=symbol, now=now, candidate=candidate, bars_1m=bars,
+                spot=spot, future=future, contract=asdict(contract) if contract is not None else None,
+                quote=quote, pcr=pcr, order_flow=order_flow,
+            )
+            candidate["institutional"] = institutional
+            if (institutional["mode"] == "live_gate"
+                    and institutional["permission"] != "ALLOW"):
+                candidate = {
+                    "decision": "WAIT",
+                    "symbol": symbol,
+                    "reason": "Institutional live gate: " + "; ".join(institutional["vetoes"]),
+                    "institutional": institutional,
+                    "setup_key": candidate.get("setup_key"),
+                }
+        if candidate.get("decision") in ("BUY CE", "BUY PE"):
             candidate["advisory"] = self.quantumedge_advisory(symbol, candidate.get("side"))
         return candidate
 
@@ -1867,6 +1909,36 @@ class AQTELiveService:
             else:
                 market_phase = "CLOSED"
                 market_detail = "Outside NSE/BSE trading sessions; QuantumEdge will resume automatically"
+            market = self.service()
+            with market.lock:
+                engine = market.engine
+                due = self.quantumedge_institutional.due_outcomes(now)
+                for item in due:
+                    payload = item["payload"]
+                    candidate = payload.get("candidate") or {}
+                    contract = candidate.get("contract") or {}
+                    token = contract.get("token")
+                    quote = engine.options.get(token) if type(token) is int else None
+                    observed_ltp = getattr(quote, "price", None) if quote is not None else None
+                    entry = (candidate.get("entry") or {}).get("maximum")
+                    if (type(observed_ltp) in (int, float) and math.isfinite(observed_ltp)
+                            and type(entry) in (int, float) and math.isfinite(entry) and entry > 0):
+                        return_pct = round((float(observed_ltp) - float(entry)) / float(entry) * 100, 4)
+                        outcome = {
+                            "status": "OBSERVED",
+                            "option_entry": entry,
+                            "option_ltp": observed_ltp,
+                            "option_return_pct": return_pct,
+                            "observed_at": now,
+                            "price_source": "ZERODHA_OPTION_QUOTE",
+                        }
+                    else:
+                        outcome = {
+                            "status": "UNAVAILABLE",
+                            "reason": "No fresh option quote at institutional outcome horizon",
+                            "observed_at": now,
+                        }
+                    self.quantumedge_institutional.record_outcome(item["id"], now, outcome)
             signals = {}
             for symbol in SYMBOLS:
                 try:

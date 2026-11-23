@@ -156,7 +156,7 @@ function IndexCard({ symbol, quote, config, review, active, onSave }: {
         {active?.symbol === symbol ? `LIVE · ${active.state}` : 'NO TRADE'}
       </div>
       <p className={styles.probability}>AI confidence: <strong>{review?.confidence != null ? `${display(review.confidence)}%` : '—'}</strong></p>
-      <p className={styles.review}>{review ? `Pre-open review: ${review.state}${review.action && review.action !== 'REJECT' ? ` · ${review.action.replace('_', ' ')}` : ''}. ${review.reason}` : 'Pre-open review: WAIT'}</p>
+      <p className={styles.review}>{review ? `Haiku setup review: ${review.state}${review.action && review.action !== 'REJECT' ? ` · ${review.action.replace('_', ' ')}` : ''}. ${review.reason}` : 'Haiku setup review: WAIT · awaiting a qualified live breakout'}</p>
       <dl className={styles.contractDetails}>
         <div><dt><Crosshair aria-hidden="true" />Contract</dt><dd>—</dd></div>
         <div><dt><CalendarDays aria-hidden="true" />Expiry</dt><dd>—</dd></div>

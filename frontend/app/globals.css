@@ -2650,7 +2650,108 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .qe-opportunities table, .qe-positions table { width: 100%; border-collapse: collapse; }
-.qe-opportunities { min-width: 0; padding: 14px; container: qe-opportunities / inline-size; border-color: #83d972; border-radius: 20px; background: linear-gradient(150deg, #0d1c20, #07111a 64%, #091813); box-shadow: inset 0 0 22px rgba(85, 211, 90, .08), 0 0 15px rgba(85, 211, 90, .18); }
+.qe-opportunities {
+  min-width: 0;
+  padding: 14px;
+  container: qe-opportunities / inline-size;
+  border: 1px solid #547568;
+  border-radius: 20px;
+  background: linear-gradient(145deg, #172b43 0%, #101c2d 48%, #10222d 100%);
+  box-shadow: inset 0 0 28px rgba(68, 139, 121, .08), 0 8px 24px rgba(0, 0, 0, .22);
+  overflow: hidden;
+}
+.qe-opp-header {
+  position: relative;
+  height: 112px;
+  display: flex;
+  align-items: center;
+  margin: -14px -14px 14px;
+  padding: 18px 18px;
+  border-bottom: 1px solid #4e6680;
+  background: linear-gradient(100deg, rgba(18, 31, 45, .96), rgba(33, 55, 72, .92));
+  overflow: hidden;
+}
+.qe-opp-header-title {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 18px;
+}
+.qe-opp-header-icon {
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid #5b7c80;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #173d49, #0d1a27);
+  box-shadow: inset 0 0 18px rgba(111, 255, 103, .08);
+}
+.qe-opp-header-icon svg {
+  width: 38px;
+  height: 38px;
+  color: #87ef66;
+  filter: drop-shadow(0 0 7px rgba(109, 255, 92, .28));
+}
+.qe-opp-header-title > div {
+  min-width: 0;
+  padding-left: 16px;
+  border-left: 3px solid #77ef67;
+}
+.qe-opp-header-title h3 {
+  margin: 0;
+  color: #f6f9ff;
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: -.035em;
+  white-space: nowrap;
+}
+.qe-opp-header-title h3 span { color: #75e967; }
+.qe-opp-header-title p {
+  margin: 8px 0 0;
+  color: #ccd7e4;
+  font-size: 14px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.qe-opp-header-title p b { color: #9bcfdf; }
+.qe-opp-header-spark {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 38%;
+  height: 92px;
+  opacity: .72;
+}
+.qe-opp-live {
+  position: relative;
+  z-index: 3;
+  height: 40px;
+  min-width: 96px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-left: 20px;
+  border: 1px solid #5c7e78;
+  border-radius: 999px;
+  color: #cfe9dc;
+  background: rgba(12, 22, 31, .72);
+  box-shadow: inset 0 0 14px rgba(89, 224, 134, .07);
+  font-size: 14px;
+  font-weight: 850;
+}
+.qe-opp-live i {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #55d6a5;
+  box-shadow: 0 0 9px #55d6a5;
+}
 .qe-opp-heading { display: flex; align-items: center; gap: 12px; min-width: 0; margin-bottom: 10px; }
 .qe-opp-icon { display: grid; width: 46px; height: 46px; flex: 0 0 auto; place-items: center; border: 1px solid #345e41; border-radius: 10px; background: #0b1b16; }
 .qe-opp-icon svg { width: 25px; height: 25px; color: #8dff6d; filter: drop-shadow(0 0 5px rgba(125, 255, 91, .55)); }
@@ -2659,28 +2760,131 @@ h1, h2, h3, h4, h5, h6 {
 .qe-opp-heading h3 span { color: #85f567; }
 .qe-opp-heading p { margin: 4px 0 0; color: #b6c4d5; font-size: 11px; line-height: 1.3; }
 .qe-opportunities .qe-opp-table { table-layout: fixed; border-collapse: separate; border-spacing: 0 7px; }
+.qe-opportunities { min-height: 400px; }
+.qe-opportunities .qe-opp-table tbody tr {
+  height: 132px;
+  contain: layout style;
+  transition: none;
+  animation: none;
+}
+.qe-opp-index-price {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  margin-top: 5px;
+  color: #f7fbff;
+  font-size: 22px;
+  line-height: 26px;
+  letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.qe-opp-index-up, .qe-opp-index-down {
+  display: block;
+  width: 100%;
+  min-height: 16px;
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: none;
+  animation: none;
+}
+.qe-opp-index-up { color: #66ef70; }
+.qe-opp-index-down { color: #ff6b78; }
 .qe-opp-table thead th { height: 34px; padding: 0 8px; border-top: 1px solid #39495c; border-bottom: 1px solid #39495c; color: #e4ecf7; background: #172433; text-align: left; font-size: 10px; font-weight: 700; }
-.qe-opp-table thead th:first-child { width: 18%; border-left: 1px solid #39495c; border-radius: 8px 0 0 8px; }
-.qe-opp-table thead th:nth-child(2) { width: 14%; }
-.qe-opp-table thead th:nth-child(3), .qe-opp-table thead th:nth-child(4) { width: 17%; }
+.qe-opp-table thead th:first-child { width: 22%; border-left: 1px solid #39495c; border-radius: 8px 0 0 8px; }
+.qe-opp-table thead th:nth-child(2) { width: 18%; }
+.qe-opp-table thead th:nth-child(3) { width: 20%; }
+.qe-opp-table thead th:nth-child(4) { width: 18%; }
+.qe-opp-table thead th:last-child { width: 22%; }
 .qe-opp-table thead th:last-child { border-right: 1px solid #39495c; border-radius: 0 8px 8px 0; }
 .qe-opp-table thead th > span { display: flex; align-items: center; gap: 5px; }
 .qe-opp-table thead svg { width: 13px; height: 13px; flex: 0 0 auto; }
-.qe-opp-table tbody :is(th, td) { min-width: 0; padding: 0 8px; border-top: 1px solid #364b5a; border-bottom: 1px solid #364b5a; color: #e1eaf0; background: #0c1920; font-size: 11px; overflow-wrap: anywhere; }
-.qe-opp-table tbody th { border-left: 1px solid #364b5a; border-radius: 9px 0 0 9px; color: #f4f8f5; text-align: left; font-weight: 800; }
+.qe-opportunities .qe-opp-table tbody :is(th, td) {
+  min-width: 0;
+  padding: 12px 14px;
+  border-top: 1px solid #364b5a;
+  border-bottom: 1px solid #364b5a;
+  color: #e1eaf0;
+  background: #0c1920;
+  font-size: 13px;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: normal;
+  vertical-align: top;
+}
+.qe-opportunities .qe-opp-table tbody tr th {
+  border-left: 5px solid #58dc70;
+  border-right: 0;
+  border-radius: 14px 0 0 14px;
+  color: #f4f8f5;
+  text-align: left;
+  font-weight: 850;
+  background: linear-gradient(100deg, rgba(22, 47, 52, .96), #101a27 82%);
+}
+.qe-opportunities .qe-opp-table tbody tr:nth-child(1) th { border-left-color: #55db75; }
+.qe-opportunities .qe-opp-table tbody tr:nth-child(2) th { border-left-color: #54dc70; }
+.qe-opportunities .qe-opp-table tbody tr:nth-child(3) th { border-left-color: #54dc70; }
+.qe-opp-symbol {
+  display: block;
+  min-width: 0;
+  font-size: 20px;
+  line-height: 26px;
+}
 .qe-opp-table tbody td:last-child { border-right: 1px solid #364b5a; border-radius: 0 9px 9px 0; }
 .qe-opp-table tbody th > i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; background: #7cff68; box-shadow: 0 0 7px rgba(124, 255, 104, .35); }
 .qe-opp-symbol { display: inline-flex; min-width: 0; align-items: center; }
 .qe-opp-updated { display: inline-block; margin-left: 6px; color: #91c9a1; font-size: 8px; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
-.qe-opp-premium { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.qe-opp-premium { display: block; overflow: visible; text-overflow: clip; white-space: normal; font-variant-numeric: tabular-nums; }
 .qe-opp-mobile-label { display: none; }
-.qe-opp-table .qe-opp-status { padding: 6px 8px; }
-.qe-opp-badge { display: flex; align-items: flex-start; height: 2rem; }
-.qe-opp-badge em { max-width: 100%; line-height: 1.15; }
-.qe-opp-details { height: 4.5rem; overflow: auto; scrollbar-gutter: stable; }
+.qe-opp-table .qe-opp-status {
+  height: 132px;
+  padding: 8px 10px;
+  vertical-align: top;
+}
+.qe-opp-badge { display: flex; align-items: flex-start; height: auto; }
+.qe-opp-badge em {
+  max-width: 100%;
+  min-height: 26px;
+  padding: 6px 10px;
+  line-height: 14px;
+  letter-spacing: .04em;
+  font-size: 11px;
+  text-align: center;
+  transition: none;
+  animation: none;
+}
+.qe-opp-details {
+  height: auto;
+  min-height: 82px;
+  max-height: none;
+  margin-top: 8px;
+  min-width: 0;
+  overflow-y: visible;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  scroll-behavior: auto;
+  transition: none;
+  animation: none;
+}
 .qe-opp-details:empty { display: none; }
 .qe-opp-details:focus-visible { outline: 1px solid #7cff68; outline-offset: -1px; }
-.qe-opp-details .qe-wait-reason { max-width: none; padding: 2px 3px 2px 0; }
+.qe-opp-details .qe-wait-reason {
+  max-width: none;
+  padding: 3px 2px;
+  color: #cfdae1;
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  transition: none;
+  animation: none;
+}
 .qe-side-ce, .qe-side-pe { display: inline-grid; min-width: 24px; place-items: center; border-radius: 3px; padding: 3px 4px; font-size: 10px; font-weight: 900; }
 .qe-side-ce { color: #a4ff91; background: rgba(71, 184, 58, .14); }.qe-side-pe { color: #ff9cab; background: rgba(193, 62, 85, .14); }.qe-side-wait { color: #738087; }
 .qe-confidence-cell > span:not(.qe-opp-mobile-label) { display: block; color: #c7d2cd; font-size: 10px; font-variant-numeric: tabular-nums; }
@@ -2690,10 +2894,49 @@ h1, h2, h3, h4, h5, h6 {
 .qe-state-live { border: 1px solid rgba(82, 231, 81, .44); color: #8dff78; background: rgba(58, 172, 56, .13); }
 .qe-state-wait { border: 1px solid #61748d; color: #e6edf6; background: #233242; }
 .qe-state-reject { display: inline-flex; border: 1px solid rgba(255, 87, 105, .38); border-radius: 999px; padding: 5px 8px; color: #ff9ba8; background: rgba(129, 25, 41, .22); font-size: 9px; font-style: normal; font-weight: 800; }
-.qe-wait-reason { display: block; max-width: 190px; padding: 4px 0; color: #a1a9ad; font-size: 10px; line-height: 1.35; }
+.qe-wait-reason {
+  display: block;
+  max-width: 190px;
+  padding: 4px 0;
+  color: #a1a9ad;
+  font-size: 11px;
+  line-height: 1.38;
+  transition: none;
+  animation: none;
+}
+
+@container qe-opportunities (max-width: 900px) and (min-width: 601px) {
+  .qe-opp-header { height: 96px; margin-bottom: 10px; padding: 12px 14px; }
+  .qe-opp-header-icon { width: 52px; height: 52px; border-radius: 12px; }
+  .qe-opp-header-icon svg { width: 30px; height: 30px; }
+  .qe-opp-header-title { gap: 12px; }
+  .qe-opp-header-title > div { padding-left: 12px; }
+  .qe-opp-header-title h3 { font-size: 22px; }
+  .qe-opp-header-title p { margin-top: 5px; font-size: 12px; }
+  .qe-opp-live { height: 36px; min-width: 82px; font-size: 12px; }
+  .qe-opp-table thead th { height: 30px; padding-inline: 6px; font-size: 9px; }
+  .qe-opportunities .qe-opp-table tbody tr { height: 122px; }
+  .qe-opportunities .qe-opp-table tbody :is(th, td) { padding: 9px 8px; }
+  .qe-opp-symbol { font-size: 17px; line-height: 22px; }
+  .qe-opp-badge em { padding: 5px 7px; font-size: 10px; }
+  .qe-opp-details .qe-wait-reason { font-size: 10px; line-height: 1.38; }
+  .qe-opp-table .qe-opp-status { height: 122px; padding: 7px 6px; }
+}
 
 @container qe-opportunities (max-width: 600px) {
   .qe-opportunities { padding: 10px; border-radius: 15px; }
+  .qe-opp-header {
+    height: 78px;
+    margin: -10px -10px 10px;
+    padding: 8px 10px;
+  }
+  .qe-opp-header-icon { width: 44px; height: 44px; border-radius: 10px; }
+  .qe-opp-header-icon svg { width: 26px; height: 26px; }
+  .qe-opp-header-title { gap: 8px; }
+  .qe-opp-header-title > div { padding-left: 8px; border-left-width: 2px; }
+  .qe-opp-header-title h3 { font-size: 17px; line-height: 1.05; white-space: normal; }
+  .qe-opp-header-title p { margin-top: 4px; font-size: 10px; white-space: normal; }
+  .qe-opp-live { height: 32px; min-width: 68px; margin-left: 8px; font-size: 10px; }
   .qe-opp-heading { gap: 9px; margin-bottom: 12px; }
   .qe-opp-icon { width: 38px; height: 38px; border-radius: 9px; }
   .qe-opp-icon svg { width: 21px; height: 21px; }
@@ -2714,9 +2957,13 @@ h1, h2, h3, h4, h5, h6 {
     border-radius: 11px;
     background: linear-gradient(120deg, #10201f, #0d1821 65%);
     box-shadow: inset 0 1px rgba(255, 255, 255, .025), 0 3px 9px rgba(0, 0, 0, .2);
+    height: auto;
+    min-height: 168px;
+    contain: layout style;
   }
   .qe-opp-table tbody :is(th, td) { min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
   .qe-opp-table tbody th { grid-area: index; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; padding-bottom: 7px; border-bottom: 1px solid #2a4149; font-size: 13px; }
+  .qe-opp-symbol { max-width: 100%; font-size: 16px; line-height: 20px; white-space: normal; overflow-wrap: normal; }
   .qe-opp-updated { margin-left: 0; font-size: 9px; }
   .qe-opp-table tbody td:nth-of-type(1) { grid-area: signal; }
   .qe-opp-table tbody td:nth-of-type(2) { grid-area: premium; }
@@ -2729,10 +2976,21 @@ h1, h2, h3, h4, h5, h6 {
     gap: 8px;
     padding: 7px 0 0;
     border-top: 1px solid #2a4149 !important;
+    height: auto;
+    min-height: 112px;
+    max-height: none;
+    overflow: visible;
   }
   .qe-opp-badge { height: auto; flex: 0 0 auto; }
   .qe-opp-badge em { padding: 4px 7px; font-size: 9px; overflow-wrap: anywhere; white-space: normal; }
-  .qe-opp-details { height: auto; max-height: 2.7rem; min-width: 0; flex: 1 1 auto; }
+  .qe-opp-details {
+    height: auto;
+    max-height: none;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow-y: visible;
+    overflow-x: visible;
+  }
   .qe-opp-details .qe-wait-reason { padding: 1px 0; font-size: 9px; }
   .qe-opp-mobile-label { display: block; margin-bottom: 3px; color: #cbd5df; font-size: 11px; font-weight: 600; line-height: 1.2; }
   .qe-opp-table tbody td > span:not(.qe-opp-mobile-label) { font-size: 13px; font-weight: 700; }
@@ -2893,5 +3151,318 @@ h1, h2, h3, h4, h5, h6 {
   .qe-config-row > .qe-edit-config, .qe-config-row > .qe-save-config {
     grid-column: 4;
     margin-top: 4px;
+  }
+}
+
+/* Responsive QuantumEdge live opportunity panel */
+@media (max-width: 900px) {
+  .qe-opportunities {
+    width: 100%;
+    max-width: 100%;
+    padding: 10px;
+  }
+  .qe-opp-header {
+    height: 84px;
+    margin: -10px -10px 10px;
+    padding: 8px 10px;
+  }
+  .qe-opp-header-icon {
+    width: 46px;
+    height: 46px;
+  }
+  .qe-opp-header-icon svg {
+    width: 28px;
+    height: 28px;
+  }
+  .qe-opp-header-title {
+    gap: 9px;
+  }
+  .qe-opp-header-title > div {
+    padding-left: 9px;
+  }
+  .qe-opp-header-title h3 {
+    font-size: clamp(16px, 4.4vw, 21px);
+    line-height: 1.08;
+    white-space: normal;
+  }
+  .qe-opp-header-title p {
+    margin-top: 4px;
+    font-size: clamp(9px, 2.4vw, 12px);
+    white-space: normal;
+  }
+  .qe-opp-live {
+    height: 34px;
+    min-width: 68px;
+    margin-left: 8px;
+    font-size: 11px;
+  }
+  .qe-opp-table,
+  .qe-opp-table tbody {
+    display: block;
+  }
+  .qe-opp-table thead {
+    display: none;
+  }
+  .qe-opp-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      "index index index"
+      "signal premium confidence"
+      "status status status";
+    width: 100%;
+    height: auto;
+    min-height: 168px;
+    margin: 0 0 9px;
+    padding: 10px;
+    gap: 8px 10px;
+    border: 1px solid #344d56;
+    border-left: 4px solid #75d66c;
+    border-radius: 11px;
+    background: linear-gradient(120deg, #10201f, #0d1821 65%);
+  }
+  .qe-opportunities .qe-opp-table tbody :is(th, td) {
+    min-width: 0;
+    height: auto;
+    max-height: none;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .qe-opp-table tbody th {
+    grid-area: index;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 7px;
+    border-bottom: 1px solid #2a4149;
+  }
+  .qe-opp-symbol {
+    max-width: 100%;
+    font-size: 16px;
+    line-height: 20px;
+  }
+  .qe-opp-table tbody td:nth-of-type(1) { grid-area: signal; }
+  .qe-opp-table tbody td:nth-of-type(2) { grid-area: premium; }
+  .qe-opp-table tbody td:nth-of-type(3) { grid-area: confidence; }
+  .qe-opp-table tbody td:last-child { grid-area: status; }
+  .qe-opp-table .qe-opp-status {
+    display: flex;
+    height: auto;
+    min-height: 92px;
+    max-height: none;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 0 0;
+    border-top: 1px solid #2a4149;
+    overflow: visible;
+  }
+  .qe-opp-badge {
+    flex: 0 0 auto;
+  }
+  .qe-opp-badge em {
+    padding: 5px 8px;
+    font-size: 9px;
+  }
+  .qe-opp-details {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 72px;
+    max-height: none;
+    overflow: visible;
+  }
+  .qe-opp-details .qe-wait-reason {
+    padding: 2px 0;
+    font-size: 10px;
+    line-height: 1.42;
+  }
+  .qe-opp-mobile-label {
+    display: block;
+  }
+}
+
+@media (min-width: 901px) {
+  .qe-opp-table tbody tr {
+    display: table-row;
+  }
+  .qe-opportunities .qe-opp-table tbody :is(th, td) {
+    display: table-cell;
+  }
+}
+
+/* Final QuantumEdge opportunity typography and width pass */
+@media (min-width: 901px) and (max-width: 1220px) {
+  .qe-main-grid {
+    grid-template-columns: minmax(520px, 1.12fr) minmax(480px, .88fr);
+  }
+}
+@media (min-width: 901px) {
+  .qe-opportunities {
+    min-height: 620px;
+  }
+  .qe-opp-header {
+    height: 112px;
+  }
+  .qe-opp-header-title h3 {
+    font-size: clamp(24px, 2vw, 28px);
+  }
+  .qe-opp-header-title p {
+    font-size: 13px;
+  }
+  .qe-opp-live {
+    min-width: 92px;
+    height: 40px;
+    font-size: 12px;
+  }
+  .qe-opp-table thead th {
+    height: 36px;
+    font-size: 11px;
+  }
+  .qe-opp-table thead th:first-child { width: 18%; }
+  .qe-opp-table thead th:nth-child(2) { width: 12%; }
+  .qe-opp-table thead th:nth-child(3) { width: 16%; }
+  .qe-opp-table thead th:nth-child(4) { width: 16%; }
+  .qe-opp-table thead th:last-child { width: 38%; }
+  .qe-opportunities .qe-opp-table tbody tr {
+    height: 158px;
+  }
+  .qe-opportunities .qe-opp-table tbody :is(th, td) {
+    padding: 12px 10px;
+  }
+  .qe-opp-symbol {
+    font-size: 19px;
+    line-height: 24px;
+  }
+  .qe-opp-table .qe-opp-status {
+    height: 158px;
+  }
+  .qe-opp-badge em {
+    min-height: 28px;
+    padding: 6px 9px;
+    font-size: 11px;
+  }
+  .qe-opp-details {
+    min-height: 112px;
+    height: 112px;
+  }
+  .qe-opp-details .qe-wait-reason,
+  .qe-wait-reason {
+    max-width: none;
+    font-size: 11px;
+    line-height: 1.38;
+  }
+}
+.qe-opp-header-title h3 {
+  font-size: clamp(21px, 1.8vw, 24px);
+  line-height: 1.08;
+}
+.qe-opp-header-title p {
+  font-size: clamp(11px, 0.95vw, 13px);
+  line-height: 1.35;
+}
+.qe-opp-live {
+  min-width: 92px;
+  font-size: 12px;
+}
+.qe-opp-table thead th {
+  font-size: 12px;
+  line-height: 1.25;
+}
+.qe-opp-table thead th:first-child { width: 18%; }
+.qe-opp-table thead th:nth-child(2) { width: 14%; }
+.qe-opp-table thead th:nth-child(3) { width: 18%; }
+.qe-opp-table thead th:nth-child(4) { width: 16%; }
+.qe-opp-table thead th:last-child { width: 34%; }
+.qe-opp-table .qe-opp-status {
+  overflow: visible;
+}
+.qe-opp-badge em {
+  font-size: 11px;
+  line-height: 1.2;
+}
+.qe-opp-details {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+.qe-opp-details .qe-wait-reason,
+.qe-wait-reason {
+  max-width: none;
+  font-size: 11px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+@media (max-width: 900px) {
+  .qe-opp-header {
+    height: 88px;
+  }
+  .qe-opp-header-title h3 {
+    font-size: clamp(17px, 4.5vw, 22px);
+  }
+  .qe-opp-header-title p {
+    font-size: clamp(10px, 2.5vw, 12px);
+  }
+  .qe-opp-live {
+    min-width: 74px;
+    height: 34px;
+    font-size: 11px;
+  }
+  .qe-opp-table tbody tr {
+    height: auto;
+    min-height: 172px;
+  }
+  .qe-opp-table .qe-opp-status {
+    min-height: 104px;
+  }
+  .qe-opp-badge em {
+    font-size: 10px;
+  }
+  .qe-opp-details .qe-wait-reason,
+  .qe-wait-reason {
+    font-size: 10px;
+    line-height: 1.42;
+  }
+}
+
+@media (max-width: 420px) {
+  .qe-opp-header {
+    height: 82px;
+  }
+  .qe-opp-header-icon {
+    width: 42px;
+    height: 42px;
+  }
+  .qe-opp-header-icon svg {
+    width: 25px;
+    height: 25px;
+  }
+  .qe-opp-header-title h3 {
+    font-size: 17px;
+  }
+  .qe-opp-header-title p {
+    font-size: 9px;
+  }
+  .qe-opp-live {
+    min-width: 62px;
+    height: 30px;
+    font-size: 10px;
+  }
+  .qe-opp-table tbody tr {
+    min-height: 184px;
+  }
+  .qe-opp-table .qe-opp-status {
+    min-height: 112px;
+  }
+  .qe-opp-badge em {
+    font-size: 9px;
+  }
+  .qe-opp-details .qe-wait-reason,
+  .qe-wait-reason {
+    font-size: 10px;
   }
 }

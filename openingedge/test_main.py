@@ -68,33 +68,61 @@ def test_preopen_requires_real_coverage_and_resets_each_day():
     assert market.status()["indices"]["NIFTY"]["preopen_high"] is None
 
 
-def test_review_requires_continuous_preopen_and_previous_day_confirmation():
+def test_setup_review_requires_complete_preopen_range_recent_history_and_live_breakout():
     clock = [datetime(2026, 11, 20, 9, 0, tzinfo=main.IST)]
     market = main.Market(lambda: clock[0])
     market.instruments([{"exchange": "NSE", "tradingsymbol": "NIFTY 50", "instrument_token": 1}])
     market.state = "connected"
-    market.set_history("NIFTY", [{"date": clock[0] - timedelta(days=1), "high": 105, "low": 90, "close": 98}])
+    market.set_history("NIFTY", [{"date": clock[0] - timedelta(days=1), "high": 108, "low": 95, "close": 98}])
     for minute in range(8):
         clock[0] = clock[0].replace(minute=minute)
         market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 100 + minute}])
-    assert market.review_evidence("NIFTY") is None
-    clock[0] = clock[0].replace(minute=8)
-    evidence = market.review_evidence("NIFTY")
-    assert evidence["direction"] == "BUY_CE"
-    assert evidence["previous_session"]["high"] == 105
-    with market.lock:
-        prior = market.previous_sessions["NIFTY"]
-        market.previous_sessions["NIFTY"] = {**prior, "day": "2026-11-01"}
-    assert market.review_evidence("NIFTY") is None
-    with market.lock:
-        market.previous_sessions["NIFTY"] = {**prior, "close": 110}
-    assert market.review_evidence("NIFTY") is None
-    with market.lock:
-        market.previous_sessions["NIFTY"] = prior
-        market.preopen["NIFTY"] = market.preopen["NIFTY"][:2] + market.preopen["NIFTY"][-2:]
-    assert market.review_evidence("NIFTY") is None
     clock[0] = clock[0].replace(minute=15)
-    assert market.review_evidence("NIFTY") is None
+    market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 108,
+                      "ohlc": {"close": 98}}])
+    evidence = market.setup_evidence("NIFTY")
+    assert evidence["setup"] == "PREOPEN_RANGE_BREAKOUT"
+    assert evidence["direction"] == "BUY_CE"
+    assert evidence["preopen_high"] == 107
+    assert evidence["live_price"] == 108
+
+    market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 106,
+                      "ohlc": {"close": 98}}])
+    assert market.setup_evidence("NIFTY") is None
+
+
+def test_setup_review_rejects_stale_or_disconnected_live_quotes():
+    clock = [datetime(2026, 11, 20, 9, 0, tzinfo=main.IST)]
+    market = main.Market(lambda: clock[0])
+    market.instruments([{"exchange": "NSE", "tradingsymbol": "NIFTY 50", "instrument_token": 1}])
+    market.state = "connected"
+    market.set_history("NIFTY", [{"date": clock[0] - timedelta(days=1), "high": 108, "low": 95, "close": 98}])
+    for minute in range(8):
+        clock[0] = clock[0].replace(minute=minute)
+        market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 100 + minute}])
+    clock[0] = clock[0].replace(minute=15)
+    market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 108,
+                      "ohlc": {"close": 98}}])
+    clock[0] += timedelta(seconds=11)
+    assert market.setup_evidence("NIFTY") is None
+    clock[0] = clock[0].replace(second=0)
+    market.state = "disconnected"
+    assert market.setup_evidence("NIFTY") is None
+
+
+def test_setup_review_supports_aligned_downside_breakout():
+    clock = [datetime(2026, 11, 20, 9, 0, tzinfo=main.IST)]
+    market = main.Market(lambda: clock[0])
+    market.instruments([{"exchange": "NSE", "tradingsymbol": "NIFTY 50", "instrument_token": 1}])
+    market.state = "connected"
+    market.set_history("NIFTY", [{"date": clock[0] - timedelta(days=1), "high": 112, "low": 99, "close": 110}])
+    for minute in range(8):
+        clock[0] = clock[0].replace(minute=minute)
+        market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 107 - minute}])
+    clock[0] = clock[0].replace(minute=15)
+    market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 99,
+                      "ohlc": {"close": 110}}])
+    assert market.setup_evidence("NIFTY")["direction"] == "BUY_PE"
 
 
 def test_daily_review_reservations_survive_restart_and_failed_attempt(tmp_path):
@@ -115,7 +143,8 @@ def test_daily_review_reservations_survive_restart_and_failed_attempt(tmp_path):
 
 def test_haiku_uses_only_fake_key_and_rejects_mismatched_response():
     config = {"key": "test-key", "model": "claude-haiku-5-5", "tokens": 256, "timeout": 12}
-    evidence = {"index": "NIFTY", "direction": "BUY_CE", "preopen_first": 100, "preopen_last": 105}
+    evidence = {"index": "NIFTY", "setup": "PREOPEN_RANGE_BREAKOUT",
+                "direction": "BUY_CE", "preopen_first": 100, "preopen_last": 105}
     body = {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps({
         "action": "BUY_PE", "confidence": 80, "reason": "Opposite direction",
     })}]}
@@ -124,12 +153,13 @@ def test_haiku_uses_only_fake_key_and_rejects_mismatched_response():
     assert result["state"] == "UNAVAILABLE"
     sent = json.loads(mocked.call_args.args[0].data)
     assert sent["model"] == "claude-haiku-5-5"
+    assert "advisory" in sent["system"]
     assert "test-key" not in json.dumps(sent)
 
 
 def test_haiku_accepts_valid_review_and_surfaces_transport_failure():
     config = {"key": "test-key", "model": "claude-haiku-5-5", "tokens": 256, "timeout": 12}
-    evidence = {"index": "NIFTY", "direction": "BUY_CE"}
+    evidence = {"index": "NIFTY", "setup": "PREOPEN_RANGE_BREAKOUT", "direction": "BUY_CE"}
     body = {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps({
         "action": "BUY_CE", "confidence": 80, "reason": "Directional agreement",
     })}]}
@@ -153,10 +183,12 @@ def test_haiku_config_uses_existing_env_names_without_exposing_key(tmp_path, mon
     assert config is None and "disabled" in error
 
 
-def test_review_worker_rechecks_cutoff_after_slow_call(tmp_path, monkeypatch):
-    clock = [datetime(2026, 11, 20, 9, 14, 59, tzinfo=main.IST)]
+def test_review_worker_rechecks_market_close_after_slow_call(tmp_path, monkeypatch):
+    clock = [datetime(2026, 11, 20, 15, 29, 59, tzinfo=main.IST)]
     market = main.Market(lambda: clock[0])
-    monkeypatch.setattr(market, "review_evidence", lambda symbol: {"index": symbol, "direction": "BUY_CE"})
+    monkeypatch.setattr(market, "setup_evidence", lambda symbol: (
+        {"index": symbol, "setup": "PREOPEN_RANGE_BREAKOUT", "direction": "BUY_CE"}
+        if clock[0].time() < main.time(15, 30) else None))
     store = main.Store(tmp_path / "reviews.sqlite3")
     store.initialize()
     class OneIteration:
@@ -172,7 +204,7 @@ def test_review_worker_rechecks_cutoff_after_slow_call(tmp_path, monkeypatch):
     calls = []
     def fake_review(config, evidence):
         calls.append(evidence["index"])
-        clock[0] = clock[0].replace(minute=15, second=0)
+        clock[0] = clock[0].replace(minute=30, second=0)
         return {"state": "APPROVED", "action": "BUY_CE", "confidence": 80, "reason": "Test"}
     monkeypatch.setattr(main, "review", fake_review)
     main.run_reviews()
@@ -180,17 +212,18 @@ def test_review_worker_rechecks_cutoff_after_slow_call(tmp_path, monkeypatch):
     assert list(store.reviews("2026-11-20")) == ["NIFTY"]
 
 
-def test_review_worker_rechecks_cutoff_after_claim(tmp_path, monkeypatch):
-    clock = [datetime(2026, 11, 20, 9, 14, 59, tzinfo=main.IST)]
+def test_review_worker_rechecks_setup_after_claim(tmp_path, monkeypatch):
+    clock = [datetime(2026, 11, 20, 15, 29, 59, tzinfo=main.IST)]
     market = main.Market(lambda: clock[0])
-    monkeypatch.setattr(market, "review_evidence", lambda symbol: (
-        {"index": symbol, "direction": "BUY_CE"} if clock[0].time() < main.time(9, 15) else None))
+    monkeypatch.setattr(market, "setup_evidence", lambda symbol: (
+        {"index": symbol, "setup": "PREOPEN_RANGE_BREAKOUT", "direction": "BUY_CE"}
+        if clock[0].time() < main.time(15, 30) else None))
     store = main.Store(tmp_path / "reviews.sqlite3")
     store.initialize()
     claim = store.claim_review
     def delayed_claim(day, symbol):
         result = claim(day, symbol)
-        clock[0] = clock[0].replace(minute=15, second=0)
+        clock[0] = clock[0].replace(minute=30, second=0)
         return result
     monkeypatch.setattr(store, "claim_review", delayed_claim)
     class OneIteration:
@@ -207,3 +240,4 @@ def test_review_worker_rechecks_cutoff_after_claim(tmp_path, monkeypatch):
         main.run_reviews()
     mocked.assert_not_called()
     assert store.reviews("2026-11-20")["NIFTY"]["state"] == "UNAVAILABLE"
+    assert "Breakout" in store.reviews("2026-11-20")["NIFTY"]["reason"]

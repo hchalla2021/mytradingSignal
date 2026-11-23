@@ -49,6 +49,10 @@ value gap detected in the lookback. Missing or stale context is not treated
 as confirmation. These observations are not a separate entry gate and do
 not override risk controls. `AI_UNAVAILABLE` means no usable Claude decision
 was received; it does not approve an entry.
+The experimental `quantumedge_shadow_fvg` helper is research-only and is not
+connected to live signals, orders, or shadow logging. Its results are not a
+complete SMC entry filter; `history_ready=false` means the latest contiguous
+candle history is insufficient to evaluate it.
 The separate price-action stop is opt-in with
 `QUANTUMEDGE_PRICE_ACTION_STOP=true`; unset or false preserves the existing
 execution behavior. When enabled, new entries require 16 contiguous completed

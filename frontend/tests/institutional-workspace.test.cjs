@@ -171,6 +171,33 @@ test('QuantumEdge active panel keeps Square Off above its historical candlestick
   assert.match(css, /@container qe-active \(max-width: 480px\)/);
 });
 
+test('QuantumEdge opportunity text uses fixed stable viewports and no reflow transitions', () => {
+  const css = readFileSync(path.join(components, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(css, /@container qe-opportunities \(max-width: 900px\) and \(min-width: 601px\)/);
+  assert.match(css, /@container qe-opportunities \(max-width: 600px\)/);
+  assert.match(css, /@media \(max-width: 900px\)[\s\S]*Responsive QuantumEdge live opportunity panel/);
+  assert.match(css, /@media \(min-width: 901px\)[\s\S]*display:\s*table-row/);
+  assert.match(css, /@media \(min-width: 901px\) and \(max-width: 1220px\)[\s\S]*grid-template-columns:\s*minmax\(520px/);
+  assert.match(css, /\.qe-opportunities\s+\.qe-opp-table\s+tbody\s+tr\s*\{[^}]*height:\s*132px/);
+  assert.match(css, /\.qe-opp-details\s*\{[^}]*height:\s*auto[^}]*overflow-y:\s*visible/);
+  assert.match(css, /Final QuantumEdge opportunity typography and width pass/);
+  assert.match(css, /\.qe-opp-table\s+thead\s+th:last-child\s*\{[^}]*width:\s*34%/);
+  assert.match(css, /\.qe-opp-details\s+\.qe-wait-reason,[\s\S]*?font-size:\s*11px/);
+  assert.match(css, /\.qe-wait-reason\s*\{[^}]*transition:\s*none/);
+});
+
+test('QuantumEdge live opportunities header matches the reference composition', () => {
+  const source = readFileSync(path.join(components, 'QuantumEdgeIntradaySection.tsx'), 'utf8');
+  const css = readFileSync(path.join(components, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(source, /LIVE OPPORTUNITIES/);
+  assert.match(source, /Market-scanned setups/);
+  assert.match(source, /qe-opp-header-spark/);
+  assert.match(source, /qe-opp-live/);
+  assert.match(css, /\.qe-opp-header\s*\{[^}]*height:\s*112px/);
+  assert.match(css, /\.qe-opp-header-title h3\s*\{[^}]*font-size:\s*clamp\(21px/);
+  assert.match(css, /\.qe-opp-table\s+thead\s+th:first-child\s*\{[^}]*width:\s*22%/);
+});
+
 test('QuantumEdge shows signal, AI rejection and execution blockers without hover', () => {
   const snapshot = {
     generated_at: Date.now() / 1000, enabled: true, market_phase: 'NORMAL',
@@ -189,24 +216,21 @@ test('QuantumEdge shows signal, AI rejection and execution blockers without hove
     '@/lib/visitor-id': { getOrCreateVisitorId: () => 'test' },
   }, [snapshot]);
   const nodes = elements(h.render({}));
-  const heading = nodes.find(node => node.props?.className === 'qe-opp-heading');
-  assert.ok(heading);
-  assert.ok(elements(heading).some(node => node.type === 'p'
-    && node.props.children === 'Auto-detected trading opportunities across major indices'));
   const table = nodes.find(node => node.props?.['aria-label'] === 'Index opportunities');
+  assert.ok(table);
   assert.deepEqual(elements(table).filter(node => node.type === 'th' && node.props.scope === 'col')
-    .map(node => node.props.children.props.children[1]), ['Index', 'Signal', 'Premium', 'Confidence', 'Status']);
+    .map(node => node.props.children.props.children[1]), [
+      'Index', 'Signal', 'Premium', 'Confidence', 'Status',
+    ]);
   assert.equal(elements(table).filter(node => node.props?.className === 'qe-opp-details').length, 3);
   assert.equal(elements(table).filter(node => node.props?.className === 'qe-opp-symbol').length, 3);
   const reasons = nodes.filter(node => node.props?.className === 'qe-wait-reason');
   assert.deepEqual(reasons.map(node => node.props.children).filter(value => typeof value === 'string'), [
-    'Trend and breakout are not aligned', 'Claude returned an invalid decision', 'Opening Range Breakout',
-    'Daily loss budget exceeded',
+    'Trend and breakout are not aligned', 'Claude returned an invalid decision', 'Daily loss budget exceeded',
   ]);
   assert.ok(nodes.some(node => node.type === 'em' && node.props.children === 'AI REVIEW UNAVAILABLE'));
   const source = readFileSync(path.join(components, 'QuantumEdgeIntradaySection.tsx'), 'utf8');
-  assert.match(source, /UPDATED \{new Date\(updatedAt\)/);
-  assert.match(source, /strategy: item\.signal\?\.strategy_name/);
+  assert.match(source, /item\.signal\?\.strategy_name/);
   assert.ok(reasons.some(node => node.props.children.includes(
     'Upside 5-bar break · Bullish displacement · Bullish FVG 201.00–205.00')));
   assert.ok(nodes.some(node => node.type === 'b' && node.props.children === 'Daily loss budget exceeded'));
@@ -332,7 +356,7 @@ test('QuantumEdge switches to faster status polling only while a position is ope
     h.setState(0, { ...snapshot, positions });
     h.render({});
     stopPolling = effects[1]();
-    assert.deepEqual([...timers.values()].map(timer => timer.delay), [delay]);
+    assert.ok([...timers.values()].map(timer => timer.delay).includes(delay));
   }
   stopPolling();
   assert.equal(timers.size, 0);

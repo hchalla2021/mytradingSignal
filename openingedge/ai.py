@@ -47,16 +47,19 @@ def load_config(path):
 
 def review(config, evidence):
     expected = evidence["direction"]
+    system = (
+        "Assess only the supplied live pre-open-range breakout evidence. The deterministic "
+        "setup has already required complete pre-open coverage, recent previous-session data, "
+        "directional agreement, and a fresh live break of the range. This is advisory, not an "
+        "order or a calibrated probability. Approve only the supplied direction or reject it. "
+        "Do not invent missing data. Return only JSON with exactly action, confidence, reason. "
+        "action must be BUY_CE, BUY_PE, or REJECT; confidence is a number from 0 to 100; "
+        "reason is a short explanation."
+    )
     body = {
         "model": config["model"],
         "max_tokens": config["tokens"],
-        "system": (
-            "Assess the supplied pre-open index evidence only. This is not an order and no post-open "
-            "breakout has been confirmed. Approve only the supplied direction or reject it. "
-            "Do not invent missing data. Return only JSON with exactly action, confidence, reason. "
-            "action must be BUY_CE, BUY_PE, or REJECT; confidence is a number from 0 to 100; "
-            "reason is a short explanation."
-        ),
+        "system": system,
         "messages": [{"role": "user", "content": json.dumps(evidence, separators=(",", ":"), allow_nan=False)}],
     }
     if config["model"] == "claude-haiku-5-5":

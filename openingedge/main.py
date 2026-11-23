@@ -297,29 +297,44 @@ class Market:
                 if not old or stamp >= old["timestamp"]:
                     self.last_quotes[symbol] = {"price": price, "previous_close": previous, "timestamp": stamp}
 
-    def review_evidence(self, symbol):
+    def setup_evidence(self, symbol):
         now = self.clock()
-        if now.weekday() >= 5 or not time(9, 8) <= now.time() < time(9, 15):
+        if now.weekday() >= 5 or not time(9, 15) <= now.time() < time(15, 30):
             return None
         with self.lock:
             samples = sorted(self.preopen[symbol]) if self.day == now.date() else []
             prior = self.previous_sessions.get(symbol)
-            if not self.feed_enabled or self.state != "connected" or not complete_preopen(samples, now) or not prior:
+            quote = self.quotes.get(symbol) if self.day == now.date() else None
+            if (not self.feed_enabled or self.state != "connected"
+                    or not complete_preopen(samples, now) or not prior or not quote):
                 return None
             prior_date = datetime.fromisoformat(prior["day"]).date()
             if not now.date() - timedelta(days=5) <= prior_date < now.date():
+                return None
+            age = (now - quote["timestamp"]).total_seconds()
+            previous_close = quote["previous_close"]
+            if (not -3 <= age <= FRESH_SECONDS or previous_close is None
+                    or not math.isfinite(previous_close) or previous_close <= 0):
                 return None
             first, last = samples[0][1], samples[-1][1]
             close = prior["close"]
             direction = "BUY_CE" if last > first and last > close else (
                 "BUY_PE" if last < first and last < close else None)
-            if direction is None:
+            preopen_high = max(price for _, price in samples)
+            preopen_low = min(price for _, price in samples)
+            breakout = (
+                direction == "BUY_CE" and quote["price"] > preopen_high and quote["price"] > previous_close
+            ) or (
+                direction == "BUY_PE" and quote["price"] < preopen_low and quote["price"] < previous_close
+            )
+            if not breakout:
                 return None
             return {
-                "index": symbol, "direction": direction,
+                "index": symbol, "setup": "PREOPEN_RANGE_BREAKOUT", "direction": direction,
+                "live_price": quote["price"], "live_timestamp": quote["timestamp"].isoformat(),
+                "live_previous_close": previous_close,
                 "preopen_first": first, "preopen_last": last,
-                "preopen_high": max(price for _, price in samples),
-                "preopen_low": min(price for _, price in samples),
+                "preopen_high": preopen_high, "preopen_low": preopen_low,
                 "sample_count": len(samples), "previous_session": dict(prior),
             }
 
@@ -493,26 +508,26 @@ def run_external():
 def run_reviews():
     while not shutdown.is_set():
         now = market.clock()
-        if now.weekday() < 5 and time(9, 8) <= now.time() < time(9, 15):
+        if now.weekday() < 5 and time(9, 15) <= now.time() < time(15, 30):
             try:
                 config, _ = load_config(ENV_FILE)
                 if config:
                     for symbol in INDICES:
                         now = market.clock()
-                        if now.weekday() >= 5 or not time(9, 8) <= now.time() < time(9, 15):
+                        if now.weekday() >= 5 or not time(9, 15) <= now.time() < time(15, 30):
                             break
-                        evidence = market.review_evidence(symbol)
+                        evidence = market.setup_evidence(symbol)
                         if evidence is None:
                             continue
                         day = now.date().isoformat()
                         if not store.claim_review(day, symbol):
                             continue
                         now = market.clock()
-                        evidence = market.review_evidence(symbol) if now.date().isoformat() == day else None
+                        evidence = market.setup_evidence(symbol) if now.date().isoformat() == day else None
                         if evidence is None:
                             store.finish_review(day, symbol, {
                                 "state": "UNAVAILABLE", "action": None, "confidence": None,
-                                "reason": "Review window or required market data expired before request.",
+                                "reason": "Breakout or required live market data expired before review.",
                             })
                             continue
                         result = review(config, evidence)

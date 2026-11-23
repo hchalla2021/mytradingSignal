@@ -223,6 +223,10 @@ class QuantumEdgeAIReviewTests(unittest.TestCase):
         result = service.evaluate(market, "NIFTY", now, 1, 500, set(), lambda price, qty: 1)
         self.assertEqual(result["decision"], "WAIT")
         self.assertIn("16 consecutive completed", result["reason"])
+        self.assertEqual(result["readiness"]["completed_minutes_required"], 16)
+        self.assertEqual(result["readiness"]["opening_minutes_required"], 15)
+        self.assertIn(result["readiness"]["completed_minutes"], (0, 30))
+        self.assertIn(result["decision"], ("WAIT",))
 
     def test_risk_rejection_reports_estimate_and_cap_per_lot(self):
         service = QuantumEdgeIntradayService()

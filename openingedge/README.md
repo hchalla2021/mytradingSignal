@@ -29,20 +29,24 @@ partial fills, manual intervention, broker order identity, disconnected feeds,
 and uncertain stop modifications. Do not remove the execution lock or deploy
 this as live order management until these paths have been addressed and tested.
 
-The independent pre-open Haiku review uses `QUANTUMEDGE_AI_ANTHROPIC_API_KEY`,
+The independent Haiku setup review uses `QUANTUMEDGE_AI_ANTHROPIC_API_KEY`,
 falling back to `AUTONOMIQ_PRO_ANTHROPIC_API_KEY`, and respects
 `QUANTUMEDGE_AI_ENABLED`, `QUANTUMEDGE_AI_MODEL`,
 `QUANTUMEDGE_AI_MAX_OUTPUT_TOKENS`, and `QUANTUMEDGE_AI_TIMEOUT_SECONDS`.
 It does not share QuantumEdge's AI budget counters. A durable reservation limits
 this service to one attempted call per index per day, at most three total,
 including failed or interrupted attempts, provided all instances use the same
-persistent SQLite database. It calls Haiku only during 09:08–09:15 IST after
-at least five pre-open samples from no later than 09:01 to at least 09:07 with
-no gap over 90 seconds, a recent previous-session OHLC and
-agreement between the pre-open movement and previous close. Missing or
-conflicting inputs result in no call. A review assesses pre-open direction only;
-it is not a confirmed post-open breakout, calibrated probability or order.
-The model's reported confidence is labeled as AI confidence.
+persistent SQLite database. Haiku is called only after 09:15 and before 15:30
+IST when a fresh connected live quote breaks the complete pre-open range in
+the direction already confirmed by pre-open movement and the recent previous
+session close. Complete coverage requires at least five samples from no later
+than 09:01 to at least 09:07 with no gap over 90 seconds. Missing, stale or
+conflicting inputs result in no call. The quote, pre-open range, prior-session
+OHLC and all these qualifying checks are supplied to Haiku. Optional global,
+news, PCR and IV dashboard cues remain display-only and are not algo inputs.
+The review is advisory only; it does not place or authorize an order, and its
+reported confidence is not a calibrated probability. The service must be
+running before the pre-open sampling window to qualify that day's setup.
 Provider connectivity and configured model access must be verified separately;
 configuration alone does not establish that either is available.
 
