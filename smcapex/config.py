@@ -29,7 +29,7 @@ class IndexRisk(BaseModel):
     daily_loss: float = Field(gt=0, le=1_000_000)
     stop_percent: float = Field(ge=5, le=40)
     max_spread_percent: float = Field(gt=0, le=2)
-    entry_start: str = "09:25"
+    entry_start: str = "09:15"
     entry_end: str = "14:45"
 
     @model_validator(mode="after")

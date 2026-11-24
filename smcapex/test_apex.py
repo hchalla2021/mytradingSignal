@@ -171,6 +171,34 @@ class StructureTests(unittest.TestCase):
         self.assertEqual(result["decision"], "WAIT")
         self.assertIsNone(result["setup"])
 
+    def test_preopen_uses_completed_historical_context_without_a_trade_setup(self):
+        start = NOW.replace(day=23, hour=9, minute=15)
+        bars = [Candle(row.at - timedelta(days=1), row.open, row.high, row.low, row.close)
+                for row in gap_rows()]
+        bars += [Candle(start + timedelta(minutes=i * 5), 104, 105, 102.5, 104)
+                 for i in range(23, 30)]
+        candles = [candle for row in bars for candle in
+                   [Candle(row.at, row.open, row.high, row.low, row.close)] +
+                   [Candle(row.at + timedelta(minutes=i), row.close, row.close, row.close, row.close)
+                    for i in range(1, 5)]]
+        daily = [Candle(start, 100, 110, 90, 105),
+                 Candle(NOW.replace(hour=0, minute=0), 200, 210, 190, 205)]
+        for at in (NOW.replace(hour=9, minute=0), NOW.replace(hour=9, minute=14, second=59)):
+            result = evaluate(candles, daily, at)
+            self.assertEqual(result["decision"], "WAIT")
+            self.assertIsNone(result["setup"])
+            self.assertIn("Pre-open analysis", result["reason"])
+            self.assertEqual(result["daily"]["previous_close"], 105)
+            self.assertEqual(result["timeframes"]["5"]["candles"], 30)
+            self.assertTrue(result["timeframes"]["5"]["last_at"].startswith("2026-11-23"))
+            self.assertEqual((result["fvgs"][0]["lower"], result["fvgs"][0]["upper"]), (101, 102))
+            self.assertEqual(result["historical_structures"][0]["fvg"]["id"], result["fvgs"][0]["id"])
+            self.assertTrue(result["historical_structures"][0]["sweep"]["at"].startswith("2026-11-23"))
+        self.assertIn("Outside", evaluate(candles, daily, NOW.replace(hour=8, minute=59))["reason"])
+        self.assertIn("Outside", evaluate(candles, daily, NOW.replace(day=22, hour=9, minute=0))["reason"])
+        self.assertIn("insufficient", evaluate([], [], NOW.replace(hour=9, minute=0))["reason"])
+        self.assertIn("Missing, stale", evaluate(candles, daily, NOW.replace(hour=9, minute=15))["reason"])
+
     def test_all_qualified_frame_evidence_produces_buy_and_invalidated_gap_does_not(self):
         five = gap_rows()
         sweep = five[19]
@@ -240,6 +268,20 @@ class ExecutionTests(unittest.TestCase):
             self.enter()
         self.assertEqual(self.broker.submissions, [])
         self.assertEqual(self.store.trades(), [])
+
+    def test_entry_starts_at_0915_not_during_preopen(self):
+        self.executor.enabled = True
+        cfg = RISK.model_copy(update={"entry_start": "09:15"})
+        before = NOW.replace(hour=9, minute=14, second=59)
+        with self.assertRaisesRegex(Blocked, "Outside regular entry session"):
+            self.executor.enter("NIFTY", SETUP, CONTRACT, {**PRICES, "timestamp": before.isoformat()},
+                                cfg, 25000, before)
+        self.assertEqual(self.broker.submissions, [])
+        opening = NOW.replace(hour=9, minute=15, second=0)
+        self.executor.clock = lambda: opening
+        self.executor.enter("NIFTY", SETUP, CONTRACT, {**PRICES, "timestamp": opening.isoformat()},
+                            cfg, 25000, opening)
+        self.assertEqual([order["transaction_type"] for order in self.broker.submissions], ["BUY"])
 
     def test_turning_off_during_preflight_prevents_broker_submission(self):
         self.executor.enabled = True
@@ -749,6 +791,107 @@ class RuntimeIntegrationTests(unittest.TestCase):
         self.assertTrue(self.runtime.signals["NIFTY"]["ai"]["approved"])
         self.assertEqual(self.runtime.signals["NIFTY"]["execution"], "SIGNAL_ONLY")
         self.assertEqual(self.broker.submissions, [])
+
+    def test_preopen_never_calls_live_approval_or_submits_orders_even_when_enabled(self):
+        start = NOW.replace(day=23, hour=9, minute=15)
+        candles = [Candle(start + timedelta(minutes=i), 100, 101, 99, 100) for i in range(150)]
+        self.runtime.store.candles("NIFTY", "1", candles)
+        self.runtime.store.candles("NIFTY", "D", [Candle(start, 100, 110, 90, 105)])
+        self.runtime.executor.enabled = True
+        with patch.object(self.runtime, "ai") as ai:
+            self.runtime.analyse(NOW.replace(hour=9, minute=10), self.cfg)
+        ai.assert_not_called()
+        self.assertEqual(self.broker.submissions, [])
+        self.assertIn("Pre-open analysis", self.runtime.signals["NIFTY"]["reason"])
+
+    def test_preopen_ai_is_journaled_once_per_index_and_shared_cooldown_is_respected(self):
+        start = NOW.replace(day=23, hour=9, minute=15)
+        candles = [Candle(start + timedelta(minutes=i), 100, 101, 99, 100) for i in range(150)]
+        for symbol in ("NIFTY", "BANKNIFTY", "SENSEX"):
+            self.runtime.store.candles(symbol, "1", candles)
+            self.runtime.store.candles(symbol, "D", [Candle(start, 100, 110, 90, 105)])
+        self.runtime.executor.enabled = True
+        cfg = {"SMCAPEX_ANTHROPIC_API_KEY": "mock", "SMCAPEX_AI_MODEL": "mock"}
+        requests = []
+        def respond(request):
+            payload = json.loads(json.loads(request.content)["messages"][0]["content"])
+            requests.append(payload)
+            return httpx.Response(200, json={"stop_reason": "end_turn", "content": [{"type": "text",
+                "text": json.dumps({"bias": "NEUTRAL", "summary": "Historical context only",
+                                    "risk_flags": ["Await the open"]})}]})
+        original = httpx.Client
+        with patch("smcapex.runtime.httpx.Client", side_effect=lambda **kwargs: original(
+                **kwargs, transport=httpx.MockTransport(respond))):
+            for minute in (0, 4, 5, 10, 14):
+                self.runtime.analyse(NOW.replace(hour=9, minute=minute), cfg)
+            self.runtime.analyse(NOW.replace(hour=9, minute=14, second=30), cfg)
+        self.assertEqual([item["index"] for item in requests], ["NIFTY", "BANKNIFTY", "SENSEX"])
+        self.assertTrue(all(item["daily"]["previous_close"] == 105 for item in requests))
+        self.assertEqual(self.runtime.store.ai_calls(NOW.date().isoformat()), 3)
+        self.assertEqual(self.runtime.store.approval("preopen:2026-11-24:NIFTY")["evidence"]["index"], "NIFTY")
+        self.assertEqual(self.runtime.signals["SENSEX"]["preopen_ai"]["status"], "COMPLETE")
+        self.assertNotIn("evidence", self.runtime.signals["SENSEX"]["preopen_ai"])
+        self.assertEqual(self.broker.submissions, [])
+
+    def test_preopen_failed_or_interrupted_attempt_is_not_retried_and_live_checks_continue(self):
+        start = NOW.replace(day=23, hour=9, minute=15)
+        candles = [Candle(start + timedelta(minutes=i), 100, 101, 99, 100) for i in range(150)]
+        self.runtime.store.candles("NIFTY", "1", candles)
+        self.runtime.store.candles("NIFTY", "D", [Candle(start, 100, 110, 90, 105)])
+        cfg = {"SMCAPEX_ANTHROPIC_API_KEY": "mock", "SMCAPEX_AI_MODEL": "mock"}
+        requests = []
+        def respond(request):
+            requests.append(request)
+            return httpx.Response(503)
+        original = httpx.Client
+        with patch("smcapex.runtime.httpx.Client", side_effect=lambda **kwargs: original(
+                **kwargs, transport=httpx.MockTransport(respond))):
+            at = NOW.replace(hour=9, minute=0)
+            self.runtime.analyse(at, cfg)
+            self.runtime.analyse(at + timedelta(minutes=6), cfg)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(self.runtime.store.approval("preopen:2026-11-24:NIFTY")["status"], "FAILED")
+        self.run_analysis(True)
+        self.assertEqual(self.runtime.signals["NIFTY"]["preopen_ai"]["status"], "FAILED")
+        self.assertEqual([order["transaction_type"] for order in self.broker.submissions], ["BUY", "SELL"])
+
+    def test_interrupted_preopen_attempt_is_not_retried(self):
+        start = NOW.replace(day=23, hour=9, minute=15)
+        candles = [Candle(start + timedelta(minutes=i), 100, 101, 99, 100) for i in range(150)]
+        self.runtime.store.candles("NIFTY", "1", candles)
+        self.runtime.store.candles("NIFTY", "D", [Candle(start, 100, 110, 90, 105)])
+        self.runtime.store.approve("preopen:2026-11-24:NIFTY", "2026-11-24", {
+            "status": "PENDING", "at": NOW.replace(hour=9, minute=0).isoformat(),
+            "session_date": "2026-11-24", "reason": "Pre-open AI request pending or interrupted."})
+        with patch("smcapex.runtime.httpx.Client") as client:
+            self.runtime.analyse(NOW.replace(hour=9, minute=10), {
+                "SMCAPEX_ANTHROPIC_API_KEY": "mock", "SMCAPEX_AI_MODEL": "mock"})
+        client.assert_not_called()
+        self.assertEqual(self.runtime.signals["NIFTY"]["preopen_ai"]["status"], "PENDING")
+
+    def test_live_ai_receives_only_same_day_completed_preopen_context(self):
+        cfg = {"SMCAPEX_ANTHROPIC_API_KEY": "mock", "SMCAPEX_AI_MODEL": "mock"}
+        self.runtime.store.approve("preopen:2026-11-24:NIFTY", NOW.date().isoformat(), {
+            "status": "COMPLETE", "session_date": NOW.date().isoformat(), "at": NOW.replace(hour=9, minute=0).isoformat(),
+            "bias": "NEUTRAL", "summary": "Historical context", "risk_flags": ["Await fresh candles"],
+            "evidence": {"not_for_live_prompt": True}})
+        signal = {**self.signal, "contract": {"symbol": "TEST26CE"},
+                  "preopen_ai": self.runtime.store.approval("preopen:2026-11-24:NIFTY")}
+        requests = []
+        def respond(request):
+            requests.append(json.loads(json.loads(request.content)["messages"][0]["content"]))
+            return httpx.Response(200, json={"stop_reason": "end_turn", "content": [{"type": "text",
+                "text": json.dumps({"approved": True, "setup_id": SETUP["id"], "side": "CE",
+                                    "contract": "TEST26CE", "reason": "Live evidence confirmed"})}]})
+        original = httpx.Client
+        with patch("smcapex.runtime.httpx.Client", side_effect=lambda **kwargs: original(
+                **kwargs, transport=httpx.MockTransport(respond))):
+            self.assertTrue(self.runtime.ai("NIFTY", signal, {}, cfg, NOW)["approved"])
+            signal["setup"] = {**signal["setup"], "id": "next-day-fixture"}
+            self.runtime.ai("NIFTY", signal, {}, cfg, NOW + timedelta(days=1))
+        self.assertEqual(requests[0]["preopen_context"]["summary"], "Historical context")
+        self.assertNotIn("evidence", requests[0]["preopen_context"])
+        self.assertNotIn("preopen_context", requests[1])
 
     def test_receipt_only_spot_cannot_enter_without_fresh_exchange_timed_futures(self):
         self.runtime.ticks[("NIFTY", "spot")]["timestamp_source"] = "RECEIPT"

@@ -14,7 +14,7 @@ from typing import Literal
 
 import httpx
 from kiteconnect import KiteConnect, KiteTicker
-from pydantic import BaseModel, ConfigDict, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout as RequestsTimeout
 
 from .config import IndexRisk, credentials
@@ -34,6 +34,13 @@ class Verdict(BaseModel):
     side: Literal["CE", "PE"]
     contract: str
     reason: str
+
+
+class PreopenAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    bias: Literal["CE", "PE", "NEUTRAL"]
+    summary: str = Field(min_length=1, max_length=600)
+    risk_flags: list[str] = Field(max_length=5)
 
 
 class Runtime:
@@ -320,34 +327,108 @@ class Runtime:
         expiry = min(r["expiry"] for r in rows)
         return min((r for r in rows if r["expiry"] == expiry), key=lambda r: abs(float(r["strike"]) - spot))
 
-    def ai(self, symbol: str, signal: dict, depth: dict, cfg: dict, now: datetime) -> dict:
-        setup = signal["setup"]
-        identity = f"{symbol}:{setup['id']}"
+    def reserve_ai(self, identity: str, cfg: dict, now: datetime, pending: dict) -> tuple[dict | None, str | None, str | None]:
         with self.lock:
             cached = self.store.approval(identity)
             if cached:
-                if cached.get("approved") and cached.get("contract") != signal["contract"]["symbol"]:
-                    raise Blocked("AI approval belongs to a different option contract")
-                return cached
-            maximum = int(cfg.get("SMCAPEX_AI_MAX_CALLS_PER_DAY") or "12")
+                return cached, None, None
+            try:
+                maximum = int(cfg.get("SMCAPEX_AI_MAX_CALLS_PER_DAY") or "12")
+            except ValueError as exc:
+                raise Blocked("Independent AI daily call cap invalid") from exc
             if not 1 <= maximum <= 100 or self.store.ai_calls(now.date().isoformat()) >= maximum:
                 raise Blocked("Independent AI daily call cap reached or invalid")
             last = self.store.get("last_ai", {}).get("at")
             if last and (now - datetime.fromisoformat(last)).total_seconds() < 300:
                 raise Blocked("AI cooldown: at most one Apex call per five minutes")
-        api_key = cfg.get("SMCAPEX_ANTHROPIC_API_KEY") or cfg.get("AUTONOMIQ_PRO_ANTHROPIC_API_KEY") or cfg.get("ANTHROPIC_API_KEY")
-        model = cfg.get("SMCAPEX_AI_MODEL")
-        if not api_key or not model:
-            raise Blocked("Anthropic key or SMCAPEX_AI_MODEL not configured")
-        pending = {"approved": False, "reason": "AI request pending or interrupted", "at": now.isoformat()}
-        with self.lock:
+            api_key = cfg.get("SMCAPEX_ANTHROPIC_API_KEY") or cfg.get("AUTONOMIQ_PRO_ANTHROPIC_API_KEY") or cfg.get("ANTHROPIC_API_KEY")
+            model = cfg.get("SMCAPEX_AI_MODEL")
+            if not api_key or not model:
+                raise Blocked("Anthropic key or SMCAPEX_AI_MODEL not configured")
             self.store.approve(identity, now.date().isoformat(), pending)
             self.store.save("last_ai", {"at": now.isoformat()})
+            return None, api_key, model
+
+    def preopen_ai(self, symbol: str, signal: dict, cfg: dict, now: datetime) -> dict:
+        day = now.date().isoformat()
+        identity = f"preopen:{day}:{symbol}"
+        if not signal.get("daily") or not signal["timeframes"]["5"]["last_at"]:
+            return {"status": "UNAVAILABLE", "at": now.isoformat(), "session_date": day,
+                    "reason": "Confirmed pre-open historical context unavailable."}
+        with self.lock:
+            evidence = {str(m): [r.json() for r in aggregate(self.store.history(symbol, "1"), m, now)[-10:]]
+                        for m in (1, 3, 5, 15, 30, 60)}
+        payload = {"index": symbol, "session_date": day, "daily": signal["daily"],
+                   "timeframes": signal["timeframes"], "candles": evidence,
+                   "historical_structures": signal["historical_structures"]}
+        pending = {"status": "PENDING", "at": now.isoformat(), "session_date": day,
+                   "reason": "Pre-open AI request pending or interrupted.", "evidence": payload}
+        try:
+            cached, api_key, model = self.reserve_ai(identity, cfg, now, pending)
+        except Blocked as exc:
+            return {"status": "WAITING", "at": now.isoformat(), "session_date": day, "reason": str(exc)}
+        if cached:
+            return cached
+        if not api_key or not model:
+            raise Blocked("Anthropic key or SMCAPEX_AI_MODEL not configured")
+        try:
+            with httpx.Client(timeout=10) as client:
+                response = client.post("https://api.anthropic.com/v1/messages", headers={
+                    "x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                    json={"model": model, "max_tokens": 600,
+                          "system": (
+                              "Assess only the supplied completed historical market data before the open. "
+                              "FVG, sweep, structure break and order-block fields are historical evidence, "
+                              "not a current setup or prediction. Identify missing or stale context. "
+                              "Never invent prices, candles, order flow, market status or trading approvals. "
+                              "Return ONLY JSON: bias (CE, PE or NEUTRAL), summary (short string), "
+                              "risk_flags (array of short strings)."),
+                          "messages": [{"role": "user", "content": json.dumps(payload)}]})
+            if response.status_code != 200:
+                raise Blocked(f"Pre-open AI unavailable (HTTP {response.status_code})")
+            data = response.json()
+            if not isinstance(data, dict) or not isinstance(data.get("content"), list):
+                raise Blocked("Invalid pre-open AI response")
+            if data.get("stop_reason") != "end_turn":
+                raise Blocked("Incomplete pre-open AI response")
+            if any(not isinstance(item, dict) or (item.get("type") == "text" and not isinstance(item.get("text"), str))
+                   for item in data["content"]):
+                raise Blocked("Invalid pre-open AI response")
+            text = "".join(r.get("text", "") for r in data.get("content", []) if r.get("type") == "text")
+            assessment = PreopenAssessment.model_validate_json(text)
+            if not assessment.summary.strip() or any(not item.strip() or len(item) > 160 for item in assessment.risk_flags):
+                raise Blocked("Invalid pre-open AI assessment")
+            result = {"status": "COMPLETE", "at": now.isoformat(), "session_date": day,
+                      **assessment.model_dump(), "usage": data.get("usage") or {}, "evidence": payload}
+        except (httpx.HTTPError, ValueError, Blocked) as exc:
+            result = {"status": "FAILED", "at": now.isoformat(), "session_date": day,
+                      "reason": str(exc) if isinstance(exc, Blocked) else f"Pre-open AI failed: {type(exc).__name__}",
+                      "evidence": payload}
+            logger.warning("SMC Apex: %s", result["reason"])
+        with self.lock:
+            self.store.approve(identity, day, result)
+        return result
+
+    def ai(self, symbol: str, signal: dict, depth: dict, cfg: dict, now: datetime) -> dict:
+        setup = signal["setup"]
+        identity = f"{symbol}:{setup['id']}"
+        pending = {"approved": False, "reason": "AI request pending or interrupted", "at": now.isoformat()}
+        cached, api_key, model = self.reserve_ai(identity, cfg, now, pending)
+        if cached:
+            if cached.get("approved") and cached.get("contract") != signal["contract"]["symbol"]:
+                raise Blocked("AI approval belongs to a different option contract")
+            return cached
+        if not api_key or not model:
+            raise Blocked("Anthropic key or SMCAPEX_AI_MODEL not configured")
+        with self.lock:
             evidence = {str(m): [r.json() for r in aggregate(self.store.history(symbol, "1"), m, now)[-10:]]
                         for m in (1, 3, 5, 15, 30, 60)}
         payload = {"index": symbol, "setup": setup, "checks": signal["checks"], "daily": signal["daily"],
                    "option": signal["contract"],
                    "timeframes": evidence, "confirmed_frame_context": signal.get("timeframes", {}), "depth": depth}
+        preopen = signal.get("preopen_ai")
+        if preopen and preopen.get("status") == "COMPLETE" and preopen.get("session_date") == now.date().isoformat():
+            payload["preopen_context"] = {key: preopen[key] for key in ("at", "bias", "summary", "risk_flags")}
         try:
             with httpx.Client(timeout=10) as client:
                 response = client.post("https://api.anthropic.com/v1/messages", headers={
@@ -357,7 +438,8 @@ class Runtime:
                               "You are a veto-only SMC evidence auditor, not an order executor. "
                               "Reject contradictory, incomplete, stale or look-ahead evidence. "
                               "FVG is a geometric condition, never a guarantee. Displayed depth is cancellable, "
-                              "not a real footprint. Do not invent prices, volume, aggressor flow or confidence. "
+                              "not a real footprint. Pre-open context is an older model opinion, not approval or "
+                              "live evidence. Do not invent prices, volume, aggressor flow or confidence. "
                               "Return ONLY JSON: approved (boolean), setup_id (copy setup.id), "
                               "side (copy setup.side), contract (copy option.symbol), reason (short string)."),
                           "messages": [{"role": "user", "content": json.dumps(payload)}]})
@@ -384,9 +466,17 @@ class Runtime:
         for symbol in SYMBOLS:
             with self.lock:
                 signal = evaluate(self.store.history(symbol, "1"), self.store.history(symbol, "D"), now)
+                preopen = self.store.approval(f"preopen:{now.date().isoformat()}:{symbol}")
+                if preopen:
+                    signal["preopen_ai"] = {k: v for k, v in preopen.items() if k not in {"evidence", "usage"}}
                 self.signals[symbol] = deepcopy(signal)
                 saved = self.store.get(symbol)
                 daily = self.store.get("daily")
+            if now.weekday() < 5 and time(9, 0) <= now.time() < time(9, 15):
+                preopen = self.preopen_ai(symbol, signal, cfg, now)
+                with self.lock:
+                    signal["preopen_ai"] = {k: v for k, v in preopen.items() if k not in {"evidence", "usage"}}
+                    self.signals[symbol] = deepcopy(signal)
             if not signal["setup"]:
                 continue
             try:

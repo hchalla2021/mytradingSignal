@@ -56,6 +56,26 @@ start at 09:15, 10:15, etc.; the final session bar is shortened. Nonstandard
 special sessions are not supported. Weekends are excluded; holiday trading
 cannot qualify without fresh actual exchange ticks.
 
+On weekdays from 09:00 to 09:15 IST, pre-open analysis shows confirmed
+historical timeframe/FVG context, observed historical sweep, structure-break
+and order-block evidence, and the latest available prior-session levels. It
+does not construct pre-open candles, generate entry setups, or place orders.
+Missing history is reported rather than invented.
+
+Claude may assess this historical context once per index per day, including
+while LIVE TRADE is OFF. These attempts share the existing five-minute Apex
+cooldown and daily cap, so three calls are spread across at least ten minutes.
+Attempts and evidence are persisted before the request; failed or interrupted
+attempts are not retried that day. A same-day completed assessment is included
+as historical context for the separate live setup audit; it is not an approval.
+If it is missing or fails, existing live checks continue without it. A late
+pre-open call can delay the live AI audit because the cooldown is shared.
+Holidays are not identified by an exchange calendar, so weekday pre-open
+analysis and AI calls can occur on holidays.
+
+From 09:15, the same-day confirmed FVG, retest, feed, independent live AI and
+risk gates still apply. The window opening does not guarantee a trade at 09:15.
+
 The service bootstraps 30 calendar days of exchange minute candles and one
 year of completed daily candles. It refreshes minute history independently.
 Kite REST timezone-less timestamps are interpreted as exchange IST;
@@ -146,15 +166,17 @@ fabricated training accuracy or made-up win probability has order authority.
 A trained model would require separately collected data, causal labels,
 walk-forward calibration and an explicitly reviewed rollout.
 
-Only qualified market evidence goes to Anthropic, under the owner's stated
-permission. It includes recent candles, rule evidence, previous-day levels
-and futures depth, not credentials, account identifiers or other sections.
+Pre-open historical context and qualified live market evidence go to Anthropic,
+under the owner's stated permission. Live evidence includes recent candles,
+rule evidence, previous-day levels and futures depth, not account identifiers
+or other sections.
 Claude is a veto, never an executor or a source of replacement prices.
 Its JSON must have a strict boolean and matching setup ID/direction/contract.
 Timeouts, truncation, malformed or contradictory responses block entry.
 
-There is at most one call per FVG/index, at least five minutes between Apex
-calls, and an independent daily attempt cap. Attempts are journaled before
+There is at most one live call per FVG/index and one pre-open call per
+index/day, at least five minutes between all Apex calls, and an independent
+daily attempt cap. Attempts are journaled before
 the request, so interrupted attempts are not automatically retried. AI
 continues qualifying signals while live entry is OFF. The confluence gauge
 is the fraction of deterministic checks passed, **not** a success probability.

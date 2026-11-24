@@ -88,6 +88,20 @@ test('strategy caption is grouped directly beneath the Apex title', async () => 
   assert.ok(elements(groups[1]).some(node => node.props?.['aria-label'] === 'Toggle SMC Apex live entry'));
 });
 
+test('pre-open AI context is displayed as historical, not an entry approval', async () => {
+  const data = snapshot();
+  data.signals.NIFTY = { decision: 'WAIT', reason: 'Historical context only', score: 0,
+    checks: [], timeframes: {}, fvgs: [], setup: null,
+    preopen_ai: { status: 'COMPLETE', session_date: '2026-11-24', at: '2026-11-24T09:00:00+05:30',
+      bias: 'NEUTRAL', summary: 'Wait for confirmation', risk_flags: ['Opening volatility'] } };
+  const app = harness(async url => url.endsWith('/status') ? response(data) : live(false));
+  await flush();
+  assert.match(text(app.render()), /Pre-open AI.*2026-11-24.*COMPLETE/);
+  assert.match(text(app.render()), /Wait for confirmation/);
+  assert.match(text(app.render()), /Opening volatility/);
+  assert.match(text(app.render()), /Historical bias:\s+NEUTRAL.*Not an entry approval/);
+});
+
 test('single ON/OFF toggle works independently when candle snapshots are unavailable', async () => {
   let enabled = false;
   const writes = [];
@@ -312,8 +326,8 @@ test('visible risk settings select and save each index without losing unsaved dr
   assert.match(text(settings(app.render(), 'SENSEX')), /SENSEX and Apex daily limits saved/);
   assert.deepEqual(writes.map(item => item.url), ['/api/smc-apex/config/BANKNIFTY', '/api/smc-apex/daily',
     '/api/smc-apex/config/SENSEX', '/api/smc-apex/daily']);
-  assert.deepEqual(writes[0].body, risk);
-  assert.deepEqual(writes[2].body, risk);
+  assert.deepEqual(writes[0].body, { ...risk, entry_start: '09:15' });
+  assert.deepEqual(writes[2].body, { ...risk, entry_start: '09:15' });
   assert.equal(button(app.render()).props['aria-checked'], false);
 });
 
@@ -370,6 +384,6 @@ test('stale market snapshots do not disable saving manually entered risk setting
   assert.equal(saveButton(app).props.disabled, false);
   saveButton(app).props.onClick();
   await flush();
-  assert.deepEqual(writes, [risk, { daily_loss: 3000 }]);
+  assert.deepEqual(writes, [{ ...risk, entry_start: '09:15' }, { daily_loss: 3000 }]);
   assert.match(text(settings(app.render())), /NIFTY and Apex daily limits saved/);
 });

@@ -21,6 +21,8 @@ type Signal = {
   setup: { side: string; underlying_entry: number; underlying_stop: number; structural_rr: number; liquidity_target: number } | null;
   contract?: { symbol: string; strike: number; expiry: string; ask: number; bid: number; ltp: number; lot_size: number };
   ai?: { approved: boolean; reason: string; at: string };
+  preopen_ai?: { status: string; session_date: string; at: string; bias?: 'CE' | 'PE' | 'NEUTRAL';
+    summary?: string; risk_flags?: string[]; reason?: string };
   depth?: { displayed_bid_fraction: number; source: string };
 };
 type Trade = {
@@ -43,7 +45,7 @@ type Status = {
 };
 type LiveStatus = { live: boolean; at: string; block_reasons?: string[] };
 const EMPTY: Draft = { lots: '', risk_per_trade: '', daily_loss: '', stop_percent: '20',
-  max_spread_percent: '1', entry_start: '09:25', entry_end: '14:45' };
+  max_spread_percent: '1', entry_start: '09:15', entry_end: '14:45' };
 const number = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 const fmt = (value: number | undefined | null) => value != null && Number.isFinite(value) ? number.format(value) : '--';
 const panel = 'rounded-2xl border border-emerald-400/40 bg-gradient-to-br from-cyan-950/40 via-slate-950 to-emerald-950/30 shadow-[inset_0_1px_12px_#00e69015]';
@@ -369,7 +371,13 @@ export default function SMCApexSection() {
         {signal?.checks.length ? signal.checks.map(check => <div key={check.label} className="mb-2 flex gap-2 text-xs">
           {check.passed ? <CheckCircle2 size={18} className="shrink-0 text-lime-400" /> : <Circle size={18} className="shrink-0 text-slate-600" />}{check.label}
         </div>) : <p className="text-sm text-slate-400">Collecting real, completed candles. No invented FVGs or approvals.</p>}
-        <p className="mt-3 text-xs text-orange-200">{signal?.ai?.reason || 'AI is called only after deterministic rules and fresh depth qualify.'}</p>
+        <p className="mt-3 text-xs text-orange-200">{signal?.ai?.reason || 'Live setup AI is called only after deterministic rules and fresh depth qualify.'}</p>
+        {signal?.preopen_ai && <div className="mt-3 rounded-lg border border-cyan-800 p-2 text-xs text-slate-300">
+          <div className="font-bold text-cyan-200">Pre-open AI · {signal.preopen_ai.session_date} · {signal.preopen_ai.status}</div>
+          <div>{signal.preopen_ai.summary || signal.preopen_ai.reason}</div>
+          {!!signal.preopen_ai.risk_flags?.length && <div className="mt-1 text-amber-200">{signal.preopen_ai.risk_flags.join(' · ')}</div>}
+          {signal.preopen_ai.status === 'COMPLETE' && <div className="mt-1 text-slate-400">Historical bias: {signal.preopen_ai.bias} · Not an entry approval</div>}
+        </div>}
       </div>
       <div className={`${panel} p-4`}><h3 className="mb-3 flex items-center gap-2 font-black"><Activity />TRADE DETAILS</h3>
         <dl className="text-xs">{[

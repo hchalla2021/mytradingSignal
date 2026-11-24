@@ -138,6 +138,24 @@ def fvgs(rows: list[Candle], minutes: int) -> list[dict]:
     return found
 
 
+def gap_structure(five: list[Candle], gap: dict) -> dict | None:
+    i, side = gap["index"], gap["side"]
+    prior = five[max(0, i - 14):i - 2]
+    if len(prior) < 6:
+        return None
+    sweep, pool = prior[-1], prior[:-1]
+    swept = (sweep.low < min(r.low for r in pool) and sweep.close > min(r.low for r in pool)
+             if side == "CE" else
+             sweep.high > max(r.high for r in pool) and sweep.close < max(r.high for r in pool))
+    boundary = max(r.high for r in pool) if side == "CE" else min(r.low for r in pool)
+    bos = five[i - 1].close > boundary if side == "CE" else five[i - 1].close < boundary
+    ob = next((r for r in reversed(prior) if
+               (r.close < r.open if side == "CE" else r.close > r.open)), None)
+    ob_valid = ob is not None and not any(
+        r.close < ob.low if side == "CE" else r.close > ob.high for r in five[i:])
+    return {"sweep": sweep, "swept": swept, "bos": bos, "ob": ob, "ob_valid": ob_valid}
+
+
 def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
     now = now.astimezone(IST)
     frames = {m: aggregate(candles, m, now)[-256:] for m in FRAMES}
@@ -149,15 +167,17 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
     result = {"decision": "WAIT", "reason": "Waiting for confirmed multi-timeframe confluence.",
               "timeframes": states, "checks": [], "score": 0, "setup": None,
               "fvgs": gaps[5][-12:]}
-    if not session_open(now):
+    preopen = now.weekday() < 5 and time(9, 0) <= now.time() < OPEN
+    if not preopen and not session_open(now):
         result["reason"] = "Outside the regular NSE/BSE session."
         return result
-    if any(not rows or rows[-1].at + timedelta(minutes=m) < now - timedelta(minutes=m + 1)
-           for m, rows in frames.items()):
+    if not preopen and any(not rows or rows[-1].at + timedelta(minutes=m) < now - timedelta(minutes=m + 1)
+                           for m, rows in frames.items()):
         result["reason"] = "Missing, stale or incomplete timeframe coverage."
         return result
     if len(frames[5]) < 30 or not daily:
-        result["reason"] = "Insufficient confirmed history or previous-day context."
+        result["reason"] = ("Pre-open analysis unavailable: insufficient confirmed history or previous-day context."
+                            if preopen else "Insufficient confirmed history or previous-day context.")
         return result
     previous = [d for d in daily if d.at.astimezone(IST).date() < now.astimezone(IST).date()]
     if not previous:
@@ -169,6 +189,18 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
                        "last_at": pd.at.isoformat(), "fvgs": daily_gaps}
     result["daily"] = {"previous_high": pd.high, "previous_low": pd.low,
                        "previous_close": pd.close, "at": pd.at.isoformat()}
+    if preopen:
+        structures = []
+        for gap in result["fvgs"]:
+            context = gap_structure(frames[5], gap)
+            if context:
+                structures.append({"fvg": gap, "sweep": context["sweep"].json(),
+                                   "sweep_reclaimed": context["swept"], "structure_break": context["bos"],
+                                   "order_block": context["ob"].json() if context["ob"] else None,
+                                   "order_block_intact": context["ob_valid"]})
+        result["historical_structures"] = structures
+        result["reason"] = "Pre-open analysis: completed historical candles only; entries allowed from 09:15 IST."
+        return result
     five, one, three = frames[5], frames[1], frames[3]
     for gap in reversed(result["fvgs"]):
         i, side = gap["index"], gap["side"]
@@ -176,20 +208,11 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
             continue
         if datetime.fromisoformat(gap["confirmed_at"]).date() != now.date():
             continue
-        prior = five[max(0, i - 14):i - 2]
-        if len(prior) < 6:
+        structure = gap_structure(five, gap)
+        if not structure:
             continue
-        # The sweep precedes displacement. The pool exists before the sweep candle.
-        sweep, pool = prior[-1], prior[:-1]
-        swept = (sweep.low < min(r.low for r in pool) and sweep.close > min(r.low for r in pool)
-                 if side == "CE" else
-                 sweep.high > max(r.high for r in pool) and sweep.close < max(r.high for r in pool))
-        boundary = max(r.high for r in pool) if side == "CE" else min(r.low for r in pool)
-        bos = five[i - 1].close > boundary if side == "CE" else five[i - 1].close < boundary
-        ob = next((r for r in reversed(prior) if
-                   (r.close < r.open if side == "CE" else r.close > r.open)), None)
-        ob_valid = ob is not None and not any(
-            r.close < ob.low if side == "CE" else r.close > ob.high for r in five[i:])
+        sweep, swept, bos, ob, ob_valid = (structure["sweep"], structure["swept"], structure["bos"],
+                                          structure["ob"], structure["ob_valid"])
         latest = one[-1]
         since = [r for r in one if r.at >= datetime.fromisoformat(gap["confirmed_at"])]
         intact = not any(r.low <= gap["lower"] if side == "CE" else r.high >= gap["upper"] for r in since)
