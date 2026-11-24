@@ -17,6 +17,7 @@ import { getOrCreateVisitorId } from '@/lib/visitor-id';
 const AutonomiqProSection = dynamic(() => import('@/components/AutonomiqProSection'), { ssr: false });
 const QuantumEdgeIntradaySection = dynamic(() => import('@/components/QuantumEdgeIntradaySection'), { ssr: false });
 const OpeningEdgeSection = dynamic(() => import('@/components/OpeningEdgeSection'), { ssr: false });
+const SMCApexSection = dynamic(() => import('@/components/SMCApexSection'), { ssr: false });
 const AQTESection = dynamic(() => import('@/components/AQTESection'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
 
@@ -259,6 +260,9 @@ export default function Home() {
       {/* Main Dashboard - Full Width */}
       <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-5">
         <div className="mx-auto flex w-full max-w-[1820px] flex-col">
+        <div style={{ order: -15 }} className="min-w-0">
+          <SMCApexSection />
+        </div>
         <div style={{ order: -14 }} className="min-w-0">
           <QuantumEdgeIntradaySection marketData={marketData} isConnected={isConnected} />
           <OpeningEdgeSection />

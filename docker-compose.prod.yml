@@ -40,6 +40,7 @@ services:
       - AQTE_LIVE_DEPLOYMENT_MODE=production
       - QUANTUMEDGE_DEPLOYMENT_MODE=production
       - ZERODHA_SHARED_AUTH_FILE=/run/zerodha/credentials.json
+      - SMCAPEX_API_URL=http://smcapex-api:8014
       # ✅ CRITICAL FIX: Use container name, not localhost
       - REDIS_URL=redis://redis:6379
       # CRITICAL: Enable scheduler for automatic market hours management
@@ -58,6 +59,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      smcapex-api:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).close()"]
       interval: 30s
@@ -105,6 +108,23 @@ services:
       timeout: 5s
       retries: 3
 
+  smcapex-api:
+    build:
+      context: ./smcapex
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - SMCAPEX_DB_PATH=/app/data/apex.sqlite3
+      - SMCAPEX_BACKEND_ENV_FILE=/run/backend/.env
+    volumes:
+      - smcapex-data:/app/data
+      - ${BACKEND_ENV_FILE:-./backend/.env}:/run/backend/.env:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8014/health', timeout=5).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # Frontend Next.js Server
   frontend:
     build:
@@ -147,5 +167,6 @@ volumes:
   expiryedge-data:
   morningedge-data:
   openingedge-data:
+  smcapex-data:
   zerodha-auth-data:
     name: mytrading-zerodha-auth

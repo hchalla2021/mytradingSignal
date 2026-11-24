@@ -28,6 +28,15 @@ if ($backendRunning) {
     Start-Sleep -Seconds 3
 }
 
+# Independent SMC Apex process; no reload while broker positions may be open.
+$apexRunning = Get-NetTCPConnection -LocalPort 8014 -State Listen -ErrorAction SilentlyContinue
+if ($apexRunning) {
+    Write-Host "SMC Apex already listening on port 8014; leaving it untouched." -ForegroundColor Yellow
+} else {
+    Write-Host "Starting independent SMC Apex AI (Port 8014)..." -ForegroundColor Green
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$rootDir'; & '$rootDir\.venv\Scripts\python.exe' -m uvicorn smcapex.main:app --host 127.0.0.1 --port 8014 --workers 1"
+}
+
 # Check if frontend is already running
 $frontendRunning = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
 if ($frontendRunning) {

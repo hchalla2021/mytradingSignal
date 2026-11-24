@@ -20,6 +20,12 @@ rule setups place real one-lot orders.
 See [AQTE architecture,
 APIs, storage, validation and staged rollout](docs/AQTE.md).
 
+**SMC Apex AI** is an independent dashboard and service with its own market
+feed, candle memory, AI approvals, configurable risk and broker-order journal.
+Other strategy signals are not inputs. Live entry resets OFF on restart;
+OFF retains owned protective exits. Displayed depth is not a true footprint.
+See [SMC Apex architecture and safety limits](docs/SMC_APEX_AI.md).
+
 **QuantumEdge IntraDay** uses completed-candle Python rules and Claude Haiku
 before submitting a qualifying order through the shared Zerodha controller.
 The positions and realized P&L in this panel are QuantumEdge-only. A completed

@@ -65,7 +65,7 @@ function elements(tree, visibleOnly = false) {
 }
 const find = (tree, id) => elements(tree).find(node => node.props?.id === id);
 
-test('QuantumEdge is first, then AQTE, charts and live indices without duplicate providers', () => {
+test('SMC Apex is first, then QuantumEdge, AQTE, charts and live indices without duplicate providers', () => {
   const page = readFileSync(path.join(components, '..', 'app', 'page.tsx'), 'utf8');
   const source = ts.createSourceFile('page.tsx', page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let dashboard;
@@ -82,9 +82,10 @@ test('QuantumEdge is first, then AQTE, charts and live indices without duplicate
   visit(source);
   assert.ok(dashboard, 'Dashboard flex container must exist');
   const children = dashboard.children.filter(child => ts.isJsxElement(child) || ts.isJsxSelfClosingElement(child));
-  assert.match(children[0].getText(source), /<QuantumEdgeIntradaySection marketData=\{marketData\} isConnected=\{isConnected\}\s*\/>/);
-  assert.match(children[2].getText(source), /<AQTESection marketData=\{marketData\} isConnected=\{isConnected\}\s*\/>/);
-  assert.match(children[3].getText(source), /<ChartWorkspace marketData=\{marketData\} institutionalData=\{institutionalData\}/);
+  assert.match(children[0].getText(source), /<SMCApexSection\s*\/>/);
+  assert.match(children[1].getText(source), /<QuantumEdgeIntradaySection marketData=\{marketData\} isConnected=\{isConnected\}\s*\/>/);
+  assert.match(children[3].getText(source), /<AQTESection marketData=\{marketData\} isConnected=\{isConnected\}\s*\/>/);
+  assert.match(children[4].getText(source), /<ChartWorkspace marketData=\{marketData\} institutionalData=\{institutionalData\}/);
   const orderOf = node => {
     const opening = ts.isJsxElement(node) ? node.openingElement : node;
     const style = opening.attributes.properties.find(attribute =>
@@ -93,9 +94,10 @@ test('QuantumEdge is first, then AQTE, charts and live indices without duplicate
     return match ? Number(match[1]) : 0;
   };
   assert.ok(children.slice(1).every(child => orderOf(child) > orderOf(children[0])));
-  assert.match(children[4].getText(source), /<LiveMarketIndexTabs\b/);
-  assert.ok(children.slice(3).every(child => orderOf(child) > orderOf(children[2])));
-  assert.ok(children.slice(5).every(child => orderOf(child) > orderOf(children[4])));
+  assert.match(children[5].getText(source), /<LiveMarketIndexTabs\b/);
+  assert.ok(children.slice(4).every(child => orderOf(child) > orderOf(children[3])));
+  assert.ok(children.slice(6).every(child => orderOf(child) > orderOf(children[5])));
+  assert.equal((page.match(/<SMCApexSection\b/g) ?? []).length, 1);
   assert.equal((page.match(/<QuantumEdgeIntradaySection\b/g) ?? []).length, 1);
   assert.equal((page.match(/<AQTESection\b/g) ?? []).length, 1);
   assert.equal((page.match(/<LiveMarketIndexTabs\b/g) ?? []).length, 1);

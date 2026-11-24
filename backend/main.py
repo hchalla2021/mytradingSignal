@@ -93,6 +93,7 @@ from routers.quantumedge import router as quantumedge_http
 from routers.expiryedge import router as expiryedge_http
 from routers.algo_desk import router as algo_desk_http
 from routers.autonomiq_pro import router as autonomiq_pro_http
+from routers.smc_apex import router as smc_apex_http
 from routers import smart_money
 from routers.volume_pulse import router as volume_pulse_http, ws_router as volume_pulse_ws
 from routers.ict_bias import router as ict_bias_http, ws_router as ict_bias_ws
@@ -722,6 +723,7 @@ app.include_router(quantumedge_http)
 app.include_router(expiryedge_http)
 app.include_router(algo_desk_http)
 app.include_router(autonomiq_pro_http)
+app.include_router(smc_apex_http)
 
 
 @app.get("/")
