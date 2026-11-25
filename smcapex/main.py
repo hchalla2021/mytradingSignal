@@ -9,7 +9,7 @@ from time import time as epoch
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from .config import DailyRisk, IndexRisk, TradeControl, credentials
+from .config import DailyRisk, IndexRisk, TradeControl, anthropic_key, credentials
 from .engine import IST, SYMBOLS
 from .runtime import Runtime
 
@@ -79,8 +79,7 @@ async def control_status():
         blockers.append("Live order permission is disabled: set SMCAPEX_LIVE_ENABLED=true.")
     if not cfg.get("SMCAPEX_AI_MODEL"):
         blockers.append("Set SMCAPEX_AI_MODEL for Claude approval.")
-    if not (cfg.get("SMCAPEX_ANTHROPIC_API_KEY") or cfg.get("AUTONOMIQ_PRO_ANTHROPIC_API_KEY")
-            or cfg.get("ANTHROPIC_API_KEY")):
+    if not anthropic_key(cfg):
         blockers.append("Anthropic approval key unavailable.")
     missing = [symbol for symbol in SYMBOLS if symbol not in current.configured_indices]
     if missing:

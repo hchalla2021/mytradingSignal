@@ -812,8 +812,11 @@ class AutonomiqOrchestrator:
     # ── snapshot / health ────────────────────────────────────────────
     async def snapshot(self) -> dict:
         now = datetime.now(IST)
-        day = now.strftime("%Y-%m-%d")
         spots = {s: await self._spot(s, now) for s in SYMBOLS}
+        return await asyncio.to_thread(self._build_snapshot, now, spots)
+
+    def _build_snapshot(self, now: datetime, spots: dict) -> dict:
+        day = now.strftime("%Y-%m-%d")
         last = self.store.last_cycle()
         scheduled = last if last and last["trigger"] == "SCHEDULED" else self.store.last_cycle(trigger="SCHEDULED")
         owner_recheck = self.store.last_cycle(trigger="OWNER_RECHECK")
@@ -888,9 +891,7 @@ class AutonomiqOrchestrator:
             }
         live_rows = all_live_trades[:50]
         if live_rows:
-            live_rows = await asyncio.to_thread(
-                self.live_executor.mark_trade_rows, live_rows, self.cfg, now,
-            )
+            live_rows = self.live_executor.mark_trade_rows(live_rows, self.cfg, now)
         live_closed = [trade for trade in self.store.live_trades(10000)
                        if trade["status"] == "CLOSED"] if self.cfg.live_execution_allowed else []
         live_pnl = round(sum(float(trade.get("pnl") or 0) for trade in live_closed), 2)

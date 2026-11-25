@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sqlite3
@@ -1498,6 +1499,31 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_snapshot_database_wait_does_not_block_other_requests(self):
+        from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
+
+        store = memory_store()
+        self.addCleanup(store.close)
+        engine = AutonomiqOrchestrator(store, mock.Mock(), mock.Mock())
+        engine._spot = mock.AsyncMock(return_value={"fresh": False})
+        release = threading.Event()
+        last_cycle = store.last_cycle
+
+        def waiting_read(*args, **kwargs):
+            release.wait(.5)
+            return last_cycle(*args, **kwargs)
+
+        with mock.patch.object(store, "last_cycle", side_effect=waiting_read):
+            pending = asyncio.create_task(engine.snapshot())
+            started = clock.monotonic()
+            try:
+                await asyncio.sleep(.02)
+                self.assertLess(clock.monotonic() - started, .2)
+            finally:
+                release.set()
+                result = await pending
+        self.assertIn("live_trades", result)
+
     def test_startup_and_socket_threads_share_a_single_executor_instance(self):
         import time as clock
         from concurrent.futures import ThreadPoolExecutor

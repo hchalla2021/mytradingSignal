@@ -12,6 +12,17 @@ IST = ZoneInfo("Asia/Kolkata")
 SYMBOLS = ("NIFTY", "BANKNIFTY", "SENSEX")
 FRAMES = (1, 3, 5, 15, 30, 60)
 OPEN, CLOSE = time(9, 15), time(15, 30)
+RULE_LABELS = (
+    "Valid 5m displacement FVG; intact 1m lower/upper bound",
+    "Pre-displacement liquidity sweep and reclaim",
+    "Confirmed structure break / liquidity run",
+    "Causal opposite candle order block; not invalidated",
+    "1m first-entry rejection inside FVG",
+    "3m microstructure confirmation",
+    "15m / 30m / 1h confirmed swing alignment",
+    "No active opposing higher-timeframe/Daily FVG at entry",
+    "Known liquidity target; structural reward/risk >= 2",
+)
 
 
 @dataclass(frozen=True)
@@ -166,29 +177,38 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
               for m, rows in frames.items()}
     result = {"decision": "WAIT", "reason": "Waiting for confirmed multi-timeframe confluence.",
               "timeframes": states, "checks": [], "score": 0, "setup": None,
-              "fvgs": gaps[5][-12:]}
+              "evaluation": "INCOMPLETE", "diagnostic": None, "fvgs": gaps[5][-12:]}
     preopen = now.weekday() < 5 and time(9, 0) <= now.time() < OPEN
     if not preopen and not session_open(now):
         result["reason"] = "Outside the regular NSE/BSE session."
         return result
-    if not preopen and any(not rows or rows[-1].at + timedelta(minutes=m) < now - timedelta(minutes=m + 1)
-                           for m, rows in frames.items()):
-        result["reason"] = "Missing, stale or incomplete timeframe coverage."
-        return result
+    previous = [d for d in daily if d.at.astimezone(IST).date() < now.astimezone(IST).date()]
+    pd = previous[-1] if previous else None
+    daily_gaps = fvgs(previous[-256:], 1440)[-3:]
+    if pd is not None:
+        states["Daily"] = {"candles": len(previous), "bias": bias(previous),
+                           "last_at": pd.at.isoformat(), "fvgs": daily_gaps}
+        result["daily"] = {"previous_high": pd.high, "previous_low": pd.low,
+                           "previous_close": pd.close, "at": pd.at.isoformat()}
+    if not preopen:
+        missing = [m for m, rows in frames.items()
+                   if not rows or rows[-1].at + timedelta(minutes=m) < now - timedelta(minutes=m + 1)]
+        if missing:
+            labels = " / ".join("1h" if m == 60 else f"{m}m" for m in missing)
+            closes = [session_start(now) + timedelta(minutes=m) for m in missing]
+            if all(now < close for close in closes):
+                result["reason"] = (f"Waiting for first completed {labels} candles; "
+                                    f"latest required close {max(closes):%H:%M} IST.")
+            else:
+                result["reason"] = f"Missing, stale or incomplete timeframe coverage: {labels}."
+            return result
     if len(frames[5]) < 30 or not daily:
         result["reason"] = ("Pre-open analysis unavailable: insufficient confirmed history or previous-day context."
                             if preopen else "Insufficient confirmed history or previous-day context.")
         return result
-    previous = [d for d in daily if d.at.astimezone(IST).date() < now.astimezone(IST).date()]
-    if not previous:
+    if pd is None:
         result["reason"] = "Previous trading-day levels unavailable."
         return result
-    pd = previous[-1]
-    daily_gaps = fvgs(previous[-256:], 1440)[-3:]
-    states["Daily"] = {"candles": len(previous), "bias": bias(previous),
-                       "last_at": pd.at.isoformat(), "fvgs": daily_gaps}
-    result["daily"] = {"previous_high": pd.high, "previous_low": pd.low,
-                       "previous_close": pd.close, "at": pd.at.isoformat()}
     if preopen:
         structures = []
         for gap in result["fvgs"]:
@@ -202,20 +222,56 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
         result["reason"] = "Pre-open analysis: completed historical candles only; entries allowed from 09:15 IST."
         return result
     five, one, three = frames[5], frames[1], frames[3]
-    for gap in reversed(result["fvgs"]):
+    same_day_gaps = [
+        gap for gap in result["fvgs"]
+        if datetime.fromisoformat(gap["confirmed_at"]).date() == now.date()
+    ]
+    if not same_day_gaps:
+        latest_gap = result["fvgs"][-1] if result["fvgs"] else None
+        if latest_gap:
+            confirmed = datetime.fromisoformat(latest_gap["confirmed_at"])
+            result["reason"] = (
+                "No same-day 5m displacement FVG for the bullish or bearish setup. "
+                f"Latest historical 5m FVG: {latest_gap['side']}, "
+                f"{confirmed:%Y-%m-%d %H:%M} IST, {latest_gap['state']}."
+            )
+        else:
+            result["reason"] = (
+                "No same-day 5m displacement FVG; no completed FVG exists "
+                "in the available confirmed history."
+            )
+    else:
+        latest_gap = same_day_gaps[-1]
+        confirmed = datetime.fromisoformat(latest_gap["confirmed_at"])
+        result["reason"] = (
+            "No eligible same-day intact 5m displacement FVG in the last 8 completed 5m bars. "
+            f"Latest same-day 5m FVG: {latest_gap['side']}, "
+            f"{confirmed:%Y-%m-%d %H:%M} IST, {latest_gap['state']}."
+        )
+    if not same_day_gaps:
+        result["checks"] = [{"label": label, "passed": False, "status": "WAIT",
+                             "detail": result["reason"] if index == 0 else "Awaiting a same-day 5m FVG."}
+                            for index, label in enumerate(RULE_LABELS)]
+        result["evaluation"] = "WAITING_FVG"
+        return result
+    best_diagnostic = None
+    for gap in reversed(same_day_gaps):
         i, side = gap["index"], gap["side"]
-        if gap["state"] == "INVALIDATED" or len(five) - i > 8:
-            continue
-        if datetime.fromisoformat(gap["confirmed_at"]).date() != now.date():
-            continue
         structure = gap_structure(five, gap)
         if not structure:
+            pending = [{"label": label, "passed": False, "status": "WAIT",
+                        "detail": "Insufficient confirmed pre-displacement structure."}
+                       for label in RULE_LABELS]
+            if best_diagnostic is None:
+                best_diagnostic = {"checks": pending, "score": 0, "setup": None}
             continue
         sweep, swept, bos, ob, ob_valid = (structure["sweep"], structure["swept"], structure["bos"],
                                           structure["ob"], structure["ob_valid"])
         latest = one[-1]
         since = [r for r in one if r.at >= datetime.fromisoformat(gap["confirmed_at"])]
-        intact = not any(r.low <= gap["lower"] if side == "CE" else r.high >= gap["upper"] for r in since)
+        intact = (gap["state"] != "INVALIDATED" and len(five) - i <= 8
+                  and not any(r.low <= gap["lower"] if side == "CE" else r.high >= gap["upper"]
+                              for r in since))
         retest = latest.at >= datetime.fromisoformat(gap["confirmed_at"]) and (
             gap["lower"] < latest.low < gap["upper"] and latest.close > gap["upper"] and latest.close > latest.open
             if side == "CE" else
@@ -240,27 +296,29 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
         target = min(unbroken) if side == "CE" and unbroken else max(unbroken) if unbroken else None
         risk = abs(entry - stop)
         rr = abs(target - entry) / risk if target is not None and risk > 0 else 0
-        checks = [
-            ("Valid 5m displacement FVG; intact 1m lower/upper bound", intact),
-            ("Pre-displacement liquidity sweep and reclaim", swept),
-            ("Confirmed structure break / liquidity run", bos),
-            ("Causal opposite candle order block; not invalidated", ob_valid),
-            ("1m first-entry rejection inside FVG", retest),
-            ("3m microstructure confirmation", micro),
-            ("15m / 30m / 1h confirmed swing alignment", aligned),
-            ("No active opposing higher-timeframe/Daily FVG at entry", not opposing_gap),
-            ("Known liquidity target; structural reward/risk >= 2", rr >= 2),
-        ]
-        result.update(checks=[{"label": label, "passed": bool(passed)} for label, passed in checks],
-                      score=round(100 * sum(bool(p) for _, p in checks) / len(checks)))
-        if not all(p for _, p in checks):
-            result["reason"] = next(label for label, passed in checks if not passed)
+        values = (intact, swept, bos, ob_valid, retest, micro, aligned, not opposing_gap, rr >= 2)
+        checks = [{"label": label, "passed": bool(passed),
+                   "status": "PASS" if passed else "FAIL", "detail": ""}
+                  for label, passed in zip(RULE_LABELS, values)]
+        score = round(100 * sum(values) / len(values))
+        diagnostic_setup = {"id": gap["id"], "side": side, "fvg": gap,
+                            "order_block": ob.json() if ob else None, "sweep": sweep.json(),
+                            "underlying_entry": entry, "underlying_stop": stop,
+                            "liquidity_target": target, "structural_rr": round(rr, 2),
+                            "trigger_at": latest.at.isoformat()}
+        if best_diagnostic is None or score > best_diagnostic["score"]:
+            best_diagnostic = {"checks": checks, "score": score, "setup": diagnostic_setup}
+        if not all(values):
             continue
-        result.update(decision=f"BUY {side}", reason="Rules qualified; pending independent depth, AI and risk gates.",
-                      setup={"id": gap["id"], "side": side, "fvg": gap,
-                             "order_block": ob.json() if ob else None, "sweep": sweep.json(),
-                             "underlying_entry": entry, "underlying_stop": stop,
-                             "liquidity_target": target, "structural_rr": round(rr, 2),
-                             "trigger_at": latest.at.isoformat()})
+        result.update(checks=checks, score=score, evaluation="QUALIFIED",
+                      diagnostic=diagnostic_setup,
+                      decision=f"BUY {side}",
+                      reason="Rules qualified; pending independent depth, AI and risk gates.",
+                      setup=diagnostic_setup)
         return result
+    if best_diagnostic:
+        result.update(checks=best_diagnostic["checks"], score=best_diagnostic["score"],
+                      evaluation="DIAGNOSTIC", diagnostic=best_diagnostic["setup"])
+        failed = next((check["label"] for check in result["checks"] if not check["passed"]), None)
+        result["reason"] = failed or result["reason"]
     return result

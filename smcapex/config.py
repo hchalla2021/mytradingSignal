@@ -14,12 +14,18 @@ ENV_FILE = Path(os.getenv("SMCAPEX_BACKEND_ENV_FILE",
 def credentials() -> dict[str, str]:
     # Whitelist only credentials/config needed by this service. Never return to the UI.
     names = ("ZERODHA_API_KEY", "ZERODHA_ACCESS_TOKEN", "SMCAPEX_ANTHROPIC_API_KEY",
-             "AUTONOMIQ_PRO_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "SMCAPEX_AI_MODEL",
+             "QUANTUMEDGE_AI_ANTHROPIC_API_KEY", "AUTONOMIQ_PRO_ANTHROPIC_API_KEY",
+             "ANTHROPIC_API_KEY", "SMCAPEX_AI_MODEL",
              "SMCAPEX_SERVICE_TOKEN", "JWT_SECRET", "SMCAPEX_LIVE_ENABLED", "SMCAPEX_AI_MAX_CALLS_PER_DAY")
     if not ENV_FILE.is_file():
         raise ValueError("SMC Apex credential environment file is missing")
     values = dotenv_values(ENV_FILE)
     return {name: os.environ.get(name) or values.get(name) or "" for name in names}
+
+
+def anthropic_key(cfg: dict[str, str]) -> str:
+    return (cfg.get("SMCAPEX_ANTHROPIC_API_KEY") or cfg.get("QUANTUMEDGE_AI_ANTHROPIC_API_KEY")
+            or cfg.get("AUTONOMIQ_PRO_ANTHROPIC_API_KEY") or cfg.get("ANTHROPIC_API_KEY") or "")
 
 
 class IndexRisk(BaseModel):

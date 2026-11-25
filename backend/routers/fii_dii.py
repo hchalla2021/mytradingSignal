@@ -58,12 +58,14 @@ async def _build_realtime_snapshot() -> dict:
     cache = get_cache()
     market = await cache.get_all_market_data()
 
-    for symbol in _SYMBOLS:
-        tick = market.get(symbol) if isinstance(market, dict) else None
-        if isinstance(tick, dict) and tick.get("price"):
-            fii_dii_realtime_ai_engine.update_tick(symbol, tick)
+    def infer() -> dict:
+        for symbol in _SYMBOLS:
+            tick = market.get(symbol) if isinstance(market, dict) else None
+            if isinstance(tick, dict) and tick.get("price"):
+                fii_dii_realtime_ai_engine.update_tick(symbol, tick)
+        return fii_dii_realtime_ai_engine.get_snapshot()
 
-    snap = fii_dii_realtime_ai_engine.get_snapshot()
+    snap = await asyncio.to_thread(infer)
     if not snap:
         return {
             "generatedAt": datetime.utcnow().isoformat(),

@@ -17,7 +17,7 @@ from kiteconnect import KiteConnect, KiteTicker
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout as RequestsTimeout
 
-from .config import IndexRisk, credentials
+from .config import IndexRisk, anthropic_key, credentials
 from .engine import Candle, IST, SYMBOLS, aggregate, bucket, evaluate, session_open
 from .execution import Blocked, Executor, quote_prices
 from .store import Store
@@ -56,6 +56,7 @@ class Runtime:
         self.catalog: list[dict] = []
         self.ticks: dict[tuple[str, str], dict] = {}
         self.tick_errors: dict[tuple[str, str], str] = {}
+        self.candle_errors: dict[str, set[datetime]] = {}
         self.building: dict[str, dict] = {}
         self.signals: dict[str, dict] = {}
         self.error: str | None = None
@@ -194,6 +195,11 @@ class Runtime:
                                       float(row["close"]), float(row.get("volume") or 0)))
             with self.lock:
                 self.store.candles(symbol, "1", candles)
+                missing = self.candle_errors.get(symbol)
+                if missing:
+                    missing.difference_update(candle.at for candle in candles)
+                    if not missing:
+                        del self.candle_errors[symbol]
             if self.stop_event.wait(.4):
                 return
             if not self.history_loaded or self.last_day != now.date() or (
@@ -276,7 +282,10 @@ class Runtime:
             with self.lock:
                 self.store.candles(symbol, "1", [Candle(row["at"], row["open"], row["high"], row["low"], row["close"])])
         else:
-            self.error = f"{symbol}: incomplete live candle rejected; awaiting exchange history"
+            with self.lock:
+                self.candle_errors.setdefault(symbol, set()).add(row["at"])
+            logger.warning("SMC Apex: %s: incomplete live candle at %s rejected; awaiting exchange history",
+                           symbol, row["at"].isoformat())
 
     def drain_ticks(self) -> bool:
         if self.overflow.is_set():
@@ -341,7 +350,7 @@ class Runtime:
             last = self.store.get("last_ai", {}).get("at")
             if last and (now - datetime.fromisoformat(last)).total_seconds() < 300:
                 raise Blocked("AI cooldown: at most one Apex call per five minutes")
-            api_key = cfg.get("SMCAPEX_ANTHROPIC_API_KEY") or cfg.get("AUTONOMIQ_PRO_ANTHROPIC_API_KEY") or cfg.get("ANTHROPIC_API_KEY")
+            api_key = anthropic_key(cfg)
             model = cfg.get("SMCAPEX_AI_MODEL")
             if not api_key or not model:
                 raise Blocked("Anthropic key or SMCAPEX_AI_MODEL not configured")
@@ -560,7 +569,7 @@ class Runtime:
                         self.retry_seconds = min(900, self.retry_seconds * 2)
                 self.drain_ticks()
                 for symbol, row in list(self.building.items()):
-                    if row["at"] + timedelta(minutes=1) <= now:
+                    if row["at"] + timedelta(minutes=1, seconds=5) <= now:
                         self.finish_candle(symbol, row)
                         del self.building[symbol]
                 with self.lock:
@@ -589,7 +598,7 @@ class Runtime:
                         self.history(now)
                         self.connection_recovered("history")
                     slot = now.replace(second=0, microsecond=0)
-                    if self.last_analysis != slot:
+                    if now.second >= 5 and self.last_analysis != slot:
                         self.last_analysis = slot
                         self.drain_ticks()
                         stage = "analysis"
@@ -625,13 +634,15 @@ class Runtime:
                 last_close = ({"price": daily[-1].close, "session_date": daily[-1].at.date().isoformat(),
                                "change_percent": (daily[-1].close / previous - 1) * 100 if previous else None}
                               if daily else None)
+                warnings = [self.tick_errors[(symbol, kind)] for kind in ("spot", "future")
+                            if (symbol, kind) in self.tick_errors]
+                if self.candle_errors.get(symbol):
+                    warnings.append(f"{symbol}: incomplete live candle rejected; awaiting exchange history")
                 indices[symbol] = {"price": tick["price"] if tick else None,
                                    "change_percent": (tick["price"] / close - 1) * 100 if close > 0 else None,
                                    "last_close": last_close,
                                    "timestamp_source": tick.get("timestamp_source", "EXCHANGE") if tick else None,
-                                   "data_warning": "; ".join(self.tick_errors[(symbol, kind)]
-                                                            for kind in ("spot", "future")
-                                                            if (symbol, kind) in self.tick_errors) or None,
+                                   "data_warning": "; ".join(warnings) or None,
                                    "age": age, "fresh": age is not None and -3 <= age <= 5
                                    and (symbol, "spot") not in self.tick_errors}
             return {"at": now.isoformat(), "feed": self.feed, "live": self.executor.enabled,

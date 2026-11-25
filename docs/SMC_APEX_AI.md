@@ -16,6 +16,13 @@ signal cache, or trading database. The existing backend provides **only**
 authenticated request transport. Shared resources are the Zerodha/Anthropic
 credentials and app authentication signing key.
 
+The HTTP gateway still shares the main backend's event loop. FII/DII model
+inference and AUTONOMIQ dashboard database reads run in worker threads so
+they do not block Apex control/status requests. Control timeouts still
+report unknown live state; the UI never assumes ON when confirmation fails.
+Dashboard HTTP 401 means its owner session needs authentication, not that
+Claude rejected an API key.
+
 The production Compose stack starts `smcapex-api` independently. Local
 `start.ps1` also starts the service. For direct development commands, start
 this process separately from the existing backend, from the repository root:
@@ -23,6 +30,15 @@ this process separately from the existing backend, from the repository root:
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn smcapex.main:app --host 127.0.0.1 --port 8014 --workers 1
 ```
+
+The PowerShell launcher `scripts/start.ps1` delegates manual startup to the root
+launcher, including Apex. The root launcher checks `/health` and reports an
+explicit failure if the independent worker is unavailable. Worker readiness
+does not establish live tick freshness, AI availability, or permission to trade.
+The main dashboard's market-feed banner belongs to the main backend, not Apex.
+PowerShell script execution must be permitted by the local execution policy.
+If it is not, use the direct Python command above; the launchers do not bypass
+that policy.
 
 Do not use multiple workers or reload this service with open trades. Its feed
 connects on startup even with live entry OFF. Credential changes reconnect
@@ -34,7 +50,7 @@ The service reads the shared backend environment file without modifying it:
 | Variable | Purpose |
 | --- | --- |
 | `ZERODHA_API_KEY`, `ZERODHA_ACCESS_TOKEN` | Existing Zerodha credentials |
-| `SMCAPEX_ANTHROPIC_API_KEY` | Optional dedicated key; falls back to `AUTONOMIQ_PRO_ANTHROPIC_API_KEY`, then `ANTHROPIC_API_KEY` |
+| `SMCAPEX_ANTHROPIC_API_KEY` | Optional dedicated key; falls back to `QUANTUMEDGE_AI_ANTHROPIC_API_KEY`, then `AUTONOMIQ_PRO_ANTHROPIC_API_KEY`, then `ANTHROPIC_API_KEY` |
 | `SMCAPEX_AI_MODEL` | Required explicit Anthropic model ID; no guessed model |
 | `SMCAPEX_LIVE_ENABLED` | Deployment permission; only the exact value `true` enables UI live arming |
 | `SMCAPEX_AI_MAX_CALLS_PER_DAY` | Independent attempt cap, default 12, maximum 100 |
@@ -75,6 +91,10 @@ analysis and AI calls can occur on holidays.
 
 From 09:15, the same-day confirmed FVG, retest, feed, independent live AI and
 risk gates still apply. The window opening does not guarantee a trade at 09:15.
+Once timeframe coverage is ready, a missing eligible entry FVG is reported
+explicitly, including the latest detected FVG's date and invalidation state.
+Historic or invalidated gaps do not trigger live Claude calls. Downstream
+confluence remains unevaluated until a qualifying FVG has structure context.
 
 The service bootstraps 30 calendar days of exchange minute candles and one
 year of completed daily candles. It refreshes minute history independently.
@@ -97,6 +117,15 @@ if the socket is connected; the service does not invent ticks to keep LIVE.
 Real received candles are persisted without synthesizing missing bars.
 Live candle construction requires first/last coverage and no tick gap over
 10 seconds; rejected live bars must await exchange historical coverage.
+At a minute boundary the worker allows five seconds for delayed exchange
+ticks before closing a quiet buffer, matching the existing tick-age limit.
+A received next-minute tick also closes the previous bar. This does not pad
+gaps or relax candle coverage, timestamp, depth or order freshness checks.
+Once-per-minute analysis starts after that five-second allowance, rather
+than at the boundary before the latest completed minute is available.
+Incomplete-bar warnings are per index and clear only when exchange minute
+history supplies the rejected bars. They never overwrite or clear protective
+order/service errors.
 Persistent memory retains received candles, not hypothetical candles missed
 while offline.
 Intraday structural evaluation uses the latest 256 completed bars per frame.
@@ -109,6 +138,18 @@ refreshes completed daily history once, including today's bar only if the
 exchange actually supplied one. If history is unavailable, the card labels
 any retained tick as last received rather than inventing a close. These
 display-only values never satisfy live tick, depth or execution checks.
+
+At the session open, completed 3m/5m/15m/30m/1h context can still show prior
+session timestamps while fresh spot prices arrive. Those frames update only
+after real bars complete; `WAIT` and zero live AI calls are expected until the
+timeframe freshness and setup gates pass. Neither a connected socket nor a
+moving spot price alone establishes a tradable setup.
+During expected opening warm-up, the status names the pending frames and
+their latest required first close (the first 1h candle closes at 10:15 IST).
+Genuine missing coverage after that deadline remains blocked and names the
+affected frames. Completed Daily context remains visible during warm-up.
+The confluence gauge shows `--/100` and `Not evaluated` until actual rule
+checks exist; it does not present uncomputed checks as a zero score.
 
 Timeframe roles:
 

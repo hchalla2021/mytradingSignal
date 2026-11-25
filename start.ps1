@@ -24,7 +24,7 @@ if ($backendRunning) {
     }
     # Start backend in new terminal
     Write-Host "🚀 Starting Backend Server (Port 8000)..." -ForegroundColor Green
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "$env:FAST_STARTUP_MODE='true'; $env:WATCHFILES_FORCE_POLLING='true'; cd '$rootDir\backend'; & '$rootDir\.venv\Scripts\python.exe' -m uvicorn main:app --reload --reload-delay 0.5 --host 127.0.0.1 --port 8000; Write-Host '🟢 Backend Server Starting...' -ForegroundColor Green"
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$env:FAST_STARTUP_MODE='true'; `$env:WATCHFILES_FORCE_POLLING='true'; cd '$rootDir\backend'; & '$rootDir\.venv\Scripts\python.exe' -m uvicorn main:app --reload --reload-delay 0.5 --host 127.0.0.1 --port 8000; Write-Host '🟢 Backend Server Starting...' -ForegroundColor Green"
     Start-Sleep -Seconds 3
 }
 
@@ -35,6 +35,27 @@ if ($apexRunning) {
 } else {
     Write-Host "Starting independent SMC Apex AI (Port 8014)..." -ForegroundColor Green
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$rootDir'; & '$rootDir\.venv\Scripts\python.exe' -m uvicorn smcapex.main:app --host 127.0.0.1 --port 8014 --workers 1"
+}
+
+$apexReady = $false
+$apexFailure = 'No healthy Apex response received.'
+for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    try {
+        $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8014/health' -TimeoutSec 2
+        if ($health.service -eq 'SMC Apex AI') {
+            $apexReady = $true
+            Write-Host "SMC Apex worker ready; feed: $($health.feed). Worker readiness does not guarantee fresh ticks or entry approval." -ForegroundColor Green
+            break
+        }
+        $apexFailure = 'Port 8014 returned an unexpected service.'
+    } catch {
+        $apexFailure = $_.Exception.Message
+    }
+    Start-Sleep -Seconds 1
+}
+if (-not $apexReady) {
+    Write-Error "SMC Apex startup failed: $apexFailure Check the Apex terminal. The main dashboard feed does not verify Apex connectivity."
+    exit 1
 }
 
 # Check if frontend is already running
@@ -54,6 +75,7 @@ Write-Host "  ✅ Application Started Successfully!" -ForegroundColor Green
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "📊 Backend:  http://127.0.0.1:8000/docs" -ForegroundColor White
+Write-Host "SMC Apex: http://127.0.0.1:8014/health" -ForegroundColor White
 Write-Host "🌐 Frontend: http://localhost:3000" -ForegroundColor White
 Write-Host ""
 Write-Host "📝 Environment: AUTO-DETECTED (Local)" -ForegroundColor Cyan

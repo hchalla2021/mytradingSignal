@@ -171,6 +171,26 @@ class StructureTests(unittest.TestCase):
         self.assertEqual(result["decision"], "WAIT")
         self.assertIsNone(result["setup"])
 
+    def test_opening_hour_explains_warmup_and_keeps_completed_daily_context(self):
+        prior = NOW.replace(day=23, hour=9, minute=15)
+        start = NOW.replace(hour=9, minute=15)
+        history = [Candle(prior + timedelta(minutes=i), 100, 101, 99, 100) for i in range(375)]
+        current = [Candle(start + timedelta(minutes=i), 100, 101, 99, 100) for i in range(61)]
+        daily = [Candle(prior, 100, 110, 90, 105)]
+        result = evaluate(history + current, daily, NOW.replace(hour=9, minute=52))
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertIsNone(result["setup"])
+        self.assertIn("first completed 1h", result["reason"])
+        self.assertIn("10:15 IST", result["reason"])
+        self.assertEqual(result["timeframes"]["Daily"]["last_at"], prior.isoformat())
+        self.assertEqual(result["daily"]["previous_close"], 105)
+        missing = [r for r in current if r.at != start + timedelta(minutes=15)]
+        result = evaluate(history + missing, daily, NOW.replace(hour=10, minute=16))
+        self.assertIn("Missing, stale", result["reason"])
+        self.assertIn("1h", result["reason"])
+        self.assertNotIn("first completed", result["reason"])
+        self.assertIsNone(result["setup"])
+
     def test_preopen_uses_completed_historical_context_without_a_trade_setup(self):
         start = NOW.replace(day=23, hour=9, minute=15)
         bars = [Candle(row.at - timedelta(days=1), row.open, row.high, row.low, row.close)
@@ -197,7 +217,37 @@ class StructureTests(unittest.TestCase):
         self.assertIn("Outside", evaluate(candles, daily, NOW.replace(hour=8, minute=59))["reason"])
         self.assertIn("Outside", evaluate(candles, daily, NOW.replace(day=22, hour=9, minute=0))["reason"])
         self.assertIn("insufficient", evaluate([], [], NOW.replace(hour=9, minute=0))["reason"])
-        self.assertIn("Missing, stale", evaluate(candles, daily, NOW.replace(hour=9, minute=15))["reason"])
+        self.assertIn("first completed", evaluate(candles, daily, NOW.replace(hour=9, minute=15))["reason"])
+
+    def test_completed_context_explains_missing_or_invalidated_entry_fvg(self):
+        prior = NOW.replace(day=23, hour=9, minute=15)
+        start = NOW.replace(hour=9, minute=15)
+        history = [Candle(prior + timedelta(minutes=i), 100, 101, 99, 100) for i in range(375)]
+        current = [Candle(start + timedelta(minutes=i), 100, 101, 99, 100) for i in range(125)]
+        daily = [Candle(prior, 100, 110, 90, 105)]
+        result = evaluate(history + current, daily, NOW)
+        self.assertIn("No same-day 5m displacement FVG", result["reason"])
+        self.assertEqual(result["evaluation"], "WAITING_FVG")
+        self.assertEqual(len(result["checks"]), 9)
+        self.assertTrue(all(check["status"] == "WAIT" for check in result["checks"]))
+        self.assertIsNone(result["setup"])
+
+        bars = gap_rows()
+        bars += [Candle(bars[-1].at + timedelta(minutes=5), 104, 105, 100, 104),
+                 Candle(bars[-1].at + timedelta(minutes=10), 104, 105, 103, 104)]
+        current = [minute for row in bars for minute in [
+            row, *[Candle(row.at + timedelta(minutes=i), row.close, row.close, row.close, row.close)
+                   for i in range(1, 5)],
+        ]]
+        result = evaluate(history + current, daily, NOW)
+        self.assertEqual(result["fvgs"][-1]["state"], "INVALIDATED")
+        self.assertIn("Valid 5m displacement FVG", result["reason"])
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertEqual(result["evaluation"], "DIAGNOSTIC")
+        self.assertEqual(len(result["checks"]), 9)
+        self.assertFalse(result["checks"][0]["passed"])
+        self.assertIsNotNone(result["diagnostic"])
+        self.assertIsNone(result["setup"])
 
     def test_all_qualified_frame_evidence_produces_buy_and_invalidated_gap_does_not(self):
         five = gap_rows()
@@ -626,7 +676,98 @@ class PersistenceAndAPITests(unittest.TestCase):
         row = self.runtime.building["NIFTY"]
         self.runtime.finish_candle("NIFTY", row)
         self.assertEqual(self.runtime.store.history("NIFTY", "1"), [])
-        self.assertIn("rejected", self.runtime.error)
+        self.assertIsNone(self.runtime.error)
+        self.assertIn("rejected", self.runtime.status()["indices"]["NIFTY"]["data_warning"])
+        self.assertIsNone(self.runtime.status()["indices"]["BANKNIFTY"]["data_warning"])
+
+    def test_minute_boundary_waits_for_delayed_valid_exchange_ticks(self):
+        start = NOW.replace(second=0) - timedelta(minutes=1)
+        wall = start + timedelta(minutes=1, seconds=1)
+        self.runtime.tokens = {1: ("NIFTY", "spot")}
+        self.runtime.building["NIFTY"] = {
+            "at": start, "open": 100, "high": 101, "low": 99, "close": 100,
+            "first": start, "last": start + timedelta(seconds=54), "gap": 2,
+        }
+        self.runtime.feed = "CONNECTED"
+        self.runtime.current_credentials = ("key", "token")
+        self.runtime.last_history = time.monotonic()
+        self.runtime.last_analysis = wall.replace(second=0, microsecond=0)
+
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return wall
+
+        with patch("smcapex.runtime.datetime", Clock), patch("smcapex.runtime.credentials",
+                return_value={"ZERODHA_API_KEY": "key", "ZERODHA_ACCESS_TOKEN": "token"}), \
+                patch.object(self.runtime.stop_event, "is_set", side_effect=[False, True]), \
+                patch.object(self.runtime.stop_event, "wait"):
+            self.runtime.run()
+        self.assertIn("NIFTY", self.runtime.building)
+        self.assertEqual(self.runtime.candle_errors, {})
+        self.runtime.ingest(wall + timedelta(seconds=1), [{
+            "instrument_token": 1, "exchange_timestamp": start + timedelta(seconds=59), "last_price": 102,
+        }])
+        self.runtime.ingest(wall + timedelta(seconds=2), [{
+            "instrument_token": 1, "exchange_timestamp": start + timedelta(minutes=1, seconds=1), "last_price": 103,
+        }])
+        self.assertEqual(self.runtime.store.history("NIFTY", "1")[0].close, 102)
+        self.assertEqual(self.runtime.candle_errors, {})
+
+    def test_analysis_waits_until_the_previous_live_minute_can_be_finalized(self):
+        start = NOW.replace(second=0) - timedelta(minutes=1)
+        wall = start + timedelta(minutes=1, seconds=1)
+        self.runtime.building["NIFTY"] = {
+            "at": start, "open": 100, "high": 101, "low": 99, "close": 100,
+            "first": start, "last": start + timedelta(seconds=59), "gap": 2,
+        }
+        self.runtime.feed = "CONNECTED"
+        self.runtime.current_credentials = ("key", "token")
+        self.runtime.last_history = time.monotonic()
+        self.runtime.last_analysis = start
+        observations = []
+
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return wall
+
+        def analyse(now, cfg):
+            observations.append((now, self.runtime.store.history("NIFTY", "1")))
+
+        def advance(_seconds):
+            nonlocal wall
+            wall = start + timedelta(minutes=1, seconds=6)
+
+        with patch("smcapex.runtime.datetime", Clock), patch("smcapex.runtime.credentials",
+                return_value={"ZERODHA_API_KEY": "key", "ZERODHA_ACCESS_TOKEN": "token"}), \
+                patch.object(self.runtime.stop_event, "is_set", side_effect=[False, False, True]), \
+                patch.object(self.runtime.stop_event, "wait", side_effect=advance), \
+                patch.object(self.runtime, "analyse", side_effect=analyse):
+            self.runtime.run()
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0][0], start + timedelta(minutes=1, seconds=6))
+        self.assertEqual(observations[0][1][0].at, start)
+
+    def test_candle_warning_clears_only_when_exchange_history_covers_rejected_bar(self):
+        at = NOW.replace(second=0) - timedelta(minutes=2)
+        self.runtime.tokens = {1: ("NIFTY", "spot")}
+        self.runtime.finish_candle("NIFTY", {
+            "at": at, "first": at + timedelta(seconds=10), "last": at + timedelta(seconds=50), "gap": 0,
+        })
+        self.runtime.error = "Protective order requires operator attention"
+        self.runtime.kite = Mock()
+        self.runtime.kite.historical_data.return_value = []
+        with patch.object(self.runtime.stop_event, "wait", return_value=False):
+            self.runtime.history(NOW)
+            self.assertIn("awaiting exchange history", self.runtime.status()["indices"]["NIFTY"]["data_warning"])
+            self.runtime.kite.historical_data.side_effect = lambda token, start, end, frame: [{
+                "date": at, "open": 100, "high": 101, "low": 99, "close": 100,
+            }] if frame == "minute" else []
+            self.runtime.history(NOW)
+        self.assertIsNone(self.runtime.status()["indices"]["NIFTY"]["data_warning"])
+        self.assertEqual(self.runtime.error, "Protective order requires operator attention")
+        self.assertEqual(self.runtime.store.history("NIFTY", "1")[0].at, at)
 
     def test_zero_timestamp_index_packet_uses_receipt_without_inventing_candles(self):
         token = 256265
@@ -722,6 +863,25 @@ class PersistenceAndAPITests(unittest.TestCase):
             self.runtime.ai("NIFTY", {**signal, "contract": {"symbol": "OTHER"}}, {}, cfg, NOW)
         with self.assertRaisesRegex(Blocked, "not configured"):
             self.runtime.ai("BANKNIFTY", signal, {}, {}, NOW + timedelta(minutes=6))
+
+    def test_ai_uses_existing_quantumedge_key_before_autonomiq_fallback(self):
+        from smcapex.config import credentials
+
+        values = {"QUANTUMEDGE_AI_ANTHROPIC_API_KEY": "mock-quantum",
+                  "AUTONOMIQ_PRO_ANTHROPIC_API_KEY": "mock-autonomiq",
+                  "SMCAPEX_AI_MODEL": "mock-model"}
+        with patch("smcapex.config.ENV_FILE") as env_file, \
+                patch("smcapex.config.dotenv_values", return_value=values), \
+                patch.dict("os.environ", {}, clear=True):
+            env_file.is_file.return_value = True
+            cfg = credentials()
+        self.assertEqual(cfg.get("QUANTUMEDGE_AI_ANTHROPIC_API_KEY"), "mock-quantum")
+        _, key, model = self.runtime.reserve_ai("quantum-fallback", cfg, NOW, {"status": "PENDING"})
+        self.assertEqual((key, model), ("mock-quantum", "mock-model"))
+        cfg["SMCAPEX_ANTHROPIC_API_KEY"] = "mock-dedicated"
+        _, key, _ = self.runtime.reserve_ai(
+            "dedicated", cfg, NOW + timedelta(minutes=6), {"status": "PENDING"})
+        self.assertEqual(key, "mock-dedicated")
 
     def test_ai_string_boolean_mismatched_id_and_truncation_never_approve(self):
         original = httpx.Client

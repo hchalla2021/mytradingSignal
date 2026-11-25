@@ -102,6 +102,38 @@ test('pre-open AI context is displayed as historical, not an entry approval', as
   assert.match(text(app.render()), /Historical bias:\s+NEUTRAL.*Not an entry approval/);
 });
 
+test('warmup shows the actual blocker and no fabricated zero rule score', async () => {
+  const data = snapshot();
+  data.signals.NIFTY = { decision: 'WAIT',
+    reason: 'Waiting for first completed 1h candles; latest required close 10:15 IST.',
+    score: 0, checks: [], timeframes: {}, fvgs: [], setup: null };
+  const app = harness(async url => url.endsWith('/status') ? response(data) : live(true));
+  await flush();
+  const analysis = elements(app.render()).find(node =>
+    node.type === 'div' && [node.props?.children].flat(Infinity).some(child =>
+      child?.type === 'h3' && text(child).trim() === 'AI ANALYSIS (Claude)'));
+  assert.match(text(analysis), /first completed 1h.*10:15 IST/);
+  assert.match(text(app.render()), /--\s*\/100.*Not evaluated/);
+  assert.doesNotMatch(text(app.render()), /0\s*\/100/);
+  data.signals.NIFTY.evaluation = 'DIAGNOSTIC';
+  data.signals.NIFTY.checks = [{ label: 'No matching setup', passed: false, status: 'FAIL' }];
+  app.intervals.find(timer => timer.delay === 3000).fn();
+  await flush();
+  assert.match(text(app.render()), /0\s*\/100.*Not win probability/);
+});
+
+test('waiting FVG rules remain visible without fabricating a confluence score', async () => {
+  const data = snapshot();
+  data.signals.NIFTY = { decision: 'WAIT', reason: 'No same-day FVG', score: 0,
+    evaluation: 'WAITING_FVG', checks: [{ label: 'Valid 5m displacement FVG', passed: false,
+      status: 'WAIT', detail: 'No same-day FVG' }], timeframes: {}, fvgs: [], setup: null };
+  const app = harness(async url => url.endsWith('/status') ? response(data) : live(true));
+  await flush();
+  assert.match(text(app.render()), /Valid 5m displacement FVG.*waiting/);
+  assert.match(text(app.render()), /--\s*\/100.*Not evaluated/);
+  assert.doesNotMatch(text(app.render()), /0\s*\/100/);
+});
+
 test('single ON/OFF toggle works independently when candle snapshots are unavailable', async () => {
   let enabled = false;
   const writes = [];

@@ -14,11 +14,14 @@ type Risk = {
 type Draft = Record<keyof Risk, string>;
 type Signal = {
   decision: string; reason: string; score: number; execution?: string;
-  checks: { label: string; passed: boolean }[];
+  evaluation?: 'INCOMPLETE' | 'WAITING_FVG' | 'DIAGNOSTIC' | 'QUALIFIED';
+  checks: { label: string; passed: boolean; status?: 'PASS' | 'FAIL' | 'WAIT'; detail?: string }[];
   timeframes: Record<string, { candles: number; bias: string; last_at: string | null;
     fvgs?: { side: string; lower: number; upper: number; state: string; confirmed_at: string }[] }>;
   fvgs: { id: string; side: string; lower: number; upper: number; state: string; confirmed_at: string }[];
   setup: { side: string; underlying_entry: number; underlying_stop: number; structural_rr: number; liquidity_target: number } | null;
+  diagnostic?: { side: string; underlying_entry: number; underlying_stop: number;
+    structural_rr: number; liquidity_target: number } | null;
   contract?: { symbol: string; strike: number; expiry: string; ask: number; bid: number; ltp: number; lot_size: number };
   ai?: { approved: boolean; reason: string; at: string };
   preopen_ai?: { status: string; session_date: string; at: string; bias?: 'CE' | 'PE' | 'NEUTRAL';
@@ -232,7 +235,8 @@ export default function SMCApexSection() {
   const entry = active?.entry;
   const initialRisk = entry != null && active?.initial_stop != null ? entry - active.initial_stop : null;
   const target = (multiple: number) => entry != null && initialRisk != null ? entry + multiple * initialRisk : null;
-  const score = signal?.score || 0;
+  const evaluated = !stale && signal?.evaluation === 'QUALIFIED' || !stale && signal?.evaluation === 'DIAGNOSTIC';
+  const score = evaluated ? signal?.score || 0 : 0;
   const direction = active ? `BUY ${active.side}` : signal?.setup ? signal.decision : 'WAIT';
   const entryBlocker = liveState === true ? liveBlockers.join(' ') : '';
   const selectedQuote = status?.indices[symbol];
@@ -333,7 +337,7 @@ export default function SMCApexSection() {
           <svg viewBox="0 0 80 80" className="h-14 w-14 -rotate-90" aria-hidden="true">
             <circle cx="40" cy="40" r="32" fill="none" stroke="#14352e" strokeWidth="9" />
             <circle cx="40" cy="40" r="32" fill="none" stroke="#00ed77" strokeWidth="9" strokeDasharray={`${score * 2.01} 201`} strokeLinecap="round" />
-          </svg><div className="text-[10px] text-slate-300">Rule confluence<div className="text-xl font-black text-white">{score}/100</div><div>Not win probability</div></div>
+          </svg><div className="text-[10px] text-slate-300">Rule confluence<div className="text-xl font-black text-white">{evaluated ? score : '--'}/100</div><div>{evaluated ? 'Not win probability' : 'Not evaluated'}</div></div>
         </div>
       </div>
     </div>
@@ -368,9 +372,12 @@ export default function SMCApexSection() {
     </div>
     <div className="grid gap-3 xl:grid-cols-[1.15fr_1fr_1.15fr]">
       <div className={`${panel} p-4`}><h3 className="mb-3 flex items-center gap-2 font-black"><Cpu className="text-orange-400" />AI ANALYSIS (Claude)</h3>
-        {signal?.checks.length ? signal.checks.map(check => <div key={check.label} className="mb-2 flex gap-2 text-xs">
-          {check.passed ? <CheckCircle2 size={18} className="shrink-0 text-lime-400" /> : <Circle size={18} className="shrink-0 text-slate-600" />}{check.label}
-        </div>) : <p className="text-sm text-slate-400">Collecting real, completed candles. No invented FVGs or approvals.</p>}
+        {signal?.checks.length ? signal.checks.map(check => <div key={check.label} className="mb-2 flex gap-2 text-xs"
+          title={check.detail || undefined}>
+          {check.passed ? <CheckCircle2 size={18} className="shrink-0 text-lime-400" /> : <Circle size={18}
+            className={`shrink-0 ${check.status === 'WAIT' ? 'text-amber-500' : 'text-slate-600'}`} />}
+          <span>{check.label}{check.status === 'WAIT' ? ' · waiting' : ''}</span>
+        </div>) : <p className="text-sm text-slate-400">{signal?.reason || 'Collecting real, completed candles. No invented FVGs or approvals.'}</p>}
         <p className="mt-3 text-xs text-orange-200">{signal?.ai?.reason || 'Live setup AI is called only after deterministic rules and fresh depth qualify.'}</p>
         {signal?.preopen_ai && <div className="mt-3 rounded-lg border border-cyan-800 p-2 text-xs text-slate-300">
           <div className="font-bold text-cyan-200">Pre-open AI · {signal.preopen_ai.session_date} · {signal.preopen_ai.status}</div>
@@ -384,9 +391,9 @@ export default function SMCApexSection() {
           [selectedLive ? 'Underlying (live)' : selectedQuote?.last_close ? 'Underlying (last close)' : 'Underlying (not live)',
             `${symbol} ${fmt(selectedPrice)}${!selectedLive && selectedQuote?.last_close ? ` · ${selectedQuote.last_close.session_date}` : ''}`],
           ['Option contract', active?.contract || contract?.symbol || '--'],
-          ['Entry premium', fmt(entry)], ['Structural invalidation', fmt(active?.setup?.underlying_stop ?? signal?.setup?.underlying_stop)],
-          ['Known liquidity target', fmt(active?.setup?.liquidity_target ?? signal?.setup?.liquidity_target)],
-          ['Structural R:R', (active?.setup?.structural_rr ?? signal?.setup?.structural_rr) != null ? `1 : ${active?.setup?.structural_rr ?? signal?.setup?.structural_rr}` : '--'],
+          ['Entry premium', fmt(entry)], ['Structural invalidation', fmt(active?.setup?.underlying_stop ?? signal?.setup?.underlying_stop ?? signal?.diagnostic?.underlying_stop)],
+          ['Known liquidity target', fmt(active?.setup?.liquidity_target ?? signal?.setup?.liquidity_target ?? signal?.diagnostic?.liquidity_target)],
+          ['Structural R:R', (active?.setup?.structural_rr ?? signal?.setup?.structural_rr ?? signal?.diagnostic?.structural_rr) != null ? `1 : ${active?.setup?.structural_rr ?? signal?.setup?.structural_rr ?? signal?.diagnostic?.structural_rr}` : '--'],
           ['Bid / Ask', `${fmt(contract?.bid)} / ${fmt(contract?.ask)}`],
           ['Futures displayed bid fraction', signal?.depth ? `${fmt(signal.depth.displayed_bid_fraction * 100)}%` : '--'],
           ['Owned quantity', active ? `${active.filled} / ${active.quantity}` : '--'],
