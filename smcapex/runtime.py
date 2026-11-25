@@ -108,6 +108,10 @@ class Runtime:
         with self.connection_lock:
             self.connection_errors.pop(stage, None)
 
+    def connection_warning(self, stage: str, reason: str):
+        with self.connection_lock:
+            self.connection_errors[stage] = reason
+
     def connection_warnings(self) -> list[str]:
         with self.connection_lock:
             return list(self.connection_errors.values())
@@ -190,6 +194,41 @@ class Runtime:
                 if tick is None or (now - tick["received"]).total_seconds() > 10:
                     stale.append(f"{symbol} {kind}")
         return stale
+
+    def refresh_spot_rest_fallback(self, now: datetime) -> list[str]:
+        if self.kite is None:
+            return []
+        keys = {
+            "NIFTY": "NSE:NIFTY 50",
+            "BANKNIFTY": "NSE:NIFTY BANK",
+            "SENSEX": "BSE:SENSEX",
+        }
+        received = []
+        try:
+            quotes = self.kite.quote([keys[symbol] for symbol in SYMBOLS])
+        except Exception as exc:
+            return [f"Zerodha REST spot refresh failed: {type(exc).__name__}"]
+        for symbol in SYMBOLS:
+            raw = quotes.get(keys[symbol])
+            if not isinstance(raw, dict):
+                continue
+            price = float(raw.get("last_price") or 0)
+            if not isfinite(price) or price <= 0:
+                continue
+            packet = {
+                "instrument_token": next(
+                    (token for token, resolved in self.tokens.items()
+                     if resolved == (symbol, "spot")), 0),
+                "last_price": price,
+                "exchange_timestamp": raw.get("exchange_timestamp"),
+                "depth": raw.get("depth") or {},
+                "ohlc": raw.get("ohlc") or {},
+                "volume_traded": raw.get("volume_traded") or 0,
+            }
+            if packet["instrument_token"]:
+                self.ingest(now, [packet])
+                received.append(symbol)
+        return [] if received else ["Zerodha REST returned no valid spot quotes"]
 
     def history(self, now: datetime):
         if self.kite is None:
@@ -590,6 +629,9 @@ class Runtime:
                     self.next_connection = monotonic() + 5
                     if self.socket:
                         self.socket.close()
+                    rest_warning = self.refresh_spot_rest_fallback(now)
+                    if rest_warning:
+                        self.connection_warning("rest", rest_warning[0])
                 for symbol, row in list(self.building.items()):
                     if row["at"] + timedelta(minutes=1, seconds=5) <= now:
                         self.finish_candle(symbol, row)

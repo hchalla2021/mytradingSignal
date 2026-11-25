@@ -690,6 +690,22 @@ class PersistenceAndAPITests(unittest.TestCase):
         self.assertEqual(stale, ["NIFTY future"])
         self.assertFalse(self.runtime.executor.enabled)
 
+    def test_rest_spot_fallback_updates_spot_only_and_never_synthesizes_candles(self):
+        self.runtime.kite = Mock()
+        self.runtime.tokens = {256265: ("NIFTY", "spot"), 260105: ("BANKNIFTY", "spot"),
+                               1: ("SENSEX", "spot")}
+        self.runtime.kite.quote.return_value = {
+            "NSE:NIFTY 50": {"last_price": 25777, "ohlc": {"close": 25349}},
+            "NSE:NIFTY BANK": {"last_price": 63615, "ohlc": {"close": 62585}},
+            "BSE:SENSEX": {"last_price": 83914, "ohlc": {"close": 82435}},
+        }
+        before = dict(self.runtime.building)
+        warnings = self.runtime.refresh_spot_rest_fallback(NOW)
+        self.assertEqual(warnings, [])
+        self.assertEqual(self.runtime.ticks[("NIFTY", "spot")]["price"], 25777)
+        self.assertEqual(self.runtime.ticks[("BANKNIFTY", "spot")]["timestamp_source"], "RECEIPT")
+        self.assertEqual(self.runtime.building, before)
+
     def test_candle_memory_persists_and_live_intent_is_not_a_saved_setting(self):
         rows = gap_rows()
         self.runtime.store.candles("NIFTY", "1", rows)
