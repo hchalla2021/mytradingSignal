@@ -93,6 +93,22 @@ class ExecutionHistoryTests(unittest.TestCase):
         bootstrap_executions(db, {"execution_history_version": 1})
         db.execute.assert_not_called()
 
+    def test_legacy_migration_accepts_every_owned_strategy_intent_tag(self):
+        proposal = dict(symbol="NIFTY", contract=trade()["contract"], strategy="timeframe_alignment",
+                        entry=dict(quantity=15))
+        for prefix in ("QEP", "QEI", "XEA", "EAI"):
+            with self.subTest(prefix=prefix):
+                self.live.save("ENTRY_INTENT", proposal=proposal, tag=prefix + "0123456789abcE")
+                self.live.save("ENTRY_UNFILLED", status="REJECTED", reason="fixture")
+                self.live.save("ENTRY_FINISHED")
+        self.live.state.pop("execution_history_version")
+        self.live.save("LEGACY_STRATEGY_TAG_FIXTURE")
+        self.live.release_owner()
+        self.live.initialize()
+        rows = {row["id"]: row for row in read_executions(self.path, limit=100)["rows"]}
+        for prefix in ("QEP", "QEI", "XEA", "EAI"):
+            self.assertEqual(rows[prefix + "0123456789abc"]["status"], "REJECTED")
+
     def test_original_entry_context_is_detached_and_shadow_is_not_an_entry_engine(self):
         signal = dict(decision="BUY CE", reasons=["Quick scalp: obsolete tier", "RSI 65; volume 2.0x"],
                       confidence=80, engines=[

@@ -1,6 +1,6 @@
 """Anthropic Messages API client for AUTONOMIQ PRO with USD budget, retry and circuit-breaker controls.
 
-The API key is read from backend/.env (AUTONOMIQ_PRO_ANTHROPIC_API_KEY) and is never
+The API key is read from backend/.env (ANTHROPIC_API_KEY) and is never
 logged, persisted, or returned to the browser.
 """
 

@@ -248,8 +248,7 @@ export default function OpeningEdgeSection() {
       await refresh();
     }
   };
-  const controlKnown = !!snapshot && typeof snapshot.automation_on === 'boolean'
-    && (snapshot.execution_status === 'READY' || snapshot.execution_status === 'LOCKED');
+  const controlKnown = !!snapshot && typeof snapshot.automation_on === 'boolean';
   const feedConnected = snapshot?.feed_enabled && snapshot.feed_status === 'connected';
   const feedLabel = !snapshot ? 'Unavailable' : !snapshot.feed_enabled ? 'Off'
     : feedConnected ? 'Connected' : snapshot.feed_status === 'starting' || snapshot.feed_status === 'connecting'
@@ -265,7 +264,7 @@ export default function OpeningEdgeSection() {
           <button type="button" className={`${styles.tradeControl} ${controlKnown && snapshot?.automation_on ? styles.tradeControlOn : ''}`}
             role={controlKnown ? 'switch' : undefined} aria-checked={controlKnown ? snapshot?.automation_on : undefined}
             aria-label={`OpeningEdge master trade approval ${controlKnown ? snapshot?.automation_on ? 'ON' : 'OFF' : 'unknown'}`}
-            disabled={busy || !controlKnown}
+            disabled={busy}
             onClick={() => void toggleTrade(!snapshot?.automation_on)}>
             <span>MASTER TRADE</span><span className={styles.switchTrack}><span /></span>
             <strong>{busy ? '…' : !controlKnown ? '—' : snapshot?.automation_on ? 'ON' : 'OFF'}</strong>

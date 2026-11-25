@@ -1,5 +1,5 @@
 # 🔭 Weekly Strategy Performance Summary
-*Auto-generated — covers last 3 trading day(s)*
+*Auto-generated — covers last 4 trading day(s)*
 
 ## Strategy Rankings (Confidence-Weighted Accuracy)
 
@@ -22,6 +22,7 @@ No dominant strategy yet (best: 0% weighted). Wait for confluence from: **Error 
 
 | Date | NIFTY | BANKNIFTY | SENSEX |
 |------|-------|-----------|--------|
+| 2026-11-25 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
 | 2026-11-24 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
 | 2026-11-23 | 📉 -0.52% (MILD_DOWN) | 📉 -0.97% (MILD_DOWN) | 📉 -0.54% (MILD_DOWN) |
 | 2026-11-19 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |

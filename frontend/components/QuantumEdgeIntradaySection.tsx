@@ -363,7 +363,7 @@ export default function QuantumEdgeIntradaySection({
         <span className="qe-live-chip"><i /> AUTO {snapshot?.enabled ? 'LIVE' : 'OFF'}</span>
         <div className="qe-master">
           <b>MASTER TRADE</b>
-          <Switch checked={snapshot?.enabled ?? false} disabled={busy || !snapshot || stale}
+          <Switch checked={snapshot?.enabled ?? false} disabled={busy}
             label="QuantumEdge master auto live" onChange={enabled => void apply('approval', { enabled })} />
           <strong>{snapshot?.enabled ? 'ON' : 'OFF'}</strong>
         </div>

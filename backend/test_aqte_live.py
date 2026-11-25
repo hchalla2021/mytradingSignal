@@ -43,30 +43,28 @@ class StaticIPModeTests(unittest.TestCase):
     def tearDown(self):
         app_config.get_settings.cache_clear()
 
-    def test_local_and_production_select_separate_broker_egress_ips(self):
+    def test_one_static_ip_is_used_in_both_deployment_modes(self):
         values = {
-            "AQTE_LIVE_STATIC_IP": "legacy-ip",
-            "AQTE_LIVE_LOCAL_STATIC_IP": "122.177.241.68",
-            "AQTE_LIVE_PRODUCTION_STATIC_IP": "159.65.147.167",
+            "LIVE_STATIC_IP": "159.65.147.167",
             "ZERODHA_ACCESS_TOKEN": "token",
         }
-        for mode, expected in (("local", values["AQTE_LIVE_LOCAL_STATIC_IP"]),
-                               ("production", values["AQTE_LIVE_PRODUCTION_STATIC_IP"])):
+        for mode in ("local", "production"):
             with self.subTest(mode=mode), \
                     patch.object(app_config, "dotenv_values", return_value={
                         **values, "AQTE_LIVE_DEPLOYMENT_MODE": mode,
                     }), patch.dict(os.environ, {}, clear=True):
                 app_config.get_settings.cache_clear()
-                self.assertEqual(app_config.get_settings().aqte_live_static_ip, expected)
+                self.assertEqual(app_config.get_settings().aqte_live_static_ip,
+                                 "159.65.147.167")
 
-    def test_production_uses_measured_egress_default_without_local_ip_fallback(self):
+    def test_production_requires_explicit_static_ip_without_local_fallback(self):
+        app_config.get_settings.cache_clear()
         with patch.object(app_config, "dotenv_values", return_value={
                 "AQTE_LIVE_DEPLOYMENT_MODE": "production",
         }), patch.dict(os.environ, {}, clear=True):
             app_config.get_settings.cache_clear()
             settings = app_config.get_settings()
-        self.assertEqual(settings.aqte_live_static_ip, "159.65.147.167")
-        self.assertEqual(settings.aqte_live_production_static_ip, "159.65.147.167")
+        self.assertEqual(settings.aqte_live_static_ip, "")
 
 
 class LiveTests(unittest.TestCase):
@@ -332,7 +330,7 @@ class LiveTests(unittest.TestCase):
 
     def test_default_configuration_blocks_live_before_network(self):
         self.cfg.aqte_live_enabled = False
-        with self.assertRaisesRegex(LiveBlocked, "AQTE_LIVE_ENABLED"):
+        with self.assertRaisesRegex(LiveBlocked, "LIVE_TRADE_ENABLED"):
             self.live.preflight()
         self.ip.assert_not_called()
         self.broker.place_order.assert_not_called()
@@ -790,7 +788,7 @@ class LiveTests(unittest.TestCase):
 
     def test_expiryedge_ai_stays_off_without_its_independent_live_flag(self):
         self.assertFalse(self.live.expiryedge_ai_enabled())
-        with self.assertRaisesRegex(LiveBlocked, "EXPIRYEDGE_AI_LIVE_ENABLED"):
+        with self.assertRaisesRegex(LiveBlocked, "LIVE_TRADE_ENABLED"):
             self.live.set_expiryedge_ai_enabled(True)
         self.assertFalse(self.live.expiryedge_ai_enabled())
 
@@ -817,7 +815,7 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.live.status()["entry_blocks"]["NIFTY"], "Index auto trading disabled")
         self.live.state["daily_controls"]["NIFTY"]["enabled"] = True
         self.cfg.aqte_live_static_ip = "invalid"
-        self.assertIn("AQTE_LIVE_STATIC_IP", self.live.status()["entry_blocks"]["NIFTY"])
+        self.assertIn("LIVE_STATIC_IP", self.live.status()["entry_blocks"]["NIFTY"])
         self.assertEqual(self.broker.mock_calls, [])
 
     def test_real_indicators_through_live_entry_protection_and_target_for_each_scalp_tier(self):

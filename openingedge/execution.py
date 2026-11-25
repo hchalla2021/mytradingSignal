@@ -52,7 +52,7 @@ class Execution:
 
     def enabled(self):
         values = self._values()
-        global_enabled = values.get("TRADE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        global_enabled = (values.get("LIVE_TRADE_ENABLED") or "false").lower() in {"1", "true", "yes", "on"}
         configured = values.get("OPENINGEDGE_LIVE_ENABLED", "inherit").lower()
         if configured == "inherit":
             return global_enabled
@@ -70,8 +70,6 @@ class Execution:
 
     def set_automation(self, enabled, now=None):
         with self.lock:
-            if enabled and LIVE_EXECUTION_READY:
-                self._preflight_new_entries(now or self.market.clock())
             self.automation_on = bool(enabled)
             self.error = None
             self.generated_at = time.time()

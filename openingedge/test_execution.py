@@ -61,7 +61,7 @@ def execution(tmp_path, monkeypatch):
         store.save_index(symbol, 1, 1500)
     store.save_daily_loss(3000)
     env = tmp_path / "backend.env"
-    env.write_text("TRADE_ENABLED=true\n", encoding="utf-8")
+    env.write_text("LIVE_TRADE_ENABLED=true\n", encoding="utf-8")
     now = datetime(2026, 11, 23, 9, 16, tzinfo=main.IST)
     market = main.Market(lambda: now)
     market.state = "connected"
@@ -119,7 +119,7 @@ def test_owner_on_enters_once_and_off_preserves_owned_position(execution, monkey
 
 def test_unverified_execution_allows_approval_but_never_places_orders(execution):
     engine, store, market = execution
-    engine.env_file.write_text("TRADE_ENABLED=false\n", encoding="utf-8")
+    engine.env_file.write_text("LIVE_TRADE_ENABLED=false\n", encoding="utf-8")
     approve(store, market)
     state = engine.set_automation(True)
     assert state["automation_on"] is True

@@ -75,10 +75,11 @@ async def control_status():
     current = service()
     cfg = credentials()
     blockers = []
-    if cfg.get("SMCAPEX_LIVE_ENABLED", "").lower() != "true":
-        blockers.append("Live order permission is disabled: set SMCAPEX_LIVE_ENABLED=true.")
-    if not cfg.get("SMCAPEX_AI_MODEL"):
-        blockers.append("Set SMCAPEX_AI_MODEL for Claude approval.")
+    live_enabled = cfg.get("LIVE_TRADE_ENABLED", "").lower() == "true"
+    if not live_enabled:
+        blockers.append("Live order permission is disabled: set LIVE_TRADE_ENABLED=true.")
+    if not cfg.get("AI_MODEL"):
+        blockers.append("Set AI_MODEL for Claude approval.")
     if not anthropic_key(cfg):
         blockers.append("Anthropic approval key unavailable.")
     missing = [symbol for symbol in SYMBOLS if symbol not in current.configured_indices]

@@ -165,13 +165,13 @@ class QuantumEdgeIntradayService:
 
     @staticmethod
     def enabled() -> bool:
-        return os.getenv("QUANTUMEDGE_AI_ENABLED", "true").strip().lower() in {
+        return (os.getenv("AI_ENABLED") or "true").strip().lower() in {
             "1", "true", "yes", "on",
         }
 
     @staticmethod
     def model() -> str:
-        return os.getenv("QUANTUMEDGE_AI_MODEL", "claude-haiku-5-5").strip()
+        return (os.getenv("AI_MODEL") or "claude-haiku-5-5").strip()
 
     @staticmethod
     def advanced_strike_selection_enabled() -> bool:
@@ -595,8 +595,7 @@ class QuantumEdgeIntradayService:
                 self.ai_busy = False
 
     def _call_ai(self, candidate: dict[str, Any]) -> dict[str, Any]:
-        key = (os.getenv("QUANTUMEDGE_AI_ANTHROPIC_API_KEY")
-               or os.getenv("AUTONOMIQ_PRO_ANTHROPIC_API_KEY") or "").strip()
+        key = os.getenv("ANTHROPIC_API_KEY", "").strip()
         if not key or not self.enabled():
             reason = "QuantumEdge AI is not configured or enabled"
             return {"approved": False, "state": "AI_UNAVAILABLE", "reason": reason, "attempted": False}
@@ -607,9 +606,9 @@ class QuantumEdgeIntradayService:
             month = today[:7]
             if self.ai_month != month:
                 self.ai_month, self.ai_month_cost_usd = month, 0.0
-            daily = float(os.getenv("QUANTUMEDGE_AI_DAILY_BUDGET_USD", "2.5"))
-            monthly = float(os.getenv("QUANTUMEDGE_AI_MONTHLY_BUDGET_USD", "50"))
-        maximum_tokens = max(128, min(int(os.getenv("QUANTUMEDGE_AI_MAX_OUTPUT_TOKENS", "256")), 1000))
+            daily = float(os.getenv("AI_DAILY_BUDGET_USD") or "2.5")
+            monthly = float(os.getenv("AI_MONTHLY_BUDGET_USD") or "50")
+        maximum_tokens = max(128, min(int(os.getenv("AI_MAX_OUTPUT_TOKENS") or "256"), 1000))
         if self.ai_cost_usd + maximum_tokens * 0.5 / 1_000_000 > daily:
             return {"approved": False, "state": "AI_UNAVAILABLE", "reason": "Daily AI budget exhausted",
                     "attempted": False}
@@ -645,7 +644,7 @@ class QuantumEdgeIntradayService:
             response = httpx.post(API_URL, headers={
                 "x-api-key": key, "anthropic-version": "2026-10-21" if fast_review else "2023-06-01",
                 "content-type": "application/json",
-            }, json=body, timeout=float(os.getenv("QUANTUMEDGE_AI_TIMEOUT_SECONDS", "12")))
+            }, json=body, timeout=float(os.getenv("AI_TIMEOUT_SECONDS") or "12"))
         except httpx.TimeoutException:
             return self._review_error("Claude review timed out")
         except httpx.TransportError:

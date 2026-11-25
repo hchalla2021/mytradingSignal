@@ -738,7 +738,7 @@ only for a backend host that actually egresses through that address. A DigitalOc
 droplet may have a different outbound IP from a local workstation; verify on the
 deployment host. No machine network configuration, broker allowlist, environment
 secrets or order permissions are changed by recording this address. For the
-DigitalOcean deployment, set `AQTE_LIVE_STATIC_IP` to the droplet's measured outbound
+DigitalOcean deployment, set `LIVE_STATIC_IP` to the droplet's measured outbound
 IPv4 and add that address to Kite as well (see **Production checklist** below).
 
 ### APIs
@@ -1104,7 +1104,7 @@ submit orders.
 
 ```dotenv
 AQTE_LIVE_ENABLED=false
-AQTE_LIVE_STATIC_IP=159.65.147.167
+LIVE_STATIC_IP=159.65.147.167
 AQTE_LIVE_ALLOW_UNVALIDATED_RULES=false
 AQTE_LIVE_RISK_PER_TRADE=1000
 AQTE_LIVE_DAILY_LOSS=2000
@@ -1197,11 +1197,11 @@ spot and option data, owner/broker authentication, and all execution gates.
 2. **Server runtime env file** (never uploaded by the deploy scripts): production
    `FRONTEND_URL`, `REDIRECT_URL` and `CORS_ORIGINS`; `APP_ACCESS_USERNAME` and
    `APP_ACCESS_PASSWORD_HASH`; `AQTE_LIVE_ENABLED=true`,
-   `AQTE_LIVE_STATIC_IP=<droplet IPv4>`, `FORCE_OUTBOUND_IPV4=true`; no proxy variables.
+   `LIVE_STATIC_IP=<droplet IPv4>`, `FORCE_OUTBOUND_IPV4=true`; no proxy variables.
    Set `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` only
    if you accept unvalidated real-money entries; otherwise ON only scans.
 3. **Verify egress** on the server: `curl -4 https://api.ipify.org` must print the
-   same IPv4 as `AQTE_LIVE_STATIC_IP`. `bash scripts/check-production-env.sh` reports
+   same IPv4 as `LIVE_STATIC_IP`. `bash scripts/check-production-env.sh` reports
    localhost URLs, live enablement and IP mismatches without printing secrets.
 4. **Deploy:** `scripts/deploy-to-do.ps1 <droplet-ip>` uploads a checked source archive
    that excludes `.env*`, the Kite token and runtime data, and `deploy_digitalocean.sh`

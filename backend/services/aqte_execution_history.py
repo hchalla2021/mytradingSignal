@@ -137,7 +137,7 @@ def bootstrap_executions(db, state, *, force=False):
             if pending:
                 save_execution(db, pending, at, replace=False)
             proposal, tag = data["proposal"], data["tag"]
-            if not re.fullmatch(r"(?:[0-9a-f]{16}|EAI[0-9a-f]{13})E", tag):
+            if not re.fullmatch(r"(?:[0-9a-f]{16}|(?:QEP|QEI|XEA|EAI)[0-9a-f]{13})E", tag):
                 raise ValueError("Invalid execution intent tag in AQTE journal")
             pending = dict(id=tag[:-1], symbol=proposal["symbol"], contract=proposal["contract"],
                            strategy=proposal.get("strategy"), execution_context=proposal.get("execution_context"),

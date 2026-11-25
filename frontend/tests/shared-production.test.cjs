@@ -28,8 +28,6 @@ const shared = {
   NODE_ENV: 'development', NEXT_PUBLIC_SHARED_PRODUCTION: 'true',
   NEXT_PUBLIC_API_URL: 'http://localhost:8000',
   NEXT_PUBLIC_WS_URL: 'ws://localhost:8000/ws/market',
-  NEXT_PUBLIC_LOCAL_API_URL: 'http://localhost:8000',
-  NEXT_PUBLIC_LOCAL_WS_URL: 'ws://localhost:8000/ws/market',
 };
 
 test('shared mode routes API, auth and every derived feed through the current frontend origin', () => {

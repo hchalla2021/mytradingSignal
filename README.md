@@ -563,7 +563,7 @@ it uploads a checked source archive of this repository (excluding `.env*`, the K
 runtime data, dependencies and build output, so server settings are never overwritten),
 then runs the remote commands with Bash. Both scripts run `scripts/check-production-env.sh`
 on the server first: localhost URLs fail the deploy; missing AQTE approvals or an outbound
-IPv4 that differs from `AQTE_LIVE_STATIC_IP` are reported without printing secrets.
+IPv4 that differs from `LIVE_STATIC_IP` are reported without printing secrets.
 See the AQTE [production checklist](docs/AQTE.md#production-checklist-digitalocean).
 Windows PowerShell logging stays ASCII and uploaded shell line endings are normalized
 before execution. Deployment regression checks (mocked commands; no server access):

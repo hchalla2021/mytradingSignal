@@ -58,6 +58,36 @@ if (-not $apexReady) {
     exit 1
 }
 
+# Independent OpeningEdge process; it owns its own feed, state and live approval.
+$openingRunning = Get-NetTCPConnection -LocalPort 8012 -State Listen -ErrorAction SilentlyContinue
+if ($openingRunning) {
+    Write-Host "OpeningEdge already listening on port 8012; leaving it untouched." -ForegroundColor Yellow
+} else {
+    Write-Host "Starting independent OpeningEdge (Port 8012)..." -ForegroundColor Green
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$rootDir'; & '$rootDir\.venv\Scripts\python.exe' -m uvicorn openingedge.main:app --host 127.0.0.1 --port 8012 --workers 1"
+}
+
+$openingReady = $false
+$openingFailure = 'No healthy OpeningEdge response received.'
+for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    try {
+        $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8012/health' -TimeoutSec 2
+        if ($health.status -eq 'healthy') {
+            $openingReady = $true
+            Write-Host "OpeningEdge worker ready; live approval remains owner-controlled." -ForegroundColor Green
+            break
+        }
+        $openingFailure = 'Port 8012 returned an unexpected service.'
+    } catch {
+        $openingFailure = $_.Exception.Message
+    }
+    Start-Sleep -Seconds 1
+}
+if (-not $openingReady) {
+    Write-Error "OpeningEdge startup failed: $openingFailure Check the OpeningEdge terminal."
+    exit 1
+}
+
 # Check if frontend is already running
 $frontendRunning = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
 if ($frontendRunning) {
@@ -75,6 +105,7 @@ Write-Host "  ✅ Application Started Successfully!" -ForegroundColor Green
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "📊 Backend:  http://127.0.0.1:8000/docs" -ForegroundColor White
+Write-Host "OpeningEdge: http://127.0.0.1:8012/health" -ForegroundColor White
 Write-Host "SMC Apex: http://127.0.0.1:8014/health" -ForegroundColor White
 Write-Host "🌐 Frontend: http://localhost:3000" -ForegroundColor White
 Write-Host ""

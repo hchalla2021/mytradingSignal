@@ -9,8 +9,7 @@ from urllib.request import Request, urlopen
 logger = logging.getLogger("openingedge.ai")
 API_URL = "https://api.anthropic.com/v1/messages"
 ENV_KEYS = {
-    "QUANTUMEDGE_AI_ENABLED", "QUANTUMEDGE_AI_MODEL", "QUANTUMEDGE_AI_ANTHROPIC_API_KEY",
-    "AUTONOMIQ_PRO_ANTHROPIC_API_KEY", "QUANTUMEDGE_AI_MAX_OUTPUT_TOKENS", "QUANTUMEDGE_AI_TIMEOUT_SECONDS",
+    "ANTHROPIC_API_KEY", "AI_ENABLED", "AI_MODEL", "AI_MAX_OUTPUT_TOKENS", "AI_TIMEOUT_SECONDS",
 }
 
 
@@ -26,9 +25,9 @@ def load_config(path):
     for key in ENV_KEYS:
         if key in os.environ:
             values[key] = os.environ[key]
-    enabled = values.get("QUANTUMEDGE_AI_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
-    key = (values.get("QUANTUMEDGE_AI_ANTHROPIC_API_KEY") or values.get("AUTONOMIQ_PRO_ANTHROPIC_API_KEY") or "").strip()
-    model = values.get("QUANTUMEDGE_AI_MODEL", "claude-haiku-5-5").strip()
+    enabled = (values.get("AI_ENABLED") or "true").strip().lower() in {"1", "true", "yes", "on"}
+    key = values.get("ANTHROPIC_API_KEY", "").strip()
+    model = (values.get("AI_MODEL") or "claude-haiku-5-5").strip()
     if not enabled:
         return None, "Haiku is disabled in the backend environment."
     if not key:
@@ -36,8 +35,8 @@ def load_config(path):
     if not model.startswith("claude-haiku-"):
         return None, "Configured AI model is not a Claude Haiku model."
     try:
-        tokens = int(values.get("QUANTUMEDGE_AI_MAX_OUTPUT_TOKENS", "256"))
-        timeout = float(values.get("QUANTUMEDGE_AI_TIMEOUT_SECONDS", "12"))
+        tokens = int(values.get("AI_MAX_OUTPUT_TOKENS") or "256")
+        timeout = float(values.get("AI_TIMEOUT_SECONDS") or "12")
     except ValueError:
         return None, "Haiku token or timeout setting is invalid."
     if not 128 <= tokens <= 1000 or not math.isfinite(timeout) or not 1 <= timeout <= 30:

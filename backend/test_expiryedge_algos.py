@@ -403,7 +403,7 @@ class ExpiryEdgeLaneTests(unittest.TestCase):
 
     def test_enable_refused_when_live_switch_is_off(self):
         self.cfg = settings(aqte_live_enabled=False)
-        with self.assertRaisesRegex(LiveBlocked, "AQTE_LIVE_ENABLED"):
+        with self.assertRaisesRegex(LiveBlocked, "LIVE_TRADE_ENABLED"):
             self.enable()
         self.assertFalse(self.live.state["expiryedge"]["algos"][ALGO])
 

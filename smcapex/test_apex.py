@@ -629,7 +629,9 @@ class PersistenceAndAPITests(unittest.TestCase):
         self.runtime.kite.place_order.assert_not_called()
         response = self.client.get("/api/trade-control", headers=self.headers("GET", "/api/trade-control"))
         self.assertTrue(response.json()["live"])
-        self.assertTrue(any("SMCAPEX_LIVE_ENABLED" in reason for reason in response.json()["block_reasons"]))
+        self.assertTrue(any(
+            "LIVE_TRADE_ENABLED" in reason
+            for reason in response.json()["block_reasons"]))
         self.runtime.executor.halted = "Unresolved owned order"
         self.assertEqual(self.put("/api/trade-control", {"enabled": True}).status_code, 409)
 
@@ -936,7 +938,7 @@ class PersistenceAndAPITests(unittest.TestCase):
 
     def test_ai_strict_matching_response_cached_once_and_no_model_fails_closed(self):
         signal = {"setup": {**SETUP, "id": "fixture"}, "checks": [], "daily": {}, "contract": {"symbol": "TEST26CE"}}
-        cfg = {"SMCAPEX_ANTHROPIC_API_KEY": "mock-only", "SMCAPEX_AI_MODEL": "mock-model"}
+        cfg = {"ANTHROPIC_API_KEY": "mock-only", "AI_MODEL": "mock-model"}
         requests = []
         def respond(req):
             requests.append(req)
@@ -957,21 +959,20 @@ class PersistenceAndAPITests(unittest.TestCase):
         with self.assertRaisesRegex(Blocked, "not configured"):
             self.runtime.ai("BANKNIFTY", signal, {}, {}, NOW + timedelta(minutes=6))
 
-    def test_ai_uses_existing_quantumedge_key_before_autonomiq_fallback(self):
+    def test_ai_uses_global_key_before_legacy_fallbacks(self):
         from smcapex.config import credentials
 
-        values = {"QUANTUMEDGE_AI_ANTHROPIC_API_KEY": "mock-quantum",
-                  "AUTONOMIQ_PRO_ANTHROPIC_API_KEY": "mock-autonomiq",
-                  "SMCAPEX_AI_MODEL": "mock-model"}
+        values = {"ANTHROPIC_API_KEY": "mock-global",
+                  "AI_MODEL": "mock-model"}
         with patch("smcapex.config.ENV_FILE") as env_file, \
                 patch("smcapex.config.dotenv_values", return_value=values), \
                 patch.dict("os.environ", {}, clear=True):
             env_file.is_file.return_value = True
             cfg = credentials()
-        self.assertEqual(cfg.get("QUANTUMEDGE_AI_ANTHROPIC_API_KEY"), "mock-quantum")
+        self.assertEqual(cfg.get("ANTHROPIC_API_KEY"), "mock-global")
         _, key, model = self.runtime.reserve_ai("quantum-fallback", cfg, NOW, {"status": "PENDING"})
-        self.assertEqual((key, model), ("mock-quantum", "mock-model"))
-        cfg["SMCAPEX_ANTHROPIC_API_KEY"] = "mock-dedicated"
+        self.assertEqual((key, model), ("mock-global", "mock-model"))
+        cfg["ANTHROPIC_API_KEY"] = "mock-dedicated"
         _, key, _ = self.runtime.reserve_ai(
             "dedicated", cfg, NOW + timedelta(minutes=6), {"status": "PENDING"})
         self.assertEqual(key, "mock-dedicated")
@@ -989,8 +990,8 @@ class PersistenceAndAPITests(unittest.TestCase):
             transport = httpx.MockTransport(lambda request, stop=stop, verdict=verdict: httpx.Response(
                 200, json={"stop_reason": stop, "content": [{"type": "text", "text": json.dumps(verdict)}]}))
             with patch("smcapex.runtime.httpx.Client", side_effect=lambda **kwargs: original(**kwargs, transport=transport)):
-                result = self.runtime.ai("NIFTY", signal, {}, {"SMCAPEX_ANTHROPIC_API_KEY": "mock",
-                    "SMCAPEX_AI_MODEL": "mock"}, now)
+                result = self.runtime.ai("NIFTY", signal, {}, {                "ANTHROPIC_API_KEY": "mock",
+                    "AI_MODEL": "mock"}, now)
             self.assertFalse(result["approved"])
 
 
@@ -1017,7 +1018,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
                                  "fvg": {"lower": 99, "upper": 99.8}}}
         self.verdict = {"approved": True, "reason": "Mock approval", "at": NOW.isoformat(),
                         "setup_id": SETUP["id"], "side": "CE", "contract": CONTRACT["tradingsymbol"]}
-        self.cfg = {"SMCAPEX_LIVE_ENABLED": "true"}
+        self.cfg = {"LIVE_TRADE_ENABLED": "true"}
 
     def tearDown(self):
         self.runtime.store.db.close()
@@ -1064,7 +1065,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
             self.runtime.store.candles(symbol, "1", candles)
             self.runtime.store.candles(symbol, "D", [Candle(start, 100, 110, 90, 105)])
         self.runtime.executor.enabled = True
-        cfg = {"SMCAPEX_ANTHROPIC_API_KEY": "mock", "SMCAPEX_AI_MODEL": "mock"}
+        cfg = {"ANTHROPIC_API_KEY": "mock", "AI_MODEL": "mock"}
         requests = []
         def respond(request):
             payload = json.loads(json.loads(request.content)["messages"][0]["content"])
@@ -1091,7 +1092,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
         candles = [Candle(start + timedelta(minutes=i), 100, 101, 99, 100) for i in range(150)]
         self.runtime.store.candles("NIFTY", "1", candles)
         self.runtime.store.candles("NIFTY", "D", [Candle(start, 100, 110, 90, 105)])
-        cfg = {"SMCAPEX_ANTHROPIC_API_KEY": "mock", "SMCAPEX_AI_MODEL": "mock"}
+        cfg = {"ANTHROPIC_API_KEY": "mock", "AI_MODEL": "mock"}
         requests = []
         def respond(request):
             requests.append(request)
@@ -1118,12 +1119,12 @@ class RuntimeIntegrationTests(unittest.TestCase):
             "session_date": "2026-11-24", "reason": "Pre-open AI request pending or interrupted."})
         with patch("smcapex.runtime.httpx.Client") as client:
             self.runtime.analyse(NOW.replace(hour=9, minute=10), {
-                "SMCAPEX_ANTHROPIC_API_KEY": "mock", "SMCAPEX_AI_MODEL": "mock"})
+                "ANTHROPIC_API_KEY": "mock", "AI_MODEL": "mock"})
         client.assert_not_called()
         self.assertEqual(self.runtime.signals["NIFTY"]["preopen_ai"]["status"], "PENDING")
 
     def test_live_ai_receives_only_same_day_completed_preopen_context(self):
-        cfg = {"SMCAPEX_ANTHROPIC_API_KEY": "mock", "SMCAPEX_AI_MODEL": "mock"}
+        cfg = {"ANTHROPIC_API_KEY": "mock", "AI_MODEL": "mock"}
         self.runtime.store.approve("preopen:2026-11-24:NIFTY", NOW.date().isoformat(), {
             "status": "COMPLETE", "session_date": NOW.date().isoformat(), "at": NOW.replace(hour=9, minute=0).isoformat(),
             "bias": "NEUTRAL", "summary": "Historical context", "risk_flags": ["Await fresh candles"],

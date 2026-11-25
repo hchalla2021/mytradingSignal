@@ -47,9 +47,9 @@ class QuantumEdgeAIReviewTests(unittest.TestCase):
         ]
         for stop_reason, text, state in cases:
             with self.subTest(stop_reason=stop_reason, text=text), mock.patch.dict(os.environ, {
-                "QUANTUMEDGE_AI_ANTHROPIC_API_KEY": "test-key", "QUANTUMEDGE_AI_ENABLED": "true",
-                "QUANTUMEDGE_AI_MODEL": "claude-haiku-5-5", "QUANTUMEDGE_AI_MAX_OUTPUT_TOKENS": "384",
-                "QUANTUMEDGE_AI_DAILY_BUDGET_USD": "2.5", "QUANTUMEDGE_AI_MONTHLY_BUDGET_USD": "50",
+                "ANTHROPIC_API_KEY": "test-key", "AI_ENABLED": "true",
+                "AI_MODEL": "claude-haiku-5-5", "AI_MAX_OUTPUT_TOKENS": "384",
+                "AI_DAILY_BUDGET_USD": "2.5", "AI_MONTHLY_BUDGET_USD": "50",
             }), mock.patch("services.quantumedge_intraday.httpx.post", return_value=httpx.Response(200, json={
                 "stop_reason": stop_reason, "content": [{"type": "text", "text": text}],
                 "usage": {"input_tokens": 70, "output_tokens": 40},
@@ -72,9 +72,9 @@ class QuantumEdgeAIReviewTests(unittest.TestCase):
 
     def test_budget_precheck_uses_the_same_clamped_output_cap_as_the_request(self):
         with mock.patch.dict(os.environ, {
-            "QUANTUMEDGE_AI_ANTHROPIC_API_KEY": "test-key", "QUANTUMEDGE_AI_ENABLED": "true",
-            "QUANTUMEDGE_AI_MAX_OUTPUT_TOKENS": "1", "QUANTUMEDGE_AI_DAILY_BUDGET_USD": "0.00005",
-            "QUANTUMEDGE_AI_MONTHLY_BUDGET_USD": "50",
+            "ANTHROPIC_API_KEY": "test-key", "AI_ENABLED": "true",
+            "AI_MAX_OUTPUT_TOKENS": "1", "AI_DAILY_BUDGET_USD": "0.00005",
+            "AI_MONTHLY_BUDGET_USD": "50",
         }), mock.patch("services.quantumedge_intraday.httpx.post") as post:
             result = QuantumEdgeIntradayService()._call_ai({"side": "CE"})
             self.assertEqual(result["reason"], "Daily AI budget exhausted")
@@ -572,10 +572,12 @@ class QuantumEdgeControlTests(unittest.TestCase):
         self.live.state["quantedge"]["enabled"] = True
         self.live.config_guard = mock.Mock()
         with mock.patch.dict(os.environ, {
-            "QUANTUMEDGE_DEPLOYMENT_MODE": "production",
-            "QUANTUMEDGE_ALLOW_LOCAL_LIVE": "false",
+            "LIVE_TRADE_ENABLED": "true",
+            "AQTE_LIVE_DEPLOYMENT_MODE": "production",
         }):
-            self.live.set_quantumedge_approval(True)
+            with mock.patch("config.get_settings", return_value=mock.Mock(
+                    aqte_live_enabled=True)):
+                self.live.set_quantumedge_approval(True)
         self.assertTrue(self.live.state["quantumedge"]["enabled"])
         self.assertTrue(self.live.state["quantedge"]["enabled"])
 
@@ -596,12 +598,11 @@ class QuantumEdgeControlTests(unittest.TestCase):
 
     def test_master_toggle_blocks_unsafe_local_deployment(self):
         self.live.config_guard = mock.Mock()
-        with mock.patch.dict(os.environ, {
-            "QUANTUMEDGE_DEPLOYMENT_MODE": "local",
-            "QUANTUMEDGE_ALLOW_LOCAL_LIVE": "false",
-        }):
-            with self.assertRaisesRegex(Exception, "explicit local live opt-in"):
-                self.live.set_quantumedge_approval(True)
+        with mock.patch.dict(os.environ, {"LIVE_TRADE_ENABLED": "false"}):
+            with mock.patch("config.get_settings", return_value=mock.Mock(
+                    aqte_live_enabled=False)):
+                with self.assertRaisesRegex(Exception, "LIVE_TRADE_ENABLED=true"):
+                    self.live.set_quantumedge_approval(True)
         self.assertFalse(self.live.state["quantumedge"]["enabled"])
 
     def test_square_off_only_accepts_quantumedge_owned_trade(self):

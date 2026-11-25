@@ -875,7 +875,8 @@ class AQTELiveService:
         cfg = self.settings()
         if not self.ready:
             raise LiveBlocked("Live journal is unavailable")
-        mode = (os.getenv("AQTE_LIVE_DEPLOYMENT_MODE") or "local").strip().lower()
+        mode = (os.getenv("LIVE_DEPLOYMENT_MODE")
+                or os.getenv("AQTE_LIVE_DEPLOYMENT_MODE") or "local").strip().lower()
         if mode == "production":
             local_urls = ("localhost", "127.0.0.1")
             configured_urls = (
@@ -889,7 +890,7 @@ class AQTELiveService:
                 raise LiveBlocked(
                     "Production broker execution requires non-local callback/origin URLs and DEBUG=false")
         if not cfg.aqte_live_enabled:
-            raise LiveBlocked("AQTE_LIVE_ENABLED is false in centralized backend settings")
+            raise LiveBlocked("LIVE_TRADE_ENABLED is false in centralized backend settings")
         if not cfg.force_outbound_ipv4:
             raise LiveBlocked("FORCE_OUTBOUND_IPV4 must be enabled")
         if any(os.getenv(name) for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",
@@ -898,7 +899,7 @@ class AQTELiveService:
         try:
             expected = ipaddress.IPv4Address(cfg.aqte_live_static_ip)
         except ipaddress.AddressValueError as exc:
-            raise LiveBlocked("AQTE_LIVE_STATIC_IP must be a valid public IPv4 address") from exc
+            raise LiveBlocked("LIVE_STATIC_IP must be a valid public IPv4 address") from exc
         if not expected.is_global:
             raise LiveBlocked("Configured static IP must be a public IPv4 address")
         return cfg
@@ -1006,7 +1007,7 @@ class AQTELiveService:
                 raise LiveBlocked("Every 6 Algo Desk algo is OFF; no new entry orders permitted")
         elif owner == "EXPIRYEDGE_AI":
             if not getattr(cfg, "expiryedge_ai_live_enabled", False):
-                raise LiveBlocked("ExpiryEdge AI live execution is disabled by EXPIRYEDGE_AI_LIVE_ENABLED")
+                raise LiveBlocked("ExpiryEdge AI live execution is disabled by LIVE_TRADE_ENABLED")
             if not self.expiryedge_ai_enabled():
                 raise LiveBlocked("ExpiryEdge AI live approval is OFF; no new entry orders permitted")
         elif not self.state.get("automation_on"):
@@ -2021,9 +2022,9 @@ class AQTELiveService:
                 "market_phase": market_phase,
                 "market_detail": market_detail,
                 "entry_window": market_phase == "NORMAL",
-                "deployment_mode": os.getenv("QUANTUMEDGE_DEPLOYMENT_MODE", "local"),
+                "deployment_mode": "production" if os.getenv("LIVE_TRADE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"} else "local",
                 "local_live_allowed": os.getenv(
-                    "QUANTUMEDGE_ALLOW_LOCAL_LIVE", "false").strip().lower() in {
+                    "LIVE_TRADE_ENABLED", "false").strip().lower() in {
                         "1", "true", "yes", "on",
                     },
                 "error": cfg.get("error"),
@@ -2053,19 +2054,9 @@ class AQTELiveService:
             if not self.ready:
                 raise LiveBlocked("QuantumEdge live journal unavailable")
             if enabled:
-                mode = os.getenv("QUANTUMEDGE_DEPLOYMENT_MODE", "local").strip().lower()
-                local_allowed = os.getenv("QUANTUMEDGE_ALLOW_LOCAL_LIVE", "false").strip().lower() in {
-                    "1", "true", "yes", "on",
-                }
-                if mode != "production" and not (mode == "local" and local_allowed):
-                    raise LiveBlocked(
-                        "QuantumEdge live execution requires production mode or explicit local live opt-in")
-                self.config_guard()
-                if self.quantumedge.ml.mode not in ("off", "shadow"):
-                    self.quantumedge.ml.load()
-                    model_status = self.quantumedge.ml.status(time.time())
-                    if not model_status["ready"]:
-                        raise LiveBlocked(model_status["error"] or "QuantumEdge ML gate is not ready")
+                from config import get_settings
+                if not get_settings().aqte_live_enabled:
+                    raise LiveBlocked("Set LIVE_TRADE_ENABLED=true in the global backend environment")
                 if self.state["killed"] or self.state.get("flatten_pending"):
                     raise LiveBlocked("Resolve emergency stop before enabling QuantumEdge")
             self.state["quantumedge"]["enabled"] = enabled
@@ -2194,7 +2185,7 @@ class AQTELiveService:
             if enabled:
                 self.config_guard()
                 if not getattr(self.settings(), "expiryedge_ai_live_enabled", False):
-                    raise LiveBlocked("ExpiryEdge AI live execution is disabled by EXPIRYEDGE_AI_LIVE_ENABLED")
+                    raise LiveBlocked("ExpiryEdge AI live execution is disabled by LIVE_TRADE_ENABLED")
                 if self.state["killed"] or self.state.get("flatten_pending"):
                     raise LiveBlocked("Emergency stop is active; operator review is required before enabling ExpiryEdge AI")
                 schedules = get_expiryedge_config()["schedules"]
@@ -2297,7 +2288,7 @@ class AQTELiveService:
             if not self.expiryedge_ai_enabled():
                 raise LiveBlocked("ExpiryEdge AI live approval is OFF")
             if not getattr(self.settings(), "expiryedge_ai_live_enabled", False):
-                raise LiveBlocked("ExpiryEdge AI live execution is disabled by EXPIRYEDGE_AI_LIVE_ENABLED")
+                raise LiveBlocked("ExpiryEdge AI live execution is disabled by LIVE_TRADE_ENABLED")
             now = time.time()
             if self.state["killed"] or self.state.get("flatten_pending"):
                 raise LiveBlocked("Emergency stop is active")
@@ -2487,7 +2478,7 @@ class AQTELiveService:
             if self.state["killed"] or self.state.get("flatten_pending"):
                 blocks.append("Emergency stop is active")
             if not getattr(cfg, "expiryedge_ai_live_enabled", False):
-                blocks.append("ExpiryEdge AI live execution is disabled by EXPIRYEDGE_AI_LIVE_ENABLED")
+                blocks.append("ExpiryEdge AI live execution is disabled by LIVE_TRADE_ENABLED")
             active = self.state.get("active")
             if active and active.get("owner") != "EXPIRYEDGE_AI":
                 blocks.append(f"Shared automated trade slot is occupied by {OWNER_LABELS.get(active.get('owner'), 'another strategy')}")
@@ -3509,7 +3500,7 @@ class AQTELiveService:
                 )
                 option_bars = tuple(engine.book.closed.get(
                     ("option", active["contract"]["token"], 60),
-                ))
+                ) or ())
                 healthy = market.started and not market.failed.is_set()
             now = time.time()
             has_price_action_stop = (

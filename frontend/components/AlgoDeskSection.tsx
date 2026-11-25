@@ -358,7 +358,7 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
   const onBlocked = busy ? 'A request is still in progress'
     : !status || stale ? 'Waiting for a fresh 6 Algo Desk status from the server'
       : !status.ready ? 'Live journal unavailable on the server'
-        : !status.live_enabled ? 'Live trading is switched off on the server (AQTE_LIVE_ENABLED)'
+        : !status.live_enabled ? 'Live trading is switched off on the server (LIVE_TRADE_ENABLED)'
           : status.killed || status.flatten_pending ? 'Emergency stop is latched; reset it in AQTE first'
             : null;
   const offBlocked = busy ? 'A request is still in progress' : !status ? 'Waiting for 6 Algo Desk status' : null;

@@ -221,7 +221,7 @@ and submit a SELL SL order with `trigger_price` after an entry fill. AUTONOMIQ d
 not place a pending stop-entry BUY order: its trigger price is the protective stop.
 An IOC entry can be cancelled unfilled if its limit cannot execute.
 
-`AQTE_LIVE_STATIC_IP` belongs to AQTE's outbound-IP preflight; AUTONOMIQ does not
+`LIVE_STATIC_IP` belongs to the shared live-execution outbound-IP preflight; AUTONOMIQ does not
 read it. Writing an IP in an environment file does not configure network egress or
 register that IP with Zerodha. The executing computer/server's actual public outbound IP must
 be allowed for the Kite app whose API key is used by AUTONOMIQ. Successful quotes,

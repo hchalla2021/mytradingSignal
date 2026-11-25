@@ -61,8 +61,8 @@ class QuantEdgeProStrategyTests(unittest.TestCase):
             "content": [{"type": "text", "text": '{"action":"BUY_PE","confidence":90,"reason":"wrong direction"}'}],
             "usage": {"input_tokens": 100, "output_tokens": 20},
         })
-        with patch.dict(os.environ, {"QUANTEDGE_AI_ENABLED": "true",
-                                     "QUANTEDGE_AI_ANTHROPIC_API_KEY": "test-key"}, clear=False), \
+        with patch.dict(os.environ, {"AI_ENABLED": "true",
+                                     "ANTHROPIC_API_KEY": "test-key"}, clear=False), \
                 patch("services.quantedge_hybrid.httpx.post", return_value=response):
             result = orchestrator.submit(candidate, now, lambda fresh, at: fresh)
         self.assertFalse(result["approved"])

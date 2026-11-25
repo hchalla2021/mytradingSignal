@@ -48,20 +48,19 @@ if enabled DEBUG; then
     warn "DEBUG is true in $env_file; docker-compose.prod.yml overrides it with DEBUG=false"
 fi
 
-if enabled AQTE_LIVE_ENABLED; then
+if enabled LIVE_TRADE_ENABLED; then
     if [ -n "$(setting FORCE_OUTBOUND_IPV4)" ] && ! enabled FORCE_OUTBOUND_IPV4; then
         warn "FORCE_OUTBOUND_IPV4 is not true; Auto Trade ON preflight will be refused"
     fi
     # docker-compose.prod.yml always forces production mode.
-    expected="$(setting AQTE_LIVE_PRODUCTION_STATIC_IP)"
-    [ -n "$expected" ] || expected="$(setting AQTE_LIVE_STATIC_IP)"
+    expected="$(setting LIVE_STATIC_IP)"
     actual="$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
     if [ -z "$expected" ]; then
-        warn "AQTE_LIVE_STATIC_IP is not set; the built-in default will not match this server"
+        warn "LIVE_STATIC_IP is not set; the server IP cannot be verified"
     elif [ -z "$actual" ]; then
         warn "Could not read this server's outbound IPv4; verify it before market hours"
     elif [ "$actual" != "$expected" ]; then
-        warn "Outbound IPv4 $actual does not match AQTE_LIVE_STATIC_IP $expected; Auto Trade ON will be refused"
+        warn "Outbound IPv4 $actual does not match LIVE_STATIC_IP $expected; Auto Trade ON will be refused"
     else
         echo "AQTE static IP matches this server's outbound IPv4 ($actual); it must also be in the Kite IP whitelist."
     fi
@@ -71,7 +70,7 @@ if enabled AQTE_LIVE_ENABLED; then
         echo "AQTE entry mode: strict (Auto Trade ON scans but places no orders)."
     fi
 else
-    echo "AQTE live trading disabled (AQTE_LIVE_ENABLED is not true)."
+    echo "Live trading disabled (LIVE_TRADE_ENABLED is not true)."
 fi
 
 if [ "$failures" -ne 0 ]; then

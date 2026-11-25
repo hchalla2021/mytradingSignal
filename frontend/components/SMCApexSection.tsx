@@ -257,13 +257,13 @@ export default function SMCApexSection() {
         <Zap className="text-lime-400" />
         <div className="text-xs font-bold">LIVE TRADE<div className="font-normal text-slate-400">Auto execution</div></div>
         <button type="button" aria-label="Toggle SMC Apex live entry"
-          role={liveState === null ? 'button' : 'switch'} aria-checked={liveState === null ? undefined : liveState}
-          title={liveState === null ? 'Live state unavailable. Click to request OFF.' : liveState ? 'Turn live entry OFF' : 'Turn live entry ON'}
-          disabled={controlPending !== null || (pending && liveState === false)}
+          role="switch" aria-checked={liveState === null ? false : liveState}
+          title={liveState === null ? 'Live state unavailable. Turn OFF or ON.' : liveState ? 'Turn live entry OFF' : 'Turn live entry ON'}
+          disabled={controlPending !== null}
           onClick={() => void toggle(liveState === false)}
           className={`relative h-11 w-24 shrink-0 rounded-full border text-sm font-black transition-colors disabled:cursor-wait ${liveState === true ? 'border-green-400 bg-green-500/20 text-green-300 shadow-[0_0_14px_#00ff6655]' : 'border-slate-500 bg-slate-900 text-slate-200'}`}>
           <span className={`absolute top-1/2 -translate-y-1/2 ${liveState === true ? 'left-3' : 'right-3'}`}>
-            {controlPending !== null || liveState === null ? '...' : liveState ? 'ON' : 'OFF'}
+            {controlPending !== null ? '...' : liveState === null ? 'OFF' : liveState ? 'ON' : 'OFF'}
           </span>
           <span aria-hidden="true" className={`absolute left-1.5 top-1.5 h-[30px] w-[30px] rounded-full bg-white shadow transition-transform duration-150 ${liveState === true ? 'translate-x-12' : ''} ${controlPending !== null ? 'animate-pulse' : ''}`} />
         </button>

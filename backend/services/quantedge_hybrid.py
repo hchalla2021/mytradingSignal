@@ -45,9 +45,9 @@ class QuantEdgeHybridOrchestrator:
         return time.strftime("%Y-%m-%dT%H:%M:00", time.localtime(now - (now % 300)))
 
     def _budget(self) -> tuple[float, float, float]:
-        daily = float(os.getenv("QUANTEDGE_AI_DAILY_BUDGET_USD", "1.25") or "1.25")
-        monthly = float(os.getenv("QUANTEDGE_AI_MONTHLY_BUDGET_USD", "25") or "25")
-        max_tokens = float(os.getenv("QUANTEDGE_AI_MAX_OUTPUT_TOKENS", "180") or "180")
+        daily = float(os.getenv("AI_DAILY_BUDGET_USD") or "1.25")
+        monthly = float(os.getenv("AI_MONTHLY_BUDGET_USD") or "25")
+        max_tokens = float(os.getenv("AI_MAX_OUTPUT_TOKENS") or "180")
         return max(0.0, daily), max(0.0, monthly), max(64.0, min(max_tokens, 500.0))
 
     def status(self, now: float) -> dict[str, Any]:
@@ -62,7 +62,7 @@ class QuantEdgeHybridOrchestrator:
                 self.ai_usage["calls"] = 0
                 self.ai_usage["cost_usd"] = 0.0
             return {
-                "enabled": os.getenv("QUANTEDGE_AI_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on"),
+                "enabled": (os.getenv("AI_ENABLED") or "true").strip().lower() in ("1", "true", "yes", "on"),
                 "model": MODEL,
                 "busy": self.ai_busy,
                 "pending": len(self.pending),
@@ -169,7 +169,7 @@ class QuantEdgeHybridOrchestrator:
                 return {"approved": False, "reason": "No pending QuantEdge signals", "state": "WAIT"}
             if self.ai_busy:
                 return {"approved": False, "reason": "AI approval is busy", "state": "PENDING"}
-            enabled = os.getenv("QUANTEDGE_AI_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+            enabled = (os.getenv("AI_ENABLED") or "true").strip().lower() in ("1", "true", "yes", "on")
             if not enabled:
                 return {"approved": False, "reason": "QuantEdge AI approval is disabled", "state": "PENDING"}
             slot = self._five_minute_slot(now)
@@ -209,8 +209,7 @@ class QuantEdgeHybridOrchestrator:
             return {**approval, "approved": False, "setup_key": key, "state": approval.get("state") or "REJECTED"}
 
     def _call_ai(self, candidate: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-        api_key = (os.getenv("QUANTEDGE_AI_ANTHROPIC_API_KEY")
-                   or os.getenv("AUTONOMIQ_PRO_ANTHROPIC_API_KEY") or "").strip()
+        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
         if not api_key:
             self.last_error = "Anthropic API key unavailable"
             return {"approved": False, "reason": self.last_error, "state": "PENDING", "attempted": False}
@@ -251,7 +250,7 @@ class QuantEdgeHybridOrchestrator:
             "shared_market_context": context,
         }
         body = {
-            "model": os.getenv("QUANTEDGE_AI_MODEL", MODEL),
+            "model": os.getenv("AI_MODEL") or MODEL,
             "max_tokens": int(max_tokens),
             "system": [{"type": "text", "text": system}],
             "messages": [{"role": "user", "content": json.dumps(payload, separators=(",", ":"), default=str)}],
@@ -264,7 +263,7 @@ class QuantEdgeHybridOrchestrator:
         }
         try:
             response = httpx.post(API_URL, headers=headers, json=body, timeout=float(os.getenv(
-                "QUANTEDGE_AI_TIMEOUT_SECONDS", "20")))
+                "AI_TIMEOUT_SECONDS") or "20"))
             if response.status_code != 200:
                 self.last_error = f"HTTP {response.status_code}: {response.text[:160]}"
                 return {"approved": False, "reason": self.last_error, "state": "PENDING", "attempted": True}

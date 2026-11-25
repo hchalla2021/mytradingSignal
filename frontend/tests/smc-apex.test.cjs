@@ -173,7 +173,7 @@ test('unknown toggle sends only OFF and automatically recovers without buying', 
   });
   await flush();
   assert.equal(button(app.render()).props.disabled, false);
-  assert.equal(button(app.render()).props['aria-checked'], undefined);
+  assert.equal(button(app.render()).props['aria-checked'], false);
   const header = elements(app.render()).find(node => node.type === 'header');
   assert.doesNotMatch(text(header), /Not connected|Retry connection|UNVERIFIED/);
   await button(app.render()).props.onClick();
@@ -217,7 +217,7 @@ test('conflicting acknowledgement and expired live-state timestamps never fabric
   expired = true;
   app.intervals.find(timer => timer.delay === 2000).fn();
   await flush();
-  assert.equal(button(app.render()).props['aria-checked'], undefined);
+  assert.equal(button(app.render()).props['aria-checked'], false);
   assert.equal(button(app.render()).props.disabled, false);
 });
 

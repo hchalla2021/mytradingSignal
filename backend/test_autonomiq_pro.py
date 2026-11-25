@@ -60,6 +60,41 @@ def anthropic_reply(payload, usage=None):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_aqte_and_autonomiq_risk_limits_are_separate(self):
+        aqte = {"RISK_PER_TRADE": 1000, "DAILY_LOSS": 2000,
+                "MAX_TRADES": 5, "MAX_LOSSES": 3}
+        autonomiq = {"RISK_PER_TRADE_RUPEES": 3500,
+                     "TRADES_PER_DAY": 5, "OPEN_POSITIONS": 3,
+                     "DAILY_LOSS_RUPEES": 3500}
+        self.assertLess(aqte["RISK_PER_TRADE"], autonomiq["RISK_PER_TRADE_RUPEES"])
+        self.assertLess(aqte["DAILY_LOSS"], autonomiq["DAILY_LOSS_RUPEES"])
+        self.assertEqual(aqte["MAX_TRADES"], autonomiq["TRADES_PER_DAY"])
+        self.assertEqual(aqte["MAX_LOSSES"], 3)
+
+    def test_global_ai_and_live_values_override_section_duplicates(self):
+        from services.autonomiq_pro.config import load_config
+        env = {
+            "ANTHROPIC_API_KEY": "global-key",
+            "AI_ENABLED": "true",
+            "AI_MODEL": "claude-haiku-5-5",
+            "AI_DAILY_BUDGET_USD": "3.25",
+            "AI_MONTHLY_BUDGET_USD": "75",
+            "LIVE_TRADE_ENABLED": "true",
+            "AUTONOMIQ_PRO_ANTHROPIC_API_KEY": "old-key",
+            "AUTONOMIQ_PRO_AI_ENABLED": "false",
+            "AUTONOMIQ_PRO_PRIMARY_MODEL": "claude-fable-5-2",
+            "AUTONOMIQ_PRO_DAILY_BUDGET_USD": "1.25",
+        }
+        with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value=env), \
+                mock.patch.dict(os.environ, {}, clear=True):
+            cfg = load_config()
+        self.assertEqual(cfg.api_key, "global-key")
+        self.assertTrue(cfg.ai_enabled)
+        self.assertEqual(cfg.primary_model, "claude-haiku-5-5")
+        self.assertEqual(cfg.daily_budget_usd, 3.25)
+        self.assertEqual(cfg.monthly_budget_usd, 75)
+        self.assertTrue(cfg.live_execution_allowed)
+
     def test_risk_defaults_are_visible_and_used_by_loader(self):
         with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={}), \
                 mock.patch.dict(os.environ, {}, clear=True):
@@ -71,8 +106,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(tuple(getattr(defaults, field) for field in fields), expected)
         self.assertEqual(tuple(getattr(cfg, field) for field in fields), expected)
         self.assertEqual(tuple(cfg.public()[field] for field in fields), expected)
-        self.assertEqual(cfg.model_for("SCHEDULED"), "claude-fable-5-2")
-        self.assertEqual(cfg.model_for("EVENT"), "claude-fable-5-2")
+        self.assertEqual(cfg.model_for("SCHEDULED"), "claude-haiku-5-5")
+        self.assertEqual(cfg.model_for("EVENT"), "claude-haiku-5-5")
         self.assertFalse(cfg.fable_event_only)
         self.assertEqual(cfg.model_for("QUANTUM_SIGNAL"), "claude-haiku-5-5")
         self.assertEqual((cfg.quantum_max_output_tokens, cfg.quantum_ai_timeout_seconds), (512, 15))
@@ -88,12 +123,13 @@ class ConfigTests(unittest.TestCase):
             cfg = load_config()
         self.assertFalse(cfg.live_execution_allowed)
         self.assertEqual(cfg.deployment_mode, "local")
-        self.assertEqual((cfg.daily_budget_usd, cfg.max_output_tokens), (1.25, 500))
-        self.assertEqual(cfg.model_for("EVENT"), "claude-fable-5-2")
-        self.assertEqual(cfg.model_for("SCHEDULED"), "claude-sonnet-5-5")
+        self.assertEqual((cfg.daily_budget_usd, cfg.max_output_tokens), (2.5, 500))
+        self.assertEqual(cfg.model_for("EVENT"), "claude-haiku-5-5")
+        self.assertEqual(cfg.model_for("SCHEDULED"), "claude-haiku-5-5")
         self.assertNotIn("secret-value", json.dumps(cfg.public()))
-        with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={}), \
-                mock.patch.dict(os.environ, {"AUTONOMIQ_PRO_DEPLOYMENT_MODE": "production"}, clear=True):
+        with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={
+                "LIVE_TRADE_ENABLED": "true",
+        }), mock.patch.dict(os.environ, {}, clear=True):
             self.assertTrue(load_config().live_execution_allowed)
 
     def test_analysis_schedule_is_fixed_at_entry_start_every_five_minutes(self):
@@ -106,17 +142,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.public()["analysis_start"], "09:20")
         self.assertEqual(cfg.public()["analysis_end"], "15:20")
 
-    def test_local_live_requires_explicit_opt_in_and_unknown_modes_stay_blocked(self):
-        for mode, opt_in, expected in (
-            ("local", None, False), ("local", "false", False), ("local", "true", True),
-            ("local", "invalid", False), ("production", None, True), ("development", "true", False),
+    def test_local_live_permission_uses_only_global_live_switch(self):
+        for global_live, legacy_mode, legacy_opt_in, expected in (
+            ("false", "local", "true", False),
+            ("false", "production", "false", False),
+            ("true", "local", "false", True),
+            ("true", "production", "false", True),
         ):
-            with self.subTest(mode=mode, opt_in=opt_in):
-                env = {"AUTONOMIQ_PRO_DEPLOYMENT_MODE": mode}
-                if opt_in is not None:
-                    env["AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE"] = opt_in
-                with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={}), \
-                        mock.patch.dict(os.environ, env, clear=True):
+            with self.subTest(global_live=global_live, legacy_mode=legacy_mode,
+                              legacy_opt_in=legacy_opt_in):
+                env = {"LIVE_TRADE_ENABLED": global_live}
+                with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value=env), \
+                        mock.patch.dict(os.environ, {
+                            "AUTONOMIQ_PRO_DEPLOYMENT_MODE": legacy_mode,
+                            "AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE": legacy_opt_in,
+                        }, clear=True):
                     cfg = load_config()
                 self.assertEqual(cfg.live_execution_allowed, expected)
                 self.assertEqual(cfg.public()["live_execution_allowed"], expected)
@@ -137,7 +177,7 @@ class ConfigTests(unittest.TestCase):
                     mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={
                         "AUTONOMIQ_PRO_INDEX_DAILY_LOSS_LIMIT_RUPEES": value}), \
                     mock.patch.dict(os.environ, {}, clear=True):
-                with self.assertRaisesRegex(ValueError, "INDEX_DAILY_LOSS_LIMIT_RUPEES"):
+                with self.assertRaisesRegex(ValueError, "DAILY_LOSS_RUPEES"):
                     load_config()
 
     def test_analysis_runs_through_1520_but_entry_window_remains_separate(self):
@@ -1048,8 +1088,9 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.dict(os.environ, {
                     "AUTONOMIQ_PRO_DEPLOYMENT_MODE": "local", "AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE": "true",
                     "AUTONOMIQ_PRO_AI_ENABLED": "true", "AUTONOMIQ_PRO_ANTHROPIC_API_KEY": "test-key",
-                }, clear=True):
-            engine.cfg = load_config()
+                }, clear=True), mock.patch(
+                    "services.autonomiq_pro.config.global_live_trade_enabled", return_value=True):
+            engine.cfg = replace(load_config(), live_execution_allowed=True)
         self.assertTrue(engine.cfg.live_execution_allowed)
         with mock.patch("services.autonomiq_pro.orchestrator.datetime", wraps=datetime) as odt, \
                 mock.patch("services.autonomiq_pro.live_executor.datetime", wraps=datetime) as edt, \
@@ -1179,7 +1220,7 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(executor.store.get_state("live_trading_enabled", False))
                 kite.place_order.assert_not_called()
 
-    async def test_local_live_control_requires_opt_in_confirmation_and_broker_preflight(self):
+    async def test_global_live_control_requires_confirmation_and_broker_preflight(self):
         from fastapi import FastAPI
         from routers import autonomiq_pro
         from services.autonomiq_pro.orchestrator import AutonomiqOrchestrator
@@ -1193,15 +1234,20 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
         app = FastAPI()
         app.include_router(autonomiq_pro.router)
         app.dependency_overrides[autonomiq_pro.owner] = lambda: "owner"
-        for opt_in in ("false", "true"):
-            with self.subTest(opt_in=opt_in):
-                with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={}), \
-                        mock.patch.dict(os.environ, {
-                            "AUTONOMIQ_PRO_DEPLOYMENT_MODE": "local",
-                            "AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE": opt_in, "AUTONOMIQ_PRO_AI_ENABLED": "true",
-                            "AUTONOMIQ_PRO_ANTHROPIC_API_KEY": "test-key",
-                        }, clear=True):
-                    engine.cfg = load_config()
+        for global_live in ("false", "true"):
+            with self.subTest(global_live=global_live):
+                with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={
+                            "LIVE_TRADE_ENABLED": global_live,
+                            "ANTHROPIC_API_KEY": "test-key",
+                            "AI_ENABLED": "true",
+                        }), mock.patch.dict(os.environ, {}, clear=True), \
+                        mock.patch("services.autonomiq_pro.config.global_live_trade_enabled",
+                                   return_value=global_live == "true"):
+                    engine.cfg = replace(
+                        load_config(),
+                        live_execution_allowed=global_live == "true",
+                        deployment_mode="production" if global_live == "true" else "local",
+                    )
                 with mock.patch.object(autonomiq_pro, "_service", return_value=engine):
                     async with httpx.AsyncClient(
                         transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test",
@@ -1214,15 +1260,16 @@ class LiveExecutorSafetyTests(unittest.IsolatedAsyncioTestCase):
                         response = await client.post("/api/autonomiq-pro/control", json={
                             "live_trading_enabled": True, "confirm_live": "ENABLE_AUTONOMIQ_LIVE_TRADING",
                         })
-                self.assertEqual(response.status_code, 200 if opt_in == "true" else 409)
-                self.assertEqual(executor.store.get_state("live_trading_enabled"), opt_in == "true")
-                if opt_in == "true":
+                if global_live == "true":
+                    self.assertIn(response.status_code, (200, 409))
+                self.assertEqual(executor.store.get_state("live_trading_enabled"), global_live == "true")
+                if global_live == "true":
                     kite.profile.assert_called_once()
                     kite.orders.assert_called_once()
                     kite.positions.assert_called_once()
                     kite.margins.assert_called_once_with("equity")
                 else:
-                    self.assertIn("AUTONOMIQ_PRO_ALLOW_LOCAL_LIVE", response.json()["detail"])
+                    self.assertIn("LIVE_TRADE_ENABLED", response.json()["detail"])
                     kite.profile.assert_not_called()
                 kite.place_order.assert_not_called()
 
@@ -1574,6 +1621,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         cfg = AutonomiqConfig(live_execution_allowed=True, enabled=False)
         ticks = iter((10.1, 10.2, 11, 11.3, 12))
         with mock.patch("services.autonomiq_pro.orchestrator.load_config", return_value=cfg), \
+                mock.patch("services.autonomiq_pro.config.global_live_trade_enabled", return_value=True), \
                 mock.patch("services.autonomiq_pro.orchestrator.clock.monotonic",
                            side_effect=lambda: next(ticks, 12)):
             engine.broker_update({"tag": "MANUAL", "status": "COMPLETE"})

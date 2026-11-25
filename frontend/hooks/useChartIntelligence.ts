@@ -297,12 +297,12 @@ function getApiUrl(): string {
 }
 
 function getLocalWsUrl(): string {
-  const ws = process.env.NEXT_PUBLIC_LOCAL_WS_URL || 'ws://localhost:8000/ws/market';
+  const ws = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/market';
   return ws.replace(/\/ws\/market$/, '') + '/ws/chart-intelligence';
 }
 
 function getLocalApiUrl(): string {
-  const api = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8000';
+  const api = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
   return api.replace(/\/$/, '') + '/api/chart-intelligence';
 }
 

@@ -82,11 +82,9 @@ class Settings(BaseSettings):
     # AQTE live requires explicit enablement, manual ON and daily preflight/arming.
     aqte_live_enabled: bool = False
     # ExpiryEdge AI has its own explicit local/production live-order opt-in.
-    expiryedge_ai_live_enabled: bool = Field(default=False, env="EXPIRYEDGE_AI_LIVE_ENABLED")
-    aqte_live_static_ip: str = "122.177.245.101"
+    expiryedge_ai_live_enabled: bool = Field(default=False)
+    aqte_live_static_ip: str = ""
     aqte_live_deployment_mode: str = "local"
-    aqte_live_local_static_ip: str = ""
-    aqte_live_production_static_ip: str = "159.65.147.167"
     # Real-money opt-in: lets fully aligned, unvalidated rule setups enter one lot.
     aqte_live_allow_unvalidated_rules: bool = False
     aqte_morning_super_candle_enabled: bool = True
@@ -332,24 +330,26 @@ def get_settings() -> Settings:
     # Docker env_file values are frozen at container creation. Only the token
     # is mutable at runtime; other settings retain normal environment precedence.
     values = dotenv_values(ENV_FILE)
-    mode = (os.getenv("AQTE_LIVE_DEPLOYMENT_MODE")
+    mode = (os.getenv("LIVE_DEPLOYMENT_MODE")
+            or values.get("LIVE_DEPLOYMENT_MODE")
+            or os.getenv("AQTE_LIVE_DEPLOYMENT_MODE")
             or values.get("AQTE_LIVE_DEPLOYMENT_MODE") or "local").strip().lower()
-    production_ip = (os.getenv("AQTE_LIVE_PRODUCTION_STATIC_IP")
-                     or values.get("AQTE_LIVE_PRODUCTION_STATIC_IP")
-                     or ("159.65.147.167" if mode == "production" else "")).strip()
-    local_ip = (os.getenv("AQTE_LIVE_LOCAL_STATIC_IP")
-                or values.get("AQTE_LIVE_LOCAL_STATIC_IP") or "").strip()
-    legacy_ip = (os.getenv("AQTE_LIVE_STATIC_IP")
-                 or values.get("AQTE_LIVE_STATIC_IP") or "").strip()
-    selected_ip = production_ip if mode == "production" and production_ip else (
-        local_ip if mode == "local" and local_ip else legacy_ip
-    )
+    static_ip = (os.getenv("LIVE_STATIC_IP")
+                 or values.get("LIVE_STATIC_IP") or "").strip()
+    global_live = os.getenv("LIVE_TRADE_ENABLED") or values.get("LIVE_TRADE_ENABLED")
+    def enabled(value: str | None, default: bool) -> bool:
+        if value is None or value.strip() == "":
+            return default
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    live_enabled = enabled(global_live, False)
+    selected_ip = static_ip
     overrides = {}
     token = values.get("ZERODHA_ACCESS_TOKEN")
     if token is not None:
         overrides["zerodha_access_token"] = token
-    if selected_ip:
-        overrides["aqte_live_static_ip"] = selected_ip
+    overrides["aqte_live_static_ip"] = selected_ip
+    overrides["aqte_live_enabled"] = live_enabled
+    overrides["expiryedge_ai_live_enabled"] = live_enabled
     return Settings(**overrides)
 
 __all__ = ["Settings", "get_settings"]

@@ -91,8 +91,8 @@ export function getEnvironmentConfig() {
   const sharedWsUrl = browser
     ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/market`
     : '';
-  const productionApi = process.env.NEXT_PUBLIC_PRODUCTION_API_URL || process.env.NEXT_PUBLIC_API_URL || '';
-  const productionWs = process.env.NEXT_PUBLIC_PRODUCTION_WS_URL || process.env.NEXT_PUBLIC_WS_URL || '';
+  const productionApi = process.env.NEXT_PUBLIC_API_URL || '';
+  const productionWs = process.env.NEXT_PUBLIC_WS_URL || '';
   const productionBrowser = browser && env === 'production' && !isLocalHostname(window.location.hostname);
 
   const config = {
@@ -107,7 +107,7 @@ export function getEnvironmentConfig() {
         ? productionBrowser && (!productionApi || isLocalHttpUrl(productionApi))
           ? sharedApiUrl
           : productionApi
-        : process.env.NEXT_PUBLIC_LOCAL_API_URL || process.env.NEXT_PUBLIC_API_URL || '',
+        : process.env.NEXT_PUBLIC_API_URL || '',
 
     // WebSocket URLs - NO FALLBACKS, must be set in .env.local
     wsUrl:
@@ -115,7 +115,7 @@ export function getEnvironmentConfig() {
         ? productionBrowser && (!productionWs || isLocalHttpUrl(productionWs))
           ? sharedWsUrl
           : productionWs
-        : process.env.NEXT_PUBLIC_LOCAL_WS_URL || process.env.NEXT_PUBLIC_WS_URL || '',
+        : process.env.NEXT_PUBLIC_WS_URL || '',
 
     // Display info
     displayName: sharedProduction ? 'Local UI / Shared Production (real orders)' :

@@ -404,9 +404,9 @@ class Runtime:
             if last and (now - datetime.fromisoformat(last)).total_seconds() < 300:
                 raise Blocked("AI cooldown: at most one Apex call per five minutes")
             api_key = anthropic_key(cfg)
-            model = cfg.get("SMCAPEX_AI_MODEL")
+            model = cfg.get("AI_MODEL")
             if not api_key or not model:
-                raise Blocked("Anthropic key or SMCAPEX_AI_MODEL not configured")
+                raise Blocked("Global Anthropic key or AI_MODEL not configured")
             self.store.approve(identity, now.date().isoformat(), pending)
             self.store.save("last_ai", {"at": now.isoformat()})
             return None, api_key, model
@@ -432,7 +432,7 @@ class Runtime:
         if cached:
             return cached
         if not api_key or not model:
-            raise Blocked("Anthropic key or SMCAPEX_AI_MODEL not configured")
+            raise Blocked("Global Anthropic key or AI_MODEL not configured")
         try:
             with httpx.Client(timeout=10) as client:
                 response = client.post("https://api.anthropic.com/v1/messages", headers={
@@ -481,7 +481,7 @@ class Runtime:
                 raise Blocked("AI approval belongs to a different option contract")
             return cached
         if not api_key or not model:
-            raise Blocked("Anthropic key or SMCAPEX_AI_MODEL not configured")
+            raise Blocked("Global Anthropic key or AI_MODEL not configured")
         with self.lock:
             evidence = {str(m): [r.json() for r in aggregate(self.store.history(symbol, "1"), m, now)[-10:]]
                         for m in (1, 3, 5, 15, 30, 60)}
@@ -585,7 +585,7 @@ class Runtime:
                         setup["underlying_entry"] - setup["underlying_stop"]):
                     raise Blocked("Spot moved beyond the entry drift limit during AI approval")
                 raw_quote = self.kite.quote([key])[key]
-                if cfg.get("SMCAPEX_LIVE_ENABLED", "").lower() != "true":
+                if not ((cfg.get("LIVE_TRADE_ENABLED") or "").lower() == "true"):
                     raise Blocked("Deployment live permission is disabled")
                 with self.lock:
                     latest_saved = self.store.get(symbol)

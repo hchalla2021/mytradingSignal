@@ -832,7 +832,7 @@ def status():
         ) or (
             "OpeningEdge live entries are OFF; owned positions remain protected."
             if controller["trade_enabled"] else
-            "Live execution is locked by backend TRADE_ENABLED / OPENINGEDGE_LIVE_ENABLED."
+            "Live execution is locked by LIVE_TRADE_ENABLED."
         ),
     }
 

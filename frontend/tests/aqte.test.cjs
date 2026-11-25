@@ -2300,7 +2300,7 @@ test('paper approval is not required by status parsing or the ON switch', async 
 
 test('ON remains locked for a disabled or unavailable controller without paper approval', async () => {
   for (const [patch, message] of [
-    [{ enabled: false }, /ON locked · AQTE_LIVE_ENABLED is false/],
+    [{ enabled: false }, /ON locked · LIVE_TRADE_ENABLED is false/],
     [{ ready: false }, /ON locked · Live controller is not ready/],
     [{ killed: true }, /Emergency stop latched/],
   ]) {
@@ -2562,7 +2562,7 @@ test('reset recovery does not bypass backend live enablement', async () => {
   await settle();
   assert.equal(autoSwitchLabel(h.render()), 'TRADE OFF');
   assert.equal(autoSwitch(h.render()).props.disabled, true);
-  assert.match(text(h.render()), /ON locked · AQTE_LIVE_ENABLED is false/);
+  assert.match(text(h.render()), /ON locked · LIVE_TRADE_ENABLED is false/);
   assert.ok(h.requests.every(r => r.url.endsWith('/status') || r.url.endsWith('/reset')));
   cleanup();
 });
@@ -4474,7 +4474,7 @@ test('6 Algo Desk approvals stay independent while another section is enabled', 
 
 test('6 Algo Desk TRADE ON stays blocked when live trading is unsafe', async () => {
   for (const [overrides, reason] of [
-    [{ live_enabled: false }, /AQTE_LIVE_ENABLED/],
+    [{ live_enabled: false }, /LIVE_TRADE_ENABLED/],
     [{ killed: true }, /Emergency stop is latched/],
     [{ ready: false }, /Live journal unavailable/],
   ]) {
