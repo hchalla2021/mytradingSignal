@@ -59,6 +59,15 @@ class StaticIPModeTests(unittest.TestCase):
                 app_config.get_settings.cache_clear()
                 self.assertEqual(app_config.get_settings().aqte_live_static_ip, expected)
 
+    def test_production_uses_measured_egress_default_without_local_ip_fallback(self):
+        with patch.object(app_config, "dotenv_values", return_value={
+                "AQTE_LIVE_DEPLOYMENT_MODE": "production",
+        }), patch.dict(os.environ, {}, clear=True):
+            app_config.get_settings.cache_clear()
+            settings = app_config.get_settings()
+        self.assertEqual(settings.aqte_live_static_ip, "159.65.147.167")
+        self.assertEqual(settings.aqte_live_production_static_ip, "159.65.147.167")
+
 
 class LiveTests(unittest.TestCase):
     def setUp(self):

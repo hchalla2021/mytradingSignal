@@ -62,6 +62,7 @@ type Snapshot = {
   active: LiveTrade | null; positions: LiveTrade[]; trades: LiveTrade[];
   daily_trades: number; daily_pnl: number; daily_loss_limit: number; max_trades: number;
   zerodha_connected: boolean; error: string | null;
+  zerodha_authenticated?: boolean; market_feed_connected?: boolean;
   zerodha_state: string; market_phase: string; market_detail: string;
   ai: {
     enabled: boolean; model: string; busy: boolean; daily_calls: number;

@@ -435,6 +435,9 @@ class QuantumEdgeControlTests(unittest.TestCase):
                                     market=mock.Mock(), settings=mock.Mock(), broker=mock.Mock())
         self.live.initialize()
         self.live.market.lock = mock.MagicMock()
+        self.live.market.started = True
+        self.live.market.feed_connected = True
+        self.live.market.failed = mock.Mock(is_set=mock.Mock(return_value=False))
         self.live.market.engine = mock.Mock(wraps=AQTEEngine(), spot={}, future={}, options={},
                                            contracts={}, previous_day={})
         self.addCleanup(self.live.release_owner)
@@ -674,6 +677,9 @@ class QuantumEdgeControlTests(unittest.TestCase):
 
     def test_status_separates_zerodha_auth_from_market_phase(self):
         self.live.quantumedge_candidate = mock.Mock(return_value={"decision": "WAIT"})
+        self.live.market.started = True
+        self.live.market.feed_connected = True
+        self.live.market.failed = mock.Mock(is_set=mock.Mock(return_value=False))
         cases = (
             ((9, 3), "PRE_OPEN", False),
             ((9, 10), "AUCTION_FREEZE", False),
@@ -691,8 +697,24 @@ class QuantumEdgeControlTests(unittest.TestCase):
                                        new_callable=mock.PropertyMock, return_value=True):
                     status = self.live.quantumedge_status()
                 self.assertTrue(status["zerodha_connected"])
+                self.assertTrue(status["zerodha_authenticated"])
+                self.assertTrue(status["market_feed_connected"])
                 self.assertEqual(status["market_phase"], phase)
                 self.assertEqual(status["entry_window"], entry)
+
+    def test_status_does_not_report_broker_connected_when_market_feed_is_down(self):
+        self.live.quantumedge_candidate = mock.Mock(return_value={"decision": "WAIT"})
+        market = self.live.service()
+        market.started = True
+        market.feed_connected = False
+        market.failed = mock.Mock(is_set=mock.Mock(return_value=False))
+        from services.auth_state_machine import AuthStateManager
+        with mock.patch.object(AuthStateManager, "is_authenticated",
+                               new_callable=mock.PropertyMock, return_value=True):
+            status = self.live.quantumedge_status()
+        self.assertFalse(status["zerodha_connected"])
+        self.assertTrue(status["zerodha_authenticated"])
+        self.assertFalse(status["market_feed_connected"])
 
     def test_status_exposes_explicit_wait_states_and_holiday_blocks_entries(self):
         self.live.state["quantumedge"]["enabled"] = False

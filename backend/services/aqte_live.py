@@ -1912,6 +1912,11 @@ class AQTELiveService:
             market = self.service()
             with market.lock:
                 engine = market.engine
+                market_feed_connected = (
+                    market.started
+                    and market.feed_connected is True
+                    and not market.failed.is_set()
+                )
                 due = self.quantumedge_institutional.due_outcomes(now)
                 for item in due:
                     payload = item["payload"]
@@ -1952,6 +1957,7 @@ class AQTELiveService:
             positions = self.quantumedge_open_positions()
             position_symbols = {position["symbol"] for position in positions}
             auth_connected = auth_state_manager.is_authenticated
+            zerodha_connected = auth_connected and market_feed_connected
             for symbol, signal in signals.items():
                 ai_result = self.quantumedge.last_result.get(symbol) or {}
                 same_setup = ai_result.get("setup_key") == signal.get("setup_key")
@@ -1969,6 +1975,9 @@ class AQTELiveService:
                 elif not auth_connected:
                     signal["status"] = "WAIT_BROKER"
                     signal.setdefault("reason", "Zerodha authentication is unavailable")
+                elif not market_feed_connected:
+                    signal["status"] = "WAIT_BROKER"
+                    signal.setdefault("reason", "Zerodha market feed is unavailable")
                 elif signal.get("decision") not in ("BUY CE", "BUY PE"):
                     signal["status"] = "WAIT_SIGNAL"
                 elif budget_reason:
@@ -2005,7 +2014,9 @@ class AQTELiveService:
                 "trades": trades, "daily_trades": len(entries),
                 "daily_pnl": round(sum(trade["net_pnl"] for trade in trades), 2),
                 "daily_loss_limit": QUANTUMEDGE_DAILY_LOSS_LIMIT, "max_trades": 5,
-                "zerodha_connected": auth_connected,
+                "zerodha_connected": zerodha_connected,
+                "zerodha_authenticated": auth_connected,
+                "market_feed_connected": market_feed_connected,
                 "zerodha_state": auth_state_manager.current_state.value,
                 "market_phase": market_phase,
                 "market_detail": market_detail,

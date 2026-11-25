@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     aqte_live_static_ip: str = "122.177.245.101"
     aqte_live_deployment_mode: str = "local"
     aqte_live_local_static_ip: str = ""
-    aqte_live_production_static_ip: str = ""
+    aqte_live_production_static_ip: str = "159.65.147.167"
     # Real-money opt-in: lets fully aligned, unvalidated rule setups enter one lot.
     aqte_live_allow_unvalidated_rules: bool = False
     aqte_morning_super_candle_enabled: bool = True

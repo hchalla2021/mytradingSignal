@@ -96,6 +96,15 @@ explicitly, including the latest detected FVG's date and invalidation state.
 Historic or invalidated gaps do not trigger live Claude calls. Downstream
 confluence remains unevaluated until a qualifying FVG has structure context.
 
+Qualification uses mandatory institutional structure and risk gates rather
+than requiring every displayed confluence factor simultaneously: an intact
+same-day FVG, causal sweep/reclaim, confirmed liquidity run, intact order
+block, no opposing active zone, structural reward/risk of at least 1.5, and
+either a completed 1m FVG rejection or 3m microstructure confirmation.
+Higher-timeframe alignment remains visible as supporting confluence. Fresh
+futures displayed-depth direction, fresh option depth/spread, AI veto and all
+broker risk checks are still mandatory before an order.
+
 The service bootstraps 30 calendar days of exchange minute candles and one
 year of completed daily candles. It refreshes minute history independently.
 Kite REST timezone-less timestamps are interpreted as exchange IST;

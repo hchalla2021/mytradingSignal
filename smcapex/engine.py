@@ -17,11 +17,11 @@ RULE_LABELS = (
     "Pre-displacement liquidity sweep and reclaim",
     "Confirmed structure break / liquidity run",
     "Causal opposite candle order block; not invalidated",
-    "1m first-entry rejection inside FVG",
+    "1m FVG retest rejection inside the zone",
     "3m microstructure confirmation",
     "15m / 30m / 1h confirmed swing alignment",
     "No active opposing higher-timeframe/Daily FVG at entry",
-    "Known liquidity target; structural reward/risk >= 2",
+    "Known liquidity target; structural reward/risk >= 1.5",
 )
 
 
@@ -154,13 +154,24 @@ def gap_structure(five: list[Candle], gap: dict) -> dict | None:
     prior = five[max(0, i - 14):i - 2]
     if len(prior) < 6:
         return None
-    sweep, pool = prior[-1], prior[:-1]
-    swept = (sweep.low < min(r.low for r in pool) and sweep.close > min(r.low for r in pool)
-             if side == "CE" else
-             sweep.high > max(r.high for r in pool) and sweep.close < max(r.high for r in pool))
-    boundary = max(r.high for r in pool) if side == "CE" else min(r.low for r in pool)
+    sweep = prior[-1]
+    swept = False
+    sweep_index = len(prior) - 1
+    for candidate_index in range(len(prior) - 1, 2, -1):
+        pool = prior[max(0, candidate_index - 10):candidate_index]
+        candidate = prior[candidate_index]
+        liquidity = min(r.low for r in pool) if side == "CE" else max(r.high for r in pool)
+        reclaimed = (candidate.low < liquidity and candidate.close > liquidity
+                     if side == "CE" else
+                     candidate.high > liquidity and candidate.close < liquidity)
+        if reclaimed:
+            sweep, sweep_index, swept = candidate, candidate_index, True
+            break
+    boundary = (max(r.high for r in prior[max(0, sweep_index - 10):sweep_index])
+                if side == "CE" else min(r.low for r in prior[max(0, sweep_index - 10):sweep_index]))
     bos = five[i - 1].close > boundary if side == "CE" else five[i - 1].close < boundary
-    ob = next((r for r in reversed(prior) if
+    causal = prior[sweep_index:]
+    ob = next((r for r in reversed(causal) if
                (r.close < r.open if side == "CE" else r.close > r.open)), None)
     ob_valid = ob is not None and not any(
         r.close < ob.low if side == "CE" else r.close > ob.high for r in five[i:])
@@ -272,12 +283,14 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
         intact = (gap["state"] != "INVALIDATED" and len(five) - i <= 8
                   and not any(r.low <= gap["lower"] if side == "CE" else r.high >= gap["upper"]
                               for r in since))
-        retest = latest.at >= datetime.fromisoformat(gap["confirmed_at"]) and (
-            gap["lower"] < latest.low < gap["upper"] and latest.close > gap["upper"] and latest.close > latest.open
+        retest = any(
+            (gap["lower"] < row.high and row.low < gap["upper"]
+             and row.close > gap["upper"] and row.close > row.open)
             if side == "CE" else
-            gap["lower"] < latest.high < gap["upper"] and latest.close < gap["lower"] and latest.close < latest.open)
-        retest = retest and not any(
-            r.low < gap["upper"] if side == "CE" else r.high > gap["lower"] for r in since[:-1])
+            (row.high > gap["lower"] and row.low < gap["upper"]
+             and row.close < gap["lower"] and row.close < row.open)
+            for row in since
+        )
         micro = len(three) >= 3 and (
             three[-1].close > max(r.high for r in three[-3:-1]) if side == "CE"
             else three[-1].close < min(r.low for r in three[-3:-1]))
@@ -296,7 +309,7 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
         target = min(unbroken) if side == "CE" and unbroken else max(unbroken) if unbroken else None
         risk = abs(entry - stop)
         rr = abs(target - entry) / risk if target is not None and risk > 0 else 0
-        values = (intact, swept, bos, ob_valid, retest, micro, aligned, not opposing_gap, rr >= 2)
+        values = (intact, swept, bos, ob_valid, retest, micro, aligned, not opposing_gap, rr >= 1.5)
         checks = [{"label": label, "passed": bool(passed),
                    "status": "PASS" if passed else "FAIL", "detail": ""}
                   for label, passed in zip(RULE_LABELS, values)]
@@ -308,7 +321,8 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
                             "trigger_at": latest.at.isoformat()}
         if best_diagnostic is None or score > best_diagnostic["score"]:
             best_diagnostic = {"checks": checks, "score": score, "setup": diagnostic_setup}
-        if not all(values):
+        required = (intact, swept, bos, ob_valid, retest or micro, not opposing_gap, rr >= 1.5)
+        if not all(required):
             continue
         result.update(checks=checks, score=score, evaluation="QUALIFIED",
                       diagnostic=diagnostic_setup,

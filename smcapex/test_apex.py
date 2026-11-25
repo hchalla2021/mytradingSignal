@@ -284,6 +284,39 @@ class StructureTests(unittest.TestCase):
             self.assertEqual(invalid["decision"], "WAIT")
             self.assertIsNone(invalid["setup"])
 
+    def test_core_structure_and_retest_or_micro_can_qualify_without_perfect_confluence(self):
+        five = gap_rows()
+        sweep = five[19]
+        five[19] = Candle(sweep.at, 100.5, 101, 98.5, 100)
+        prefix = [Candle(NOW.replace(day=23, hour=14, minute=40) + timedelta(minutes=5 * i),
+                         100, 101, 99, 100) for i in range(10)]
+        five = prefix + five
+        five += [Candle(NOW.replace(minute=10), 104, 106, 103, 104),
+                 Candle(NOW.replace(minute=15), 104, 106, 101.5, 103)]
+        one = [Candle(NOW.replace(minute=i), 104, 105, 103, 104) for i in range(10, 20)]
+        three = [Candle(NOW.replace(minute=i), 104, 105, 103, 104) for i in (9, 12)]
+        three += [Candle(NOW.replace(minute=15), 104, 107, 103, 106)]
+        frames = {1: one, 3: three, 5: five}
+        for minutes in (15, 30, 60):
+            latest = {15: NOW.replace(hour=11, minute=0),
+                      30: NOW.replace(hour=10, minute=45),
+                      60: NOW.replace(hour=10, minute=15)}[minutes]
+            levels = [100, 101, 100, 102, 101, 103, 102, 104, 103, 105, 104, 106, 105, 107, 106]
+            frames[minutes] = [
+                Candle(latest - timedelta(minutes=(14 - i) * minutes),
+                       level, level + 1, level - 1, level)
+                for i, level in enumerate(levels)
+            ]
+        daily = [Candle(NOW.replace(day=23, hour=9, minute=15), 100, 140, 90, 100)]
+        with patch("smcapex.engine.aggregate", side_effect=lambda rows, minutes, now: frames[minutes]):
+            result = evaluate([], daily, NOW)
+        self.assertEqual(result["decision"], "BUY CE", result["reason"])
+        self.assertFalse(result["checks"][4]["passed"])
+        self.assertTrue(result["checks"][5]["passed"])
+        self.assertFalse(result["checks"][6]["passed"])
+        self.assertLess(result["score"], 100)
+        self.assertEqual(result["evaluation"], "QUALIFIED")
+
     def test_rejects_nonfinite_invalid_geometry_and_naive_time(self):
         for args in [(NOW, 100, float("nan"), 99, 100), (NOW, 100, 99, 98, 100),
                      (NOW.replace(tzinfo=None), 100, 101, 99, 100)]:
