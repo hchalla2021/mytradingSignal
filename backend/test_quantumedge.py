@@ -15,7 +15,11 @@ import httpx
 
 from services.aqte_live import AQTELiveService, QUANTUMEDGE_TAG
 from services.aqte_engine import AQTEEngine, Candle, Contract
-from services.quantumedge_intraday import QuantumEdgeIntradayService, _price_action
+from services.quantumedge_intraday import (
+    QuantumEdgeIntradayService,
+    _institutional_setup,
+    _price_action,
+)
 from services.quantumedge_strategies import previous_spot_levels, select_setup
 from services.aqte_ml import TARGET
 from services.quantumedge_ml import FEATURE_NAMES, SCHEMA, THRESHOLD, QuantumEdgeML
@@ -108,6 +112,30 @@ class QuantumEdgeAIReviewTests(unittest.TestCase):
         self.assertIsNone(service._price_action_stop(bars[:-1], "CE"))
         bars[-1]["at"] += 60
         self.assertIsNone(service._price_action_stop(bars, "PE"))
+
+    def test_institutional_setup_requires_fvg_sweep_order_block_and_continuation(self):
+        now = 1_700_000_000
+        bars = [{"at": now - (22 - i) * 60 - 1, "open": 100 + i, "high": 101 + i,
+                 "low": 99 + i, "close": 99 if i in (20, 21) else 100 + i,
+                 "volume": 100} for i in range(22)]
+        bars[-1]["at"] = now // 60 * 60 - 60
+        bars[-2]["at"] = bars[-1]["at"] - 60
+        bars[-1]["close"], bars[-2]["close"] = 79, 80
+        for i in range(19, -1, -1):
+            bars[i]["at"] = bars[20]["at"] - (20 - i) * 60
+        with mock.patch("services.quantumedge_intraday.detect_fvgs", return_value=[
+                {"side": "BEARISH", "state": "OPEN", "barsAgo": 2, "low": 90, "high": 100}]), \
+             mock.patch("services.quantumedge_intraday.detect_swings", return_value=[]), \
+             mock.patch("services.quantumedge_intraday.detect_liquidity_pools", return_value=[
+                 {"level": 105, "side": "BSL"}]), \
+             mock.patch("services.quantumedge_intraday.detect_sweeps", return_value=[
+                 {"side": "BSL", "trapConfirmed": True, "barsAgo": 3}]), \
+             mock.patch("services.quantumedge_intraday.detect_order_blocks", return_value=[
+                 {"side": "SUPPLY", "state": "VALID", "barsAgo": 2, "low": 100, "high": 105}]):
+            result = _institutional_setup(bars, now)
+        self.assertEqual(result["side"], "PE")
+        self.assertEqual(result["id"], "institutional_bear_fvg")
+        self.assertIn("liquidity sweep", result["reason"])
 
     def test_smart_trailing_stop_is_opt_in(self):
         with mock.patch.dict(os.environ, {}, clear=True):

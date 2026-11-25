@@ -322,7 +322,11 @@ export default function SMCApexSection() {
           onClick={() => { setSymbol(name); setSettingsOpen(false); }}
           className={`${panel} flex items-center justify-center gap-3 p-3 ${symbol === name ? 'ring-1 ring-green-400' : ''}`}>
           <Activity size={32} className={i === 1 ? 'text-fuchsia-400' : i === 2 ? 'text-cyan-300' : 'text-green-400'} />
-          <div><div className="font-black">{name}</div><div className="flex flex-wrap items-baseline justify-center gap-x-2 tabular-nums">
+          <div><div className="flex items-center gap-2 font-black">{name}
+            <span className={`rounded border px-1.5 py-0.5 text-[9px] ${liveQuote ? 'border-green-500 text-green-300' : lastClose ? 'border-amber-500 text-amber-300' : 'border-rose-500 text-rose-300'}`}>
+              {liveQuote ? 'LIVE' : lastClose ? 'LAST CLOSE' : 'STALE'}
+            </span>
+          </div><div className="flex flex-wrap items-baseline justify-center gap-x-2 tabular-nums">
             <span className="text-2xl font-black">{fmt(price)}</span>
             <span className={`text-xs font-bold ${change != null && change < 0 ? 'text-red-400' : 'text-green-400'}`}>{points != null && change != null ? `${change < 0 ? '▼' : '▲'} ${fmt(Math.abs(points))} (${fmt(Math.abs(change))}%)` : '--'}</span>
           </div>

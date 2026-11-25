@@ -17,7 +17,7 @@ RULE_LABELS = (
     "Pre-displacement liquidity sweep and reclaim",
     "Confirmed structure break / liquidity run",
     "Causal opposite candle order block; not invalidated",
-    "1m FVG retest rejection inside the zone",
+    "1m FVG retest/rejection or post-FVG continuation",
     "3m microstructure confirmation",
     "15m / 30m / 1h confirmed swing alignment",
     "No active opposing higher-timeframe/Daily FVG at entry",
@@ -291,6 +291,11 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
              and row.close < gap["lower"] and row.close < row.open)
             for row in since
         )
+        continuation = len(since) >= 2 and all(
+            row.close > gap["upper"] and row.close > row.open for row in since[-2:]
+        ) if side == "CE" else len(since) >= 2 and all(
+            row.close < gap["lower"] and row.close < row.open for row in since[-2:]
+        )
         micro = len(three) >= 3 and (
             three[-1].close > max(r.high for r in three[-3:-1]) if side == "CE"
             else three[-1].close < min(r.low for r in three[-3:-1]))
@@ -309,7 +314,8 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
         target = min(unbroken) if side == "CE" and unbroken else max(unbroken) if unbroken else None
         risk = abs(entry - stop)
         rr = abs(target - entry) / risk if target is not None and risk > 0 else 0
-        values = (intact, swept, bos, ob_valid, retest, micro, aligned, not opposing_gap, rr >= 1.5)
+        values = (intact, swept, bos, ob_valid, retest or continuation, micro,
+                  aligned, not opposing_gap, rr >= 1.5)
         checks = [{"label": label, "passed": bool(passed),
                    "status": "PASS" if passed else "FAIL", "detail": ""}
                   for label, passed in zip(RULE_LABELS, values)]
@@ -321,7 +327,8 @@ def evaluate(candles: list[Candle], daily: list[Candle], now: datetime) -> dict:
                             "trigger_at": latest.at.isoformat()}
         if best_diagnostic is None or score > best_diagnostic["score"]:
             best_diagnostic = {"checks": checks, "score": score, "setup": diagnostic_setup}
-        required = (intact, swept, bos, ob_valid, retest or micro, not opposing_gap, rr >= 1.5)
+        required = (intact, swept, bos, ob_valid, retest or continuation or micro,
+                    not opposing_gap, rr >= 1.5)
         if not all(required):
             continue
         result.update(checks=checks, score=score, evaluation="QUALIFIED",

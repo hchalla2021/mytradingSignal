@@ -245,7 +245,8 @@ test('index cards show only price and change, with source and warnings still ava
   await flush();
   const card = elements(app.render()).find(node => node.type === 'button' && text(node).trim().startsWith('NIFTY'));
   assert.match(text(card), /100\.00\s+▲ 0\.00 \(0\.00%\)/);
-  assert.doesNotMatch(text(card), /LIVE|RECEIVED|Data incomplete|entries blocked/);
+  assert.match(text(card), /LIVE/);
+  assert.doesNotMatch(text(card), /RECEIVED|Data incomplete|entries blocked/);
   assert.match(card.props.title, /receipt time, not an exchange timestamp/);
   assert.match(card.props['aria-label'], /receipt time, not an exchange timestamp/);
   assert.match(text(app.render()), /NIFTY: rejected future tick with missing exchange timestamp/);
@@ -260,19 +261,22 @@ test('index cards show last close then live price, with the session date accessi
   } } };
   const app = harness(async url => url.endsWith('/status') ? response(data) : live(false));
   await flush();
+  assert.match(text(app.render()), /LAST CLOSE/);
   const card = () => elements(app.render()).find(node => node.type === 'button' && text(node).trim().startsWith('NIFTY'));
   assert.match(text(card()), /110\.00/);
   assert.match(text(card()), /▲ 10\.00 \(10\.00%\)/);
   assert.match(card().props['aria-label'], /2026-11-23, not live/);
   assert.match(text(app.render()), /Underlying \(last close\).*2026-11-23/);
-  assert.doesNotMatch(text(card()), /111\.00|LAST CLOSE|LIVE/);
+  assert.match(text(card()), /LAST CLOSE/);
+  assert.doesNotMatch(text(card()), /111\.00|LIVE/);
   data.indices.NIFTY.fresh = true;
   data.indices.NIFTY.age = 1;
   app.intervals.find(timer => timer.delay === 3000).fn();
   await flush();
   assert.match(text(card()), /111\.00/);
   assert.match(card().props.title, /Live quote using WebSocket receipt time/);
-  assert.doesNotMatch(text(card()), /LIVE|RECEIVED|LAST CLOSE/);
+  assert.match(text(card()), /LIVE/);
+  assert.doesNotMatch(text(card()), /RECEIVED|LAST CLOSE/);
   assert.equal(button(app.render()).props['aria-checked'], false);
 });
 
@@ -289,7 +293,7 @@ test('declining last close shows the actual point loss and percentage with a red
   assert.match(elements(card).find(node => node.type === 'span' && text(node).includes('▼')).props.className, /text-red-400/);
 });
 
-test('stale last-received quote shows no misleading change or extra status text', async () => {
+test('stale last-received quote is visibly labeled without misleading change', async () => {
   const data = { ...snapshot(), indices: { NIFTY: {
     price: 100, change_percent: 0, age: 209.59, fresh: false, timestamp_source: 'RECEIPT',
   } } };
@@ -297,6 +301,7 @@ test('stale last-received quote shows no misleading change or extra status text'
   await flush();
   const card = elements(app.render()).find(node => node.type === 'button' && text(node).trim().startsWith('NIFTY'));
   assert.match(text(card), /100\.00\s+--/);
+  assert.match(text(card), /STALE/);
   assert.doesNotMatch(text(card), /RECEIVED|209|0\.00%|Data incomplete/);
   assert.match(card.props['aria-label'], /Last received quote, not live/);
 });

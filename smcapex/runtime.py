@@ -63,6 +63,7 @@ class Runtime:
         self.connection_lock = threading.Lock()
         self.connection_errors: dict[str, str] = {}
         self.feed = "CONNECTING"
+        self.feed_connected_at = 0.0
         self.events: queue.Queue = queue.Queue(maxsize=10000)
         self.overflow = threading.Event()
         self.stop_event = threading.Event()
@@ -163,6 +164,7 @@ class Runtime:
             ws.subscribe(requested)
             ws.set_mode(KiteTicker.MODE_FULL, requested)
             self.feed = "CONNECTED"
+            self.feed_connected_at = monotonic()
             self.connection_recovered("feed")
 
         def disconnected(ws, code, reason):
@@ -176,6 +178,17 @@ class Runtime:
         socket.connect(threaded=True)
         self.current_credentials = (key, token)
         self.last_history = 0
+
+    def stale_feed_streams(self, now: datetime) -> list[str]:
+        if self.feed != "CONNECTED" or monotonic() - self.feed_connected_at < 15:
+            return []
+        stale = []
+        for symbol in SYMBOLS:
+            for kind in ("spot", "future"):
+                tick = self.ticks.get((symbol, kind))
+                if tick is None or (now - tick["received"]).total_seconds() > 10:
+                    stale.append(f"{symbol} {kind}")
+        return stale
 
     def history(self, now: datetime):
         if self.kite is None:
@@ -568,6 +581,14 @@ class Runtime:
                         self.connect(cfg)
                         self.retry_seconds = min(900, self.retry_seconds * 2)
                 self.drain_ticks()
+                stale_streams = self.stale_feed_streams(now)
+                if stale_streams and session_open(now):
+                    reason = "Zerodha tick feed stale: " + ", ".join(stale_streams)
+                    self.connection_failure("feed", reason + "; reconnecting. New entries disabled.")
+                    self.feed = "DISCONNECTED"
+                    self.next_connection = monotonic() + 5
+                    if self.socket:
+                        self.socket.close()
                 for symbol, row in list(self.building.items()):
                     if row["at"] + timedelta(minutes=1, seconds=5) <= now:
                         self.finish_candle(symbol, row)

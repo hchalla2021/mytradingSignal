@@ -17,7 +17,15 @@ import httpx
 from services.aqte_engine import day, round_tick, session
 from services.quantumedge_ml import QuantumEdgeML
 from services.quantumedge_strategies import SPOT_STRATEGIES, previous_spot_levels, select_setup
-from services.smc_engine import DISPLACEMENT_ATR, DISPLACEMENT_BODY, detect_fvgs
+from services.smc_engine import (
+    DISPLACEMENT_ATR,
+    DISPLACEMENT_BODY,
+    detect_fvgs,
+    detect_liquidity_pools,
+    detect_order_blocks,
+    detect_sweeps,
+    detect_swings,
+)
 
 logger = logging.getLogger(__name__)
 SYMBOLS = ("NIFTY", "BANKNIFTY", "SENSEX")
@@ -73,6 +81,70 @@ def _price_action(bars: list[dict[str, Any]], now: float) -> dict[str, Any] | No
     gap = next((gap for gap in detect_fvgs(recent, atr) if gap["state"] == "OPEN"), None)
     return {"structure": structure, "displacement": displacement, "fvg": gap,
             "candle_closed_at": current["at"] + 60}
+
+
+def _institutional_setup(bars: list[dict[str, Any]], now: float) -> dict[str, Any] | None:
+    recent = bars[-50:]
+    if len(recent) < 21 or recent[-1]["at"] + 60 != int(now // 60) * 60:
+        return None
+    normalized = [{**bar, "timestamp": bar["at"]} for bar in recent]
+    true_ranges = [
+        max(bar["high"] - bar["low"], abs(bar["high"] - previous["close"]),
+            abs(bar["low"] - previous["close"]))
+        for previous, bar in zip(recent[-16:-1], recent[-15:])
+    ]
+    atr = mean(true_ranges)
+    if atr <= 0:
+        return None
+    gaps = detect_fvgs(normalized, atr)
+    gaps = [gap for gap in gaps if gap["state"] in {"OPEN", "PARTIAL"}
+            and gap["barsAgo"] <= 10]
+    if not gaps:
+        return None
+    latest = gaps[0]
+    bull = latest["side"] == "BULLISH"
+    side = "CE" if bull else "PE"
+    start = len(recent) - latest["barsAgo"] - 1
+    post_gap = recent[start:]
+    if len(post_gap) < 2:
+        return None
+    boundary = latest["high"] if bull else latest["low"]
+    continuation = all(bar["close"] > boundary and bar["close"] > bar["open"]
+                       if bull else bar["close"] < boundary and bar["close"] < bar["open"]
+                       for bar in post_gap[-2:])
+    swings = detect_swings(normalized)
+    pools = detect_liquidity_pools(
+        normalized, swings, float(recent[-1]["close"]), atr, 0, 0,
+        float(max(bar["high"] for bar in recent)),
+        float(min(bar["low"] for bar in recent)), None, None,
+    )
+    sweeps = detect_sweeps(normalized, pools, atr)
+    swept = any(
+        sweep["trapConfirmed"] and sweep["barsAgo"] <= 15
+        and ((bull and sweep["side"] == "SSL") or (not bull and sweep["side"] == "BSL"))
+        for sweep in sweeps
+    )
+    blocks = detect_order_blocks(normalized, atr)
+    order_block = next((
+        block for block in blocks
+        if block["state"] != "BREAKER"
+        and ((bull and block["side"] == "DEMAND") or (not bull and block["side"] == "SUPPLY"))
+        and block["barsAgo"] <= 15
+    ), None)
+    if not (swept and order_block and continuation):
+        return None
+    return {
+        "id": f"institutional_{'bull' if bull else 'bear'}_fvg",
+        "name": "Institutional FVG + liquidity sweep + order block",
+        "side": side,
+        "reason": (
+            f"{latest['side']} FVG with confirmed {'sell' if bull else 'buy'}-side "
+            f"liquidity sweep, valid {'demand' if bull else 'supply'} order block "
+            "and two-candle continuation"
+        ),
+        "evidence": {"fvg": latest, "order_block": order_block,
+                     "sweeps": [sweep for sweep in sweeps if sweep["trapConfirmed"]]},
+    }
 
 
 class QuantumEdgeIntradayService:
@@ -283,6 +355,9 @@ class QuantumEdgeIntradayService:
             setup, reason = select_setup(session_bars, now, spot_bars=latest_spot, prior_spot=prior_spot)
             bars = session_bars[-50:]
             price_action = _price_action(bars, now) if len(bars) >= 21 else None
+            institutional = _institutional_setup(session_bars, now)
+            if setup is None and institutional is not None:
+                setup, reason = institutional, institutional["reason"]
             if setup is None:
                 return {
                     "decision": "WAIT",
@@ -321,7 +396,12 @@ class QuantumEdgeIntradayService:
             volume_ratio = float(current["volume"]) / avg_volume if avg_volume else 0.0
             candle_at = float(current["at"])
             setup_key = f"QUANTUMEDGE:{symbol}:{int(candle_at)}:{side}:{setup['id']}"
-            identity = {"strategy": setup["id"], "strategy_name": setup["name"]}
+            identity = {
+                "strategy": setup["id"],
+                "strategy_name": setup["name"],
+                **({"institutional_evidence": setup["evidence"]}
+                   if setup.get("evidence") else {}),
+            }
             advanced_selection = self.advanced_strike_selection_enabled()
             candidates = self._rank_option_candidates(
                 engine, symbol, side, now, spot, lots, set(busy),
