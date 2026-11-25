@@ -675,6 +675,21 @@ class PersistenceAndAPITests(unittest.TestCase):
         self.assertEqual(self.put("/api/daily", {"daily_loss": 3000}).status_code, 200)
         self.assertTrue(self.runtime.executor.enabled)
 
+    def test_stale_connected_feed_identifies_each_missing_stream_without_using_off_as_feed_control(self):
+        self.runtime.feed = "CONNECTED"
+        self.runtime.feed_connected_at = 0
+        self.runtime.history_loaded = True
+        self.runtime.ticks = {
+            (symbol, kind): {"received": NOW - timedelta(seconds=2), "at": NOW - timedelta(seconds=2)}
+            for symbol in ("NIFTY", "BANKNIFTY", "SENSEX") for kind in ("spot", "future")
+        }
+        self.runtime.executor.enabled = False
+        self.runtime.ticks[("NIFTY", "future")]["received"] = NOW - timedelta(seconds=11)
+        with patch("smcapex.runtime.monotonic", return_value=30):
+            stale = self.runtime.stale_feed_streams(NOW)
+        self.assertEqual(stale, ["NIFTY future"])
+        self.assertFalse(self.runtime.executor.enabled)
+
     def test_candle_memory_persists_and_live_intent_is_not_a_saved_setting(self):
         rows = gap_rows()
         self.runtime.store.candles("NIFTY", "1", rows)

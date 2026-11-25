@@ -190,9 +190,9 @@ A qualifying FVG requires three contiguous completed 5m candles:
 Entry additionally requires a pre-displacement sweep/reclaim of an already
 known pool, a displacement close through the opposite internal boundary,
 an uninvalidated preceding opposite candle (operational order-block
-definition), 1m retest rejection or 3m microstructure confirmation, and an
-already observed/unbroken liquidity target with structural reward/risk
->= 1.5. Higher-frame swing alignment contributes to the displayed score but
+definition), 1m FVG retest/rejection, two-candle post-FVG continuation, or 3m
+microstructure confirmation, and an already observed/unbroken liquidity target
+with structural reward/risk >= 1.5. Higher-frame swing alignment contributes to the displayed score but
 does not erase otherwise complete same-timeframe institutional structure.
 FVGs are audited on every intraday frame and Daily. An active opposing
 15m/30m/1h/Daily gap covering entry vetoes the setup. Daily formations skip

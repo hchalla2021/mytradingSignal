@@ -180,7 +180,8 @@ class Runtime:
         self.last_history = 0
 
     def stale_feed_streams(self, now: datetime) -> list[str]:
-        if self.feed != "CONNECTED" or monotonic() - self.feed_connected_at < 15:
+        if (self.feed != "CONNECTED" or not self.history_loaded
+                or monotonic() - self.feed_connected_at < 15):
             return []
         stale = []
         for symbol in SYMBOLS:
