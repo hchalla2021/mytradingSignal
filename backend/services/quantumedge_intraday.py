@@ -183,14 +183,14 @@ class QuantumEdgeIntradayService:
         nearby_strikes = sorted(
             {contract.strike for contract in expiry_contracts},
             key=lambda strike: abs(strike - spot.price),
-        )[:5]
+        )[:9]
         strike_gaps = sorted(
             right - left for left, right in zip(sorted(nearby_strikes), sorted(nearby_strikes)[1:])
             if right > left
         )
         strike_step = median(strike_gaps) if strike_gaps else spot.price * 0.0025
         expiry_day = nearest_expiry == today
-        max_distance = strike_step * (1 if expiry_day else 2)
+        max_distance = strike_step * (1 if expiry_day else 8)
         spread_limit = float(getattr(engine.policy, "spread_fraction", 0.03))
         if not math.isfinite(strike_step) or strike_step <= 0 or not math.isfinite(spread_limit) or spread_limit <= 0:
             return []

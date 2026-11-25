@@ -290,6 +290,37 @@ class QuantumEdgeAIReviewTests(unittest.TestCase):
         )
         self.assertNotIn(3, [candidate["contract"].token for candidate in expiry_day])
 
+    def test_advanced_selection_searches_farther_same_expiry_for_risk_fit(self):
+        service = QuantumEdgeIntradayService()
+        now = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 3, 10, 10, 0)).timestamp()
+        engine = AQTEEngine()
+        engine.spot["NIFTY"] = mock.Mock(price=24000, at=now, received=now)
+        engine.future["NIFTY"] = mock.Mock(token=99, at=now, received=now)
+        engine.book.closed[("future", 99, 60)] = [
+            {"at": now - (45 - i) * 60, "open": 24000, "high": 24004 if i == 44 else 24001,
+             "low": 23999, "close": 24003 if i == 44 else 24000, "volume": 150 if i == 44 else 100}
+            for i in range(45)
+        ]
+        for token, strike, expiry, ask in (
+            (1, 24000, "2026-03-19", 400),
+            (2, 24050, "2026-03-19", 350),
+            (3, 24250, "2026-03-19", 50),
+        ):
+            engine.contracts[token] = Contract(
+                "NIFTY", token, f"NIFTY{token}CE", "NFO", "CE", strike, expiry, 65, 0.05)
+            engine.options[token] = mock.Mock(
+                at=now, received=now, bid=ask - 1, ask=ask,
+                bid_quantity=130, ask_quantity=130, volume=10000,
+            )
+        market = mock.Mock(lock=mock.MagicMock(), engine=engine)
+        with mock.patch.dict(os.environ, {"QUANTUMEDGE_ADVANCED_STRIKE_SELECTION": "true"}):
+            signal = service.evaluate(
+                market, "NIFTY", now, 1, 1000, set(), engine.costs, daily_budget=1500)
+        self.assertEqual(signal["decision"], "BUY CE")
+        self.assertEqual(signal["contract"]["token"], 3)
+        self.assertTrue(signal["alternate_strike"])
+        self.assertLess(signal["risk"], 1500)
+
     def test_selects_nearest_risk_fit_without_switching_expiry(self):
         service = QuantumEdgeIntradayService()
         now = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 3, 10, 10, 0)).timestamp()

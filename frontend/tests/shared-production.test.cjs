@@ -60,6 +60,8 @@ test('ordinary development and deployed production keep their existing routing',
   assert.equal(local.api.wsUrl, 'ws://localhost:8000/ws/market');
   const production = routing({ ...shared, NODE_ENV: 'production' }, 'https://mydailytradesignals.com');
   assert.equal(production.api.sharedProduction, false);
+  assert.equal(production.config.apiUrl, 'https://mydailytradesignals.com');
+  assert.equal(production.config.wsUrl, 'wss://mydailytradesignals.com/ws/market');
   assert.equal(production.api.baseUrl, 'https://mydailytradesignals.com');
   assert.equal(production.api.wsUrl, 'wss://mydailytradesignals.com/ws/market');
 });

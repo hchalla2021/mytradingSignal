@@ -17,6 +17,14 @@ function isLocalHostname(hostname: string): boolean {
   );
 }
 
+function isLocalHttpUrl(value: string): boolean {
+  try {
+    return isLocalHostname(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Detect current environment based on hostname
  * Can be called from both client and server
@@ -83,6 +91,9 @@ export function getEnvironmentConfig() {
   const sharedWsUrl = browser
     ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/market`
     : '';
+  const productionApi = process.env.NEXT_PUBLIC_PRODUCTION_API_URL || process.env.NEXT_PUBLIC_API_URL || '';
+  const productionWs = process.env.NEXT_PUBLIC_PRODUCTION_WS_URL || process.env.NEXT_PUBLIC_WS_URL || '';
+  const productionBrowser = browser && env === 'production' && !isLocalHostname(window.location.hostname);
 
   const config = {
     environment: env,
@@ -93,13 +104,17 @@ export function getEnvironmentConfig() {
     // API URLs - NO FALLBACKS, must be set in .env.local
     apiUrl:
       sharedProduction ? sharedApiUrl : env === 'production'
-        ? process.env.NEXT_PUBLIC_PRODUCTION_API_URL || process.env.NEXT_PUBLIC_API_URL || ''
+        ? productionBrowser && (!productionApi || isLocalHttpUrl(productionApi))
+          ? sharedApiUrl
+          : productionApi
         : process.env.NEXT_PUBLIC_LOCAL_API_URL || process.env.NEXT_PUBLIC_API_URL || '',
 
     // WebSocket URLs - NO FALLBACKS, must be set in .env.local
     wsUrl:
       sharedProduction ? sharedWsUrl : env === 'production'
-        ? process.env.NEXT_PUBLIC_PRODUCTION_WS_URL || process.env.NEXT_PUBLIC_WS_URL || ''
+        ? productionBrowser && (!productionWs || isLocalHttpUrl(productionWs))
+          ? sharedWsUrl
+          : productionWs
         : process.env.NEXT_PUBLIC_LOCAL_WS_URL || process.env.NEXT_PUBLIC_WS_URL || '',
 
     // Display info
