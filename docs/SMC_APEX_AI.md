@@ -184,13 +184,16 @@ A qualifying FVG requires three contiguous completed 5m candles:
 5. Subsequent far-boundary touches invalidate the gap, including on 1m data.
    Partial mitigation is explicitly distinguished from invalidation.
 6. Gap must be from today's session and no more than eight completed 5m
-   bars old. Only the first post-confirmation intragap rejection can trigger.
+   bars old. Any completed post-confirmation intragap rejection is retained
+   in the setup audit; invalidation still vetoes execution.
 
 Entry additionally requires a pre-displacement sweep/reclaim of an already
 known pool, a displacement close through the opposite internal boundary,
 an uninvalidated preceding opposite candle (operational order-block
-definition), 3m confirmation, higher-frame swing alignment, and an already
-observed/unbroken liquidity target with structural reward/risk >= 2.
+definition), 1m retest rejection or 3m microstructure confirmation, and an
+already observed/unbroken liquidity target with structural reward/risk
+>= 1.5. Higher-frame swing alignment contributes to the displayed score but
+does not erase otherwise complete same-timeframe institutional structure.
 FVGs are audited on every intraday frame and Daily. An active opposing
 15m/30m/1h/Daily gap covering entry vetoes the setup. Daily formations skip
 weekends but reject other missing calendar weekdays conservatively; the
