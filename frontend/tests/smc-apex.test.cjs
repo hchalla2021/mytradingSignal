@@ -254,21 +254,19 @@ test('index cards show only price and change, with source and warnings still ava
   assert.equal(button(app.render()).props['aria-checked'], false);
 });
 
-test('index cards show last close then live price, with the session date accessible', async () => {
+test('index cards never display last close as a current live price', async () => {
   const data = { ...snapshot(), live: false, indices: { NIFTY: {
     price: 111, change_percent: 0, age: 145, fresh: false, timestamp_source: 'RECEIPT',
     last_close: { price: 110, change_percent: 10, session_date: '2026-11-23' },
   } } };
   const app = harness(async url => url.endsWith('/status') ? response(data) : live(false));
   await flush();
-  assert.match(text(app.render()), /LAST CLOSE/);
+  assert.match(text(app.render()), /UNAVAILABLE/);
   const card = () => elements(app.render()).find(node => node.type === 'button' && text(node).trim().startsWith('NIFTY'));
-  assert.match(text(card()), /110\.00/);
-  assert.match(text(card()), /▲ 10\.00 \(10\.00%\)/);
-  assert.match(card().props['aria-label'], /2026-11-23, not live/);
-  assert.match(text(app.render()), /Underlying \(last close\).*2026-11-23/);
-  assert.match(text(card()), /LAST CLOSE/);
-  assert.doesNotMatch(text(card()), /111\.00|LIVE/);
+  assert.match(text(card()), /--/);
+  assert.doesNotMatch(text(card()), /110\.00|111\.00|LIVE/);
+  assert.match(card().props['aria-label'], /last close is not displayed/);
+  assert.match(text(app.render()), /Underlying \(not live\).*--/);
   data.indices.NIFTY.fresh = true;
   data.indices.NIFTY.age = 1;
   app.intervals.find(timer => timer.delay === 3000).fn();
@@ -276,7 +274,7 @@ test('index cards show last close then live price, with the session date accessi
   assert.match(text(card()), /111\.00/);
   assert.match(card().props.title, /Live quote using WebSocket receipt time/);
   assert.match(text(card()), /LIVE/);
-  assert.doesNotMatch(text(card()), /RECEIVED|LAST CLOSE/);
+  assert.doesNotMatch(text(card()), /RECEIVED|LAST CLOSE|UNAVAILABLE/);
   assert.equal(button(app.render()).props['aria-checked'], false);
 });
 
@@ -288,22 +286,34 @@ test('declining last close shows the actual point loss and percentage with a red
   const app = harness(async url => url.endsWith('/status') ? response(data) : live(false));
   await flush();
   const card = elements(app.render()).find(node => node.type === 'button' && text(node).trim().startsWith('NIFTY'));
-  assert.match(text(card), /90\.00\s+▼ 10\.00 \(10\.00%\)/);
-  assert.match(card.props['aria-label'], /down 10\.00 points, 10\.00 percent/);
-  assert.match(elements(card).find(node => node.type === 'span' && text(node).includes('▼')).props.className, /text-red-400/);
+  assert.match(text(card), /--\s+--/);
+  assert.match(text(card), /UNAVAILABLE/);
+  assert.doesNotMatch(text(card), /90\.00|▼/);
 });
 
-test('stale last-received quote is visibly labeled without misleading change', async () => {
+test('stale last-received quote is hidden and visibly unavailable', async () => {
   const data = { ...snapshot(), indices: { NIFTY: {
     price: 100, change_percent: 0, age: 209.59, fresh: false, timestamp_source: 'RECEIPT',
   } } };
   const app = harness(async url => url.endsWith('/status') ? response(data) : live(false));
   await flush();
   const card = elements(app.render()).find(node => node.type === 'button' && text(node).trim().startsWith('NIFTY'));
-  assert.match(text(card), /100\.00\s+--/);
-  assert.match(text(card), /STALE/);
+  assert.match(text(card), /--\s+--/);
+  assert.match(text(card), /UNAVAILABLE/);
   assert.doesNotMatch(text(card), /RECEIVED|209|0\.00%|Data incomplete/);
-  assert.match(card.props['aria-label'], /Last received quote, not live/);
+  assert.match(card.props['aria-label'], /last close is not displayed/);
+});
+
+test('initial load uses a neutral loading state rather than stale or previous close', async () => {
+  let resolveStatus;
+  const pending = new Promise(resolve => { resolveStatus = resolve; });
+  const app = harness(async url => url.endsWith('/status') ? pending : live(false));
+  const card = () => elements(app.render()).find(node =>
+    node.type === 'button' && text(node).trim().startsWith('NIFTY'));
+  assert.match(text(card()), /NIFTY.*LOADING.*--/);
+  assert.doesNotMatch(text(card()), /STALE|LAST CLOSE/);
+  resolveStatus(response(snapshot()));
+  await flush();
 });
 
 test('connection interruptions while OFF appear as retrying status, without masking protective errors', async () => {

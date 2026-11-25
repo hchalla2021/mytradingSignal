@@ -241,7 +241,7 @@ export default function SMCApexSection() {
   const entryBlocker = liveState === true ? liveBlockers.join(' ') : '';
   const selectedQuote = status?.indices[symbol];
   const selectedLive = !!selectedQuote?.fresh && !stale;
-  const selectedPrice = selectedLive ? selectedQuote?.price : selectedQuote?.last_close?.price ?? selectedQuote?.price;
+  const selectedPrice = selectedLive ? selectedQuote?.price : null;
 
   return <section aria-label="SMC Apex AI" className="mb-6 overflow-hidden rounded-3xl border border-cyan-500/40 bg-[#020e16] p-3 text-slate-100 shadow-[0_0_24px_#00d9a510] sm:p-5">
     <header className="mb-4 flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
@@ -305,26 +305,25 @@ export default function SMCApexSection() {
     <div className="mb-4 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_2fr]">
       {SYMBOLS.map((name, i) => {
         const quote = status?.indices[name];
+        const loading = status === null && !error;
         const liveQuote = !!quote?.fresh && !stale;
-        const lastClose = !liveQuote ? quote?.last_close : null;
-        const price = liveQuote ? quote?.price : lastClose?.price ?? quote?.price;
-        const change = liveQuote ? quote?.change_percent : lastClose?.change_percent;
+        const price = liveQuote ? quote?.price : null;
+        const change = liveQuote ? quote?.change_percent : null;
         const points = price != null && Number.isFinite(price) && price > 0 &&
           change != null && Number.isFinite(change) && change > -100
           ? price * change / (100 + change) : null;
         const source = liveQuote ? (quote?.timestamp_source === 'RECEIPT'
           ? 'Live quote using WebSocket receipt time, not an exchange timestamp.'
           : 'Live quote using the exchange timestamp.')
-          : lastClose ? `Last completed exchange close on ${lastClose.session_date}, not live. Change is versus the prior close.`
-            : quote?.price != null ? 'Last received quote, not live.' : 'Quote unavailable.';
+          : loading ? 'Loading current Zerodha quote.' : 'Current Zerodha quote unavailable; last close is not displayed.';
         return <button key={name} disabled={pending} title={source}
           aria-label={`${name}: ${fmt(price)}, ${points != null && change != null ? `${change < 0 ? 'down' : 'up'} ${fmt(Math.abs(points))} points, ${fmt(Math.abs(change))} percent` : 'change unavailable'}. ${source}`}
           onClick={() => { setSymbol(name); setSettingsOpen(false); }}
           className={`${panel} flex items-center justify-center gap-3 p-3 ${symbol === name ? 'ring-1 ring-green-400' : ''}`}>
           <Activity size={32} className={i === 1 ? 'text-fuchsia-400' : i === 2 ? 'text-cyan-300' : 'text-green-400'} />
           <div><div className="flex items-center gap-2 font-black">{name}
-            <span className={`rounded border px-1.5 py-0.5 text-[9px] ${liveQuote ? 'border-green-500 text-green-300' : lastClose ? 'border-amber-500 text-amber-300' : 'border-rose-500 text-rose-300'}`}>
-              {liveQuote ? 'LIVE' : lastClose ? 'LAST CLOSE' : 'STALE'}
+            <span className={`rounded border px-1.5 py-0.5 text-[9px] ${liveQuote ? 'border-green-500 text-green-300' : loading ? 'border-cyan-500 text-cyan-300' : 'border-amber-500 text-amber-300'}`}>
+              {liveQuote ? 'LIVE' : loading ? 'LOADING' : 'UNAVAILABLE'}
             </span>
           </div><div className="flex flex-wrap items-baseline justify-center gap-x-2 tabular-nums">
             <span className="text-2xl font-black">{fmt(price)}</span>
@@ -392,8 +391,7 @@ export default function SMCApexSection() {
       </div>
       <div className={`${panel} p-4`}><h3 className="mb-3 flex items-center gap-2 font-black"><Activity />TRADE DETAILS</h3>
         <dl className="text-xs">{[
-          [selectedLive ? 'Underlying (live)' : selectedQuote?.last_close ? 'Underlying (last close)' : 'Underlying (not live)',
-            `${symbol} ${fmt(selectedPrice)}${!selectedLive && selectedQuote?.last_close ? ` · ${selectedQuote.last_close.session_date}` : ''}`],
+          [selectedLive ? 'Underlying (live)' : 'Underlying (not live)', `${symbol} ${fmt(selectedPrice)}`],
           ['Option contract', active?.contract || contract?.symbol || '--'],
           ['Entry premium', fmt(entry)], ['Structural invalidation', fmt(active?.setup?.underlying_stop ?? signal?.setup?.underlying_stop ?? signal?.diagnostic?.underlying_stop)],
           ['Known liquidity target', fmt(active?.setup?.liquidity_target ?? signal?.setup?.liquidity_target ?? signal?.diagnostic?.liquidity_target)],
