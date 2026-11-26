@@ -962,26 +962,6 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("Feed recovery", self.service.snapshot()["data"]["NIFTY"]["reasons"][0])
         self.assertEqual(self.service.gaps[10]["kind"], "spot")
 
-    def test_authenticated_kill_and_bounded_journal(self):
-        self.service.engine.paper_enabled = True
-        from routers.aqte import router
-        from services.auth import auth_service
-        app = FastAPI()
-        app.include_router(router)
-        client = TestClient(app)
-        with patch("routers.aqte.get_aqte_service", return_value=self.service):
-            self.assertIn(client.post("/api/aqte/kill").status_code, (401, 403))
-            refresh = auth_service.create_refresh_token({"sub": "operator"})
-            self.assertEqual(client.post("/api/aqte/kill", headers={"Authorization": f"Bearer {refresh}"}).status_code, 401)
-            access = auth_service.create_access_token({"sub": "operator"})
-            self.assertEqual(client.post("/api/aqte/kill", headers={"Authorization": f"Bearer {access}"}).status_code, 200)
-            malformed = auth_service.create_access_token({})
-            self.assertEqual(client.post("/api/aqte/kill", headers={"Authorization": f"Bearer {malformed}"}).status_code, 401)
-            self.assertEqual(client.get("/api/aqte/journal?limit=501").status_code, 422)
-            result = client.get("/api/aqte/snapshot")
-            self.assertEqual(result.json()["mode"], "PAPER_ONLY")
-            self.assertEqual(result.headers["cache-control"], "no-store")
-
     def test_production_analysis_disables_paper_and_preserves_saved_state(self):
         paper = ready_engine()
         paper.killed = True
@@ -1011,19 +991,6 @@ class ServiceTests(unittest.TestCase):
             analysis.persist(db)
             self.assertEqual(db.execute("SELECT payload FROM aqte_state WHERE id=1").fetchone()["payload"], saved)
         self.assertEqual(analysis.snapshot()["mode"], "ANALYSIS_ONLY")
-
-    def test_disabled_paper_kill_cannot_stop_real_analysis(self):
-        from routers.aqte import router
-        from services.auth import auth_service
-        app = FastAPI()
-        app.include_router(router)
-        client = TestClient(app)
-        access = auth_service.create_access_token({"sub": "operator"})
-        with patch("routers.aqte.get_aqte_service", return_value=self.service):
-            response = client.post("/api/aqte/kill", headers={"Authorization": f"Bearer {access}"})
-        self.assertEqual(response.status_code, 410)
-        self.assertFalse(self.service.engine.killed)
-
 
 class ReplayTests(unittest.TestCase):
     def test_replay_executes_same_strategy_without_looking_ahead(self):

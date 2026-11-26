@@ -11,11 +11,9 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import requests
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from services.aqte_live import (
     ENTRY_RETRY_SECONDS, MARKET_WAIT, AQTELiveService, LiveBlocked,
@@ -2060,13 +2058,59 @@ class LiveTests(unittest.TestCase):
 
     def test_manual_quantity_change_and_previous_session_fail_closed(self):
         self.protect()
-        self.positions[0]["quantity"] = 0
+        self.positions[0]["quantity"] = 1
         with self.assertRaisesRegex(LiveBlocked, "possible manual intervention"):
             self.live.reconcile()
         self.broker.modify_order.assert_not_called()
         with patch("services.aqte_live.time.time", return_value=NOW + 86400):
             with self.assertRaisesRegex(LiveBlocked, "Previous-session"):
                 self.live.reconcile()
+
+    def test_manual_full_close_cancels_owned_stop_and_clears_active_position(self):
+        self.protect()
+        self.positions[0].update(quantity=0, buy_quantity=CONTRACT.lot_size,
+                                 sell_quantity=CONTRACT.lot_size, sell_price=103)
+        self.live.reconcile()
+        self.broker.cancel_order.assert_called_once_with(variety="regular", order_id="2")
+        self.assertIsNotNone(self.live.state["active"])
+        self.orders[1]["status"] = "CANCELLED"
+        self.live.reconcile()
+        self.assertIsNone(self.live.state["active"])
+        trade = self.live.state["trades"][-1]
+        self.assertEqual(trade["exit_reason"], "MANUAL_KITE_EXIT")
+        self.assertEqual(trade["exit_price"], 103)
+        self.assertGreater(trade["net_pnl"], 0)
+
+    def test_manual_full_close_without_price_clears_stale_active_without_fabricating_pnl(self):
+        self.protect()
+        self.positions[0]["quantity"] = 0
+        self.orders[1]["status"] = "CANCELLED"
+        before = len(self.live.state["trades"])
+        self.live.reconcile()
+        self.assertIsNone(self.live.state["active"])
+        self.assertEqual(len(self.live.state["trades"]), before)
+
+    def test_partial_protective_exit_plus_manual_close_uses_weighted_exit_price(self):
+        self.protect()
+        half = CONTRACT.lot_size // 2
+        self.orders[1].update(
+            status="CANCELLED", filled_quantity=half, average_price=101,
+            order_timestamp=datetime.fromtimestamp(NOW, IST),
+        )
+        self.positions[0]["quantity"] = 0
+        self.orders.append({
+            "order_id": "MANUAL-EXIT",
+            "exchange": CONTRACT.exchange, "tradingsymbol": CONTRACT.trading_symbol,
+            "product": "MIS", "transaction_type": "SELL", "tag": "MANUAL",
+            "status": "COMPLETE", "filled_quantity": CONTRACT.lot_size - half,
+            "average_price": 105, "order_timestamp": datetime.fromtimestamp(NOW + 1, IST),
+        })
+        self.live.reconcile()
+        trade = self.live.state["trades"][-1]
+        self.assertEqual(trade["exit_quantity"], CONTRACT.lot_size)
+        expected_exit = (half * 101 + (CONTRACT.lot_size - half) * 105) / CONTRACT.lot_size
+        self.assertAlmostEqual(trade["exit_price"], expected_exit, places=6)
+        self.assertIsNone(self.live.state["active"])
 
     def test_daily_trade_consecutive_loss_and_cash_limits(self):
         self.armed()
@@ -2559,158 +2603,6 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.live.state["active"], active)
         self.broker.cancel_order.assert_not_called()
         self.assertEqual(self.broker.place_order.call_count, 2)
-
-
-class LiveAPITests(unittest.TestCase):
-    def test_selected_exit_requires_owner_intent_origin_trade_identity_and_confirmation(self):
-        controller = Mock()
-        controller.request_exit.return_value = {"automation_on": False}
-        body = {"trade_id": "0123456789abcdef", "confirmation": "CLOSE SELECTED AQTE TRADE"}
-        with patch("routers.aqte.get_live_service", return_value=controller), patch(
-            "routers.aqte.get_settings", return_value=settings()
-        ), patch("routers.aqte.app_access_service.validate_session", new_callable=AsyncMock) as session:
-            session.return_value = {"authenticated": False}
-            self.assertEqual(self.client.post("/api/aqte/live/exit", headers=self.headers, json=body).status_code, 401)
-            session.return_value = {"authenticated": True, "username": "admin"}
-            self.assertEqual(self.client.post("/api/aqte/live/exit", json=body).status_code, 403)
-            self.assertEqual(self.client.post("/api/aqte/live/exit", headers=self.headers | {
-                "Origin": "https://untrusted.example"}, json=body).status_code, 403)
-            for invalid in ({}, {**body, "trade_id": "bad"}, {**body, "quantity": 5},
-                            {**body, "confirmation": "CLOSE AQTE POSITIONS"}):
-                self.assertEqual(self.client.post("/api/aqte/live/exit", headers=self.headers, json=invalid).status_code, 422)
-            controller.request_exit.assert_not_called()
-            self.assertEqual(self.client.post("/api/aqte/live/exit", headers=self.headers, json=body).status_code, 200)
-            controller.request_exit.assert_called_once_with(body["trade_id"])
-            controller.stop_entries.assert_not_called()
-
-    def test_invalid_kite_token_is_explicit_and_does_not_mutate_broker(self):
-        from kiteconnect.exceptions import TokenException
-        from routers.aqte import live_call
-        import asyncio
-        from fastapi import HTTPException
-        reader = Mock(side_effect=TokenException("Incorrect api_key or access_token"))
-        with self.assertRaises(HTTPException) as raised:
-            asyncio.run(live_call(reader))
-        self.assertEqual(raised.exception.status_code, 409)
-        self.assertIn("Sign in again", raised.exception.detail)
-        self.assertIn("App-access login is separate", raised.exception.detail)
-        reader.assert_called_once_with()
-
-    def setUp(self):
-        from routers.aqte import router
-        app = FastAPI()
-        app.include_router(router)
-        self.client = TestClient(app)
-        self.headers = {"Origin": "http://localhost:3000", "X-Device-Id": "test-device",
-                        "X-AQTE-Intent": "manual-live-control"}
-
-    def test_broker_positions_require_owner_and_return_explicit_failure_without_mutation(self):
-        with patch("routers.aqte.broker_positions") as reader, patch(
-            "routers.aqte.get_settings", return_value=settings()
-        ), patch("routers.aqte.app_access_service.validate_session", new_callable=AsyncMock) as session:
-            session.return_value = {"authenticated": False}
-            self.assertEqual(self.client.get("/api/aqte/live/broker-positions", headers=self.headers).status_code, 401)
-            reader.snapshot.assert_not_called()
-            session.return_value = {"authenticated": True, "username": "admin"}
-            self.assertEqual(self.client.get("/api/aqte/live/broker-positions").status_code, 403)
-            reader.snapshot.return_value = {"positions": [], "read_only": True, "generated_at": NOW}
-            response = self.client.get("/api/aqte/live/broker-positions", headers=self.headers)
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.headers["cache-control"], "no-store")
-            reader.snapshot.side_effect = TimeoutError("Kite unavailable")
-            self.assertEqual(self.client.get("/api/aqte/live/broker-positions", headers=self.headers).status_code, 503)
-
-    def test_live_controls_require_owner_session_intent_origin_and_confirmation(self):
-        controller = Mock()
-        controller.status.return_value = {"enabled": False}
-        controller.arm.return_value = {"armed": True}
-        with patch("routers.aqte.get_live_service", return_value=controller), patch(
-            "routers.aqte.get_settings", return_value=settings()
-        ), patch("routers.aqte.app_access_service.validate_session", new_callable=AsyncMock) as session:
-            session.return_value = {"authenticated": False}
-            self.assertEqual(self.client.post("/api/aqte/live/arm", headers=self.headers,
-                                             json={"confirmation": "ARM REAL TRADING"}).status_code, 401)
-            session.return_value = {"authenticated": True, "username": "admin"}
-            self.assertEqual(self.client.get("/api/aqte/live/status").status_code, 403)
-            self.assertEqual(self.client.get("/api/aqte/live/status", headers=self.headers | {
-                "Origin": "https://untrusted.example"}).status_code, 403)
-            self.assertEqual(self.client.post("/api/aqte/live/arm", headers=self.headers,
-                                             json={"confirmation": "yes"}).status_code, 422)
-            self.assertEqual(self.client.post("/api/aqte/live/arm", headers=self.headers,
-                                             json={"confirmation": "ARM REAL TRADING"}).status_code, 200)
-            controller.arm.assert_called_once()
-            controller.confirm.assert_not_called()
-            controller.set_automation.return_value = {"automation_on": False}
-            self.assertEqual(self.client.post("/api/aqte/live/automation", headers=self.headers,
-                                             json={"enabled": True, "confirmation": "STOP NEW ENTRIES"}).status_code, 422)
-            controller.set_automation.assert_not_called()
-            self.assertEqual(self.client.post("/api/aqte/live/automation", headers=self.headers,
-                                             json={"enabled": False, "confirmation": "STOP NEW ENTRIES"}).status_code, 200)
-            controller.set_automation.assert_called_once_with(False)
-            controller.stop_entries.return_value = {"killed": True}
-            controller.reset_emergency.return_value = {"killed": False}
-            self.assertEqual(self.client.post("/api/aqte/live/stop", headers=self.headers, json={}).status_code, 422)
-            self.assertEqual(self.client.post("/api/aqte/live/stop", headers=self.headers,
-                                             json={"confirmation": "CLOSE ALL KITE POSITIONS"}).status_code, 422,
-                             "Retired all-account phrase: the stop never closes owner trades")
-            controller.stop_entries.assert_not_called()
-            self.assertEqual(self.client.post("/api/aqte/live/stop", headers=self.headers,
-                                             json={"confirmation": "CLOSE AQTE POSITIONS"}).status_code, 200)
-            controller.stop_entries.assert_called_once()
-            self.assertEqual(self.client.post("/api/aqte/live/reset", headers=self.headers,
-                                             json={"confirmation": "CLOSE AQTE POSITIONS"}).status_code, 422)
-            controller.reset_emergency.assert_not_called()
-            self.assertEqual(self.client.post("/api/aqte/live/reset", headers=self.headers,
-                                             json={"confirmation": "RESET EMERGENCY STOP"}).status_code, 200)
-            controller.reset_emergency.assert_called_once()
-
-    def test_daily_control_routes_are_owner_only_strict_and_do_not_arm_or_submit(self):
-        controller = Mock()
-        controller.daily_controls.return_value = {"data": {}, "long_only": True}
-        controller.update_control.return_value = {"data": {}, "long_only": True}
-        controller.update_limit.return_value = {"data": {}, "long_only": True}
-        body = {"symbol": "NIFTY", "config": {"max_trades": 3}}
-        with patch("routers.aqte.get_live_service", return_value=controller), patch(
-            "routers.aqte.get_settings", return_value=settings()
-        ), patch("routers.aqte.app_access_service.validate_session", new_callable=AsyncMock) as session:
-            session.return_value = {"authenticated": False}
-            self.assertEqual(self.client.post("/api/aqte/live/daily-controls", headers=self.headers,
-                                             json=body).status_code, 401)
-            self.assertEqual(self.client.post("/api/aqte/live/daily-limit", headers=self.headers,
-                                             json={"symbol": "NIFTY", "max_trades": 3}).status_code, 401)
-            session.return_value = {"authenticated": True, "username": "admin"}
-            self.assertEqual(self.client.get("/api/aqte/live/daily-controls").status_code, 403)
-            response = self.client.get("/api/aqte/live/daily-controls", headers=self.headers)
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.headers["cache-control"], "no-store")
-            for config in ({"max_trades": 11}, {"enabled": "true"}, {"min_confidence": 74},
-                           {"min_confidence": 81}, {"min_confidence": 90}, {"unknown": 1}):
-                self.assertEqual(self.client.post("/api/aqte/live/daily-controls", headers=self.headers,
-                                                 json={**body, "config": config}).status_code, 422)
-            controller.update_control.assert_not_called()
-            self.assertEqual(self.client.post("/api/aqte/live/daily-controls", headers=self.headers,
-                                             json=body).status_code, 200)
-            self.assertEqual(controller.update_control.call_args.args[1]["max_trades"], 3)
-            saved = controller.update_control.call_args.args[1]
-            self.assertTrue(saved["enabled"])
-            self.assertEqual((saved["style"], saved["min_confidence"]), ("both", 75))
-            self.assertTrue(all(saved["setups"].values()))
-            for minimum in (75, 78, 80):
-                self.assertEqual(self.client.post("/api/aqte/live/daily-controls", headers=self.headers,
-                                                 json={**body, "config": {"min_confidence": minimum}}).status_code, 200)
-                self.assertEqual(controller.update_control.call_args.args[1]["min_confidence"], minimum)
-            for value in (0, 11, True, 2.5, "3"):
-                self.assertEqual(self.client.post("/api/aqte/live/daily-limit", headers=self.headers,
-                                                 json={"symbol": "NIFTY", "max_trades": value}).status_code, 422)
-            self.assertEqual(self.client.post("/api/aqte/live/daily-limit", headers=self.headers,
-                                             json={"symbol": "NIFTY", "max_trades": 3, "enabled": True}).status_code, 422)
-            controller.update_limit.assert_not_called()
-            self.assertEqual(self.client.post("/api/aqte/live/daily-limit", headers=self.headers,
-                                             json={"symbol": "NIFTY", "max_trades": 3}).status_code, 200)
-            controller.update_limit.assert_called_once_with("NIFTY", 3)
-            controller.arm.assert_not_called()
-            controller.confirm.assert_not_called()
-            controller.set_automation.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -567,20 +567,6 @@ class MorningLiveTests(unittest.TestCase):
             self.live.record_opportunities(self.market.snapshot())
             self.assertEqual(self.live.opportunities[record["key"]]["state"], "EXPIRED")
 
-    def test_owner_auth_and_matching_confirmation_are_required(self):
-        from routers import aqte
-        app = FastAPI()
-        app.include_router(aqte.router)
-        with TestClient(app) as client:
-            response = client.post("/api/aqte/live/morning", json={
-                "enabled": True, "confirmation": "ENABLE MORNING REAL TRADING"})
-            self.assertEqual(response.status_code, 403)
-            app.dependency_overrides[aqte.live_operator] = lambda: "test-owner"
-            response = client.post("/api/aqte/live/morning", json={
-                "enabled": False, "confirmation": "ENABLE MORNING REAL TRADING"})
-            self.assertEqual(response.status_code, 422)
-
-
 class MorningRecorderTests(unittest.IsolatedAsyncioTestCase):
     async def test_shared_enqueue_to_commit_to_snapshot_wakes_the_existing_controller(self):
         with tempfile.TemporaryDirectory() as directory:

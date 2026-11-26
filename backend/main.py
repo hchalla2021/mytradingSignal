@@ -86,14 +86,7 @@ from routers.candle_intelligence import http_router as candle_intel_http, ws_rou
 from routers.chart_intelligence import http_router as chart_intel_http, ws_router as chart_intel_ws
 from routers.order_flow import http_router as order_flow_http, ws_router as order_flow_ws
 from routers.global_news import http_router as global_news_http, ws_router as global_news_ws
-from routers.observatory import http_router as observatory_http
-from routers.aqte import router as aqte_http
-from routers.quantedge import router as quantedge_http
 from routers.quantumedge import router as quantumedge_http
-from routers.expiryedge import router as expiryedge_http
-from routers.algo_desk import router as algo_desk_http
-from routers.autonomiq_pro import router as autonomiq_pro_http
-from routers.smc_apex import router as smc_apex_http
 from routers import smart_money
 from routers.volume_pulse import router as volume_pulse_http, ws_router as volume_pulse_ws
 from routers.ict_bias import router as ict_bias_http, ws_router as ict_bias_ws
@@ -189,11 +182,6 @@ async def lifespan(app: FastAPI):
                 await get_aqte_service().start()
             except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
                 logger.exception("AQTE unavailable; existing dashboard services will continue")
-            from services.aqte_morning import MorningService, MorningSuperCandleConfig
-            morning = MorningService(get_aqte_service(), cache, settings.aqte_morning_postgres_url,
-                                     strategy_config=MorningSuperCandleConfig.from_settings(settings))
-            get_aqte_service().morning = morning
-            await morning.start()
             from services.aqte_live import get_live_service
             try:
                 await get_live_service().start()
@@ -305,14 +293,6 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("Global news service failed to start: %s", exc, exc_info=True)
 
-        async def start_observatory():
-            try:
-                from services.observatory_service import get_observatory_service
-                await get_observatory_service().start()
-                print("🔭 Observatory: ON")
-            except Exception as exc:
-                logger.error("Observatory service failed to start: %s", exc, exc_info=True)
-
         async def start_aqte_confirmation():
             try:
                 from services.aqte_confirmation_service import get_aqte_confirmation_service
@@ -357,7 +337,6 @@ async def lifespan(app: FastAPI):
                 start_chart_intelligence(),
                 start_global_indices(),
                 start_global_news(),
-                start_observatory(),
                 start_aqte_confirmation(),
                 refresh_futures_tokens(),
             )
@@ -375,7 +354,6 @@ async def lifespan(app: FastAPI):
                 start_chart_intelligence(),
                 start_global_indices(),
                 start_global_news(),
-                start_observatory(),
                 start_aqte_confirmation(),
                 refresh_futures_tokens(),
             )
@@ -383,18 +361,6 @@ async def lifespan(app: FastAPI):
 
     # 🔥 Fire background boot — server starts accepting HTTP immediately
     _bg_boot = asyncio.create_task(_boot_services())
-
-    # AUTONOMIQ PRO is isolated: its own task, and failures never touch other engines.
-    async def _start_autonomiq_pro():
-        try:
-            from services.autonomiq_pro.config import load_config
-            from services.autonomiq_pro.orchestrator import get_orchestrator
-            if load_config().enabled:
-                await get_orchestrator().start()
-        except Exception as exc:  # noqa: BLE001
-            logger.error("AUTONOMIQ PRO failed to start: %s", type(exc).__name__)
-
-    _autonomiq_boot = asyncio.create_task(_start_autonomiq_pro())
 
     print("🚀 Backend accepting requests (services booting in background...)")
     yield
@@ -410,14 +376,6 @@ async def lifespan(app: FastAPI):
             _bg_boot.cancel()
 
     # 📦 Backup candle data to disk before shutdown
-    try:
-        if not _autonomiq_boot.done():
-            _autonomiq_boot.cancel()
-        from services.autonomiq_pro.orchestrator import get_orchestrator
-        await asyncio.wait_for(get_orchestrator().stop(), timeout=5)
-    except Exception:
-        pass
-
     try:
         from services.candle_backup_service import CandleBackupService
         await CandleBackupService.backup_all_symbols(cache)
@@ -496,13 +454,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     
-    # Stop Observatory Service
-    try:
-        from services.observatory_service import get_observatory_service
-        await get_observatory_service().stop()
-    except Exception:
-        pass
-
     # Stop unified auth monitor
     from services.unified_auth_service import unified_auth
     await unified_auth.stop_auto_refresh_monitor()
@@ -517,8 +468,6 @@ async def lifespan(app: FastAPI):
         await market_feed.stop()
     aqte_service = get_aqte_service()
     await aqte_service.stop()
-    if aqte_service.morning is not None:
-        await aqte_service.morning.stop()
     from services.engine_events import get_engine_event_service
     await get_engine_event_service().stop()
     if feed_task:
@@ -716,14 +665,7 @@ app.include_router(tie_http, prefix="/api", tags=["Trading Intelligence"])
 app.include_router(fii_dii_ws, prefix="/ws", tags=["FII / DII"])
 app.include_router(fii_dii_router, prefix="/api", tags=["FII / DII"])
 # 🔭 Market Intelligence Observatory
-app.include_router(observatory_http, tags=["Observatory"])
-app.include_router(aqte_http)
-app.include_router(quantedge_http)
 app.include_router(quantumedge_http)
-app.include_router(expiryedge_http)
-app.include_router(algo_desk_http)
-app.include_router(autonomiq_pro_http)
-app.include_router(smc_apex_http)
 
 
 @app.get("/")

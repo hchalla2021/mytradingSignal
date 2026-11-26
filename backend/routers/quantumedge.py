@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from routers.aqte import live_call, live_operator
+from routers.live_control import live_call, live_operator
 from services.aqte_live import get_live_service
 
 router = APIRouter(prefix="/api/quantumedge", tags=["QuantumEdge IntraDay Algo"])
@@ -16,7 +16,14 @@ class IndexConfig(BaseModel):
     symbol: Literal["NIFTY", "BANKNIFTY", "SENSEX"]
     enabled: bool
     lots: int = Field(ge=1, le=5, strict=True)
-    risk_per_lot: int = Field(ge=100, le=10_000, strict=True)
+    risk_per_lot: float = Field(gt=0, le=10_000_000)
+
+
+class RiskLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: Literal["NIFTY", "BANKNIFTY", "SENSEX"]
+    risk_per_lot: float = Field(gt=0, le=10_000_000)
+    daily_loss_limit: float = Field(gt=0, le=10_000_000)
 
 
 class MasterApproval(BaseModel):
@@ -40,6 +47,14 @@ async def quantumedge_index(body: IndexConfig):
     return await live_call(
         get_live_service().set_quantumedge_index,
         body.symbol, body.enabled, body.lots, body.risk_per_lot,
+    )
+
+
+@router.post("/limits", dependencies=[Depends(live_operator)])
+async def quantumedge_limits(body: RiskLimits):
+    return await live_call(
+        get_live_service().set_quantumedge_limits,
+        body.symbol, body.risk_per_lot, body.daily_loss_limit,
     )
 
 

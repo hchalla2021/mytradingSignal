@@ -36,11 +36,10 @@ services:
       - FRONTEND_URL=${PRODUCTION_FRONTEND_URL:-https://mydailytradesignals.com}
       - CORS_ORIGINS=${PRODUCTION_CORS_ORIGINS:-https://mydailytradesignals.com}
       - REDIRECT_URL=${PRODUCTION_REDIRECT_URL:-https://mydailytradesignals.com/api/auth/callback}
-      - AUTONOMIQ_PRO_DEPLOYMENT_MODE=production
-      - AQTE_LIVE_DEPLOYMENT_MODE=production
+      - LIVE_DEPLOYMENT_MODE=production
+      - LIVE_STATIC_IP=${PRODUCTION_LIVE_STATIC_IP:-159.65.147.167}
       - QUANTUMEDGE_DEPLOYMENT_MODE=production
       - ZERODHA_SHARED_AUTH_FILE=/run/zerodha/credentials.json
-      - SMCAPEX_API_URL=http://smcapex-api:8014
       # ✅ CRITICAL FIX: Use container name, not localhost
       - REDIS_URL=redis://redis:6379
       # CRITICAL: Enable scheduler for automatic market hours management
@@ -53,14 +52,10 @@ services:
       # Mount logs directory (optional)
       - ./backend/logs:/app/logs
       - order-flow-data:/app/data/order_flow
-      - autonomiq-pro-data:/app/data/autonomiq_pro
       - aqte-data:/app/data/aqte
-      - expiryedge-data:/app/data/expiryedge
     depends_on:
       redis:
         condition: service_healthy
-      smcapex-api:
-        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).close()"]
       interval: 30s
@@ -68,28 +63,6 @@ services:
       retries: 3
       start_period: 40s
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
-
-  # Standalone MorningEdge service with independent credentials and state.
-  morningedge-api:
-    build:
-      context: ./morningedge
-      dockerfile: Dockerfile
-    container_name: morningedge-api
-    restart: unless-stopped
-    env_file:
-      - ./morningedge/.env
-    environment:
-      - MORNINGEDGE_DB_PATH=/app/data/morningedge.sqlite3
-      - MORNINGEDGE_BACKEND_ENV_FILE=/run/backend/.env
-    volumes:
-      - morningedge-data:/app/data
-      - ${BACKEND_ENV_FILE:-./backend/.env}:/run/backend/.env:ro
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5).close()"]
-      interval: 20s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
 
   openingedge-api:
     build:
@@ -104,23 +77,6 @@ services:
       - ${BACKEND_ENV_FILE:-./backend/.env}:/run/backend/.env:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8012/health', timeout=5).close()"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-  smcapex-api:
-    build:
-      context: ./smcapex
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      - SMCAPEX_DB_PATH=/app/data/apex.sqlite3
-      - SMCAPEX_BACKEND_ENV_FILE=/run/backend/.env
-    volumes:
-      - smcapex-data:/app/data
-      - ${BACKEND_ENV_FILE:-./backend/.env}:/run/backend/.env:ro
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8014/health', timeout=5).close()"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -140,12 +96,10 @@ services:
       # .env.local is excluded from the image context. Without baked-in public URLs,
       # the frontend uses same-origin API/WebSocket URLs; proxy /api and /ws to backend.
       - NODE_ENV=production
-      - MORNINGEDGE_API_URL=http://morningedge-api:8010
       - OPENINGEDGE_API_URL=http://openingedge-api:8012
       - BACKEND_API_URL=http://backend:8000
     depends_on:
       - backend
-      - morningedge-api
     healthcheck:
       test: ["CMD", "node", "-e", "const http=require('http'); const req=http.get('http://127.0.0.1:3000/',res=>{res.resume();if(res.statusCode<200||res.statusCode>=400)process.exit(1)});req.setTimeout(5000,()=>req.destroy(new Error('Health check timeout')));req.on('error',()=>process.exit(1));"]
       interval: 30s
@@ -162,11 +116,7 @@ networks:
 volumes:
   redis-data:
   order-flow-data:
-  autonomiq-pro-data:
   aqte-data:
-  expiryedge-data:
-  morningedge-data:
   openingedge-data:
-  smcapex-data:
   zerodha-auth-data:
     name: mytrading-zerodha-auth

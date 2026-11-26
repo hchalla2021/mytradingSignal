@@ -1,36 +1,17 @@
 from datetime import datetime, timedelta
-import io
-import json
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from openingedge import main
-from openingedge import ai
 
 
-def test_config_defaults_persist_and_invalid_values_are_rejected(tmp_path, monkeypatch):
-    store = main.Store(tmp_path / "settings.sqlite3")
+def test_store_initializes_only_global_cue_journals(tmp_path):
+    store = main.Store(tmp_path / "cues.sqlite3")
     store.initialize()
-    monkeypatch.setattr(main, "store", store)
-    monkeypatch.setattr(main, "ENV_FILE", tmp_path / "missing.env")
-    monkeypatch.setattr(main, "execution", None)
     client = TestClient(main.app)
-    assert store.read()["indices"]["NIFTY"] == {"lots": 1, "risk": None}
-    assert client.put("/api/config/NIFTY", json={"lots": 2, "risk": 1500}).status_code == 200
-    assert client.put("/api/daily-limit", json={"daily_loss": 3000}).status_code == 200
-    assert client.put("/api/config/NIFTY", json={"lots": 0, "risk": 1500}).status_code == 422
-    assert client.put("/api/config/NIFTY", json={"lots": 1, "risk": True}).status_code == 422
-    assert client.put("/api/config/NIFTY", json={"lots": 1, "risk": -1}).status_code == 422
-    assert client.put("/api/config/OTHER", json={"lots": 1, "risk": 100}).status_code == 404
-    reloaded = main.Store(tmp_path / "settings.sqlite3")
-    assert reloaded.read()["indices"]["NIFTY"] == {"lots": 2, "risk": 1500}
-    assert reloaded.read()["daily_loss"] == 3000
-    status = client.get("/api/status").json()
-    assert status["trade_enabled"] is False
-    assert status["automation_on"] is False
-    assert status["execution_status"] == "LOCKED"
-    assert status["active"] is None
+    assert client.put("/api/trade-control", json={"enabled": True}).status_code == 404
+    assert client.put("/api/config/NIFTY", json={"lots": 2, "risk": 1500}).status_code == 404
+    assert client.put("/api/daily-limit", json={"daily_loss": 3000}).status_code == 404
 
 
 def test_feed_status_uses_only_fresh_connected_quotes():
@@ -41,14 +22,11 @@ def test_feed_status_uses_only_fresh_connected_quotes():
     market.state = "connected"
     market.on_ticks([{"instrument_token": 1, "exchange_timestamp": now, "last_price": 25000, "ohlc": {"close": 24900}}])
     assert market.status()["indices"]["NIFTY"]["change"] == 100
-    assert market.status()["stage"] == "EXECUTION WINDOW"
     market.state = "disconnected"
     assert market.status()["indices"]["NIFTY"]["price"] is None
     market.state = "connected"
     clock[0] += timedelta(seconds=11)
     assert market.status()["indices"]["NIFTY"]["price"] is None
-    clock[0] = datetime(2026, 11, 20, 9, 20, tzinfo=main.IST)
-    assert market.status()["stage"] == "ENTRY LOCK"
 
 
 def test_preopen_requires_real_coverage_and_resets_each_day():
@@ -68,176 +46,18 @@ def test_preopen_requires_real_coverage_and_resets_each_day():
     assert market.status()["indices"]["NIFTY"]["preopen_high"] is None
 
 
-def test_setup_review_requires_complete_preopen_range_recent_history_and_live_breakout():
-    clock = [datetime(2026, 11, 20, 9, 0, tzinfo=main.IST)]
-    market = main.Market(lambda: clock[0])
-    market.instruments([{"exchange": "NSE", "tradingsymbol": "NIFTY 50", "instrument_token": 1}])
-    market.state = "connected"
-    market.set_history("NIFTY", [{"date": clock[0] - timedelta(days=1), "high": 108, "low": 95, "close": 98}])
-    for minute in range(8):
-        clock[0] = clock[0].replace(minute=minute)
-        market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 100 + minute}])
-    clock[0] = clock[0].replace(minute=15)
-    market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 108,
-                      "ohlc": {"close": 98}}])
-    evidence = market.setup_evidence("NIFTY")
-    assert evidence["setup"] == "PREOPEN_RANGE_BREAKOUT"
-    assert evidence["direction"] == "BUY_CE"
-    assert evidence["preopen_high"] == 107
-    assert evidence["live_price"] == 108
-
-    market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 106,
-                      "ohlc": {"close": 98}}])
-    assert market.setup_evidence("NIFTY") is None
-
-
-def test_setup_review_rejects_stale_or_disconnected_live_quotes():
-    clock = [datetime(2026, 11, 20, 9, 0, tzinfo=main.IST)]
-    market = main.Market(lambda: clock[0])
-    market.instruments([{"exchange": "NSE", "tradingsymbol": "NIFTY 50", "instrument_token": 1}])
-    market.state = "connected"
-    market.set_history("NIFTY", [{"date": clock[0] - timedelta(days=1), "high": 108, "low": 95, "close": 98}])
-    for minute in range(8):
-        clock[0] = clock[0].replace(minute=minute)
-        market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 100 + minute}])
-    clock[0] = clock[0].replace(minute=15)
-    market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 108,
-                      "ohlc": {"close": 98}}])
-    clock[0] += timedelta(seconds=11)
-    assert market.setup_evidence("NIFTY") is None
-    clock[0] = clock[0].replace(second=0)
-    market.state = "disconnected"
-    assert market.setup_evidence("NIFTY") is None
-
-
-def test_setup_review_supports_aligned_downside_breakout():
-    clock = [datetime(2026, 11, 20, 9, 0, tzinfo=main.IST)]
-    market = main.Market(lambda: clock[0])
-    market.instruments([{"exchange": "NSE", "tradingsymbol": "NIFTY 50", "instrument_token": 1}])
-    market.state = "connected"
-    market.set_history("NIFTY", [{"date": clock[0] - timedelta(days=1), "high": 112, "low": 99, "close": 110}])
-    for minute in range(8):
-        clock[0] = clock[0].replace(minute=minute)
-        market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 107 - minute}])
-    clock[0] = clock[0].replace(minute=15)
-    market.on_ticks([{"instrument_token": 1, "timestamp": clock[0], "last_price": 99,
-                      "ohlc": {"close": 110}}])
-    assert market.setup_evidence("NIFTY")["direction"] == "BUY_PE"
-
-
-def test_daily_review_reservations_survive_restart_and_failed_attempt(tmp_path):
-    db = tmp_path / "reviews.sqlite3"
-    store = main.Store(db)
+def test_status_exposes_read_only_shared_session(tmp_path, monkeypatch):
+    store = main.Store(tmp_path / "cues.sqlite3")
     store.initialize()
-    assert store.claim_review("2026-11-20", "NIFTY")
-    assert not main.Store(db).claim_review("2026-11-20", "NIFTY")
-    store.finish_review("2026-11-20", "NIFTY", {
-        "state": "UNAVAILABLE", "action": None, "confidence": None, "reason": "Network error",
-    })
-    assert not store.claim_review("2026-11-20", "NIFTY")
-    assert store.claim_review("2026-11-20", "BANKNIFTY")
-    assert store.claim_review("2026-11-20", "SENSEX")
-    assert len(store.reviews("2026-11-20")) == 3
-    assert store.claim_review("2026-11-23", "NIFTY")
-
-
-def test_haiku_uses_only_fake_key_and_rejects_mismatched_response():
-    config = {"key": "test-key", "model": "claude-haiku-5-5", "tokens": 256, "timeout": 12}
-    evidence = {"index": "NIFTY", "setup": "PREOPEN_RANGE_BREAKOUT",
-                "direction": "BUY_CE", "preopen_first": 100, "preopen_last": 105}
-    body = {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps({
-        "action": "BUY_PE", "confidence": 80, "reason": "Opposite direction",
-    })}]}
-    with patch("openingedge.ai.urlopen", return_value=io.BytesIO(json.dumps(body).encode())) as mocked:
-        result = ai.review(config, evidence)
-    assert result["state"] == "UNAVAILABLE"
-    sent = json.loads(mocked.call_args.args[0].data)
-    assert sent["model"] == "claude-haiku-5-5"
-    assert "advisory" in sent["system"]
-    assert "test-key" not in json.dumps(sent)
-
-
-def test_haiku_accepts_valid_review_and_surfaces_transport_failure():
-    config = {"key": "test-key", "model": "claude-haiku-5-5", "tokens": 256, "timeout": 12}
-    evidence = {"index": "NIFTY", "setup": "PREOPEN_RANGE_BREAKOUT", "direction": "BUY_CE"}
-    body = {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps({
-        "action": "BUY_CE", "confidence": 80, "reason": "Directional agreement",
-    })}]}
-    with patch("openingedge.ai.urlopen", return_value=io.BytesIO(json.dumps(body).encode())):
-        result = ai.review(config, evidence)
-    assert result == {"state": "APPROVED", "action": "BUY_CE", "confidence": 80, "reason": "Directional agreement"}
-    with patch("openingedge.ai.urlopen", side_effect=TimeoutError()):
-        assert ai.review(config, evidence)["state"] == "UNAVAILABLE"
-
-
-def test_haiku_config_uses_existing_env_names_without_exposing_key(tmp_path, monkeypatch):
-    for name in ai.ENV_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    env = tmp_path / "config.env"
-    env.write_text("QUANTUMEDGE_AI_ENABLED=true\nQUANTUMEDGE_AI_MODEL=claude-haiku-5-5\n"
-                   "QUANTUMEDGE_AI_ANTHROPIC_API_KEY=test-key\n", encoding="utf-8")
-    config, error = ai.load_config(env)
-    assert error is None and config["key"] == "test-key"
-    env.write_text("QUANTUMEDGE_AI_ENABLED=false\n", encoding="utf-8")
-    config, error = ai.load_config(env)
-    assert config is None and "disabled" in error
-
-
-def test_review_worker_rechecks_market_close_after_slow_call(tmp_path, monkeypatch):
-    clock = [datetime(2026, 11, 20, 15, 29, 59, tzinfo=main.IST)]
-    market = main.Market(lambda: clock[0])
-    monkeypatch.setattr(market, "setup_evidence", lambda symbol: (
-        {"index": symbol, "setup": "PREOPEN_RANGE_BREAKOUT", "direction": "BUY_CE"}
-        if clock[0].time() < main.time(15, 30) else None))
-    store = main.Store(tmp_path / "reviews.sqlite3")
-    store.initialize()
-    class OneIteration:
-        stopped = False
-        def is_set(self):
-            return self.stopped
-        def wait(self, seconds):
-            self.stopped = True
-    monkeypatch.setattr(main, "market", market)
+    env_file = tmp_path / "backend.env"
+    env_file.write_text("ZERODHA_API_KEY=key\nZERODHA_ACCESS_TOKEN=token\n", encoding="utf-8")
     monkeypatch.setattr(main, "store", store)
-    monkeypatch.setattr(main, "shutdown", OneIteration())
-    monkeypatch.setattr(main, "load_config", lambda path: ({"key": "test-key"}, None))
-    calls = []
-    def fake_review(config, evidence):
-        calls.append(evidence["index"])
-        clock[0] = clock[0].replace(minute=30, second=0)
-        return {"state": "APPROVED", "action": "BUY_CE", "confidence": 80, "reason": "Test"}
-    monkeypatch.setattr(main, "review", fake_review)
-    main.run_reviews()
-    assert calls == ["NIFTY"]
-    assert list(store.reviews("2026-11-20")) == ["NIFTY"]
-
-
-def test_review_worker_rechecks_setup_after_claim(tmp_path, monkeypatch):
-    clock = [datetime(2026, 11, 20, 15, 29, 59, tzinfo=main.IST)]
-    market = main.Market(lambda: clock[0])
-    monkeypatch.setattr(market, "setup_evidence", lambda symbol: (
-        {"index": symbol, "setup": "PREOPEN_RANGE_BREAKOUT", "direction": "BUY_CE"}
-        if clock[0].time() < main.time(15, 30) else None))
-    store = main.Store(tmp_path / "reviews.sqlite3")
-    store.initialize()
-    claim = store.claim_review
-    def delayed_claim(day, symbol):
-        result = claim(day, symbol)
-        clock[0] = clock[0].replace(minute=30, second=0)
-        return result
-    monkeypatch.setattr(store, "claim_review", delayed_claim)
-    class OneIteration:
-        stopped = False
-        def is_set(self):
-            return self.stopped
-        def wait(self, seconds):
-            self.stopped = True
-    monkeypatch.setattr(main, "market", market)
-    monkeypatch.setattr(main, "store", store)
-    monkeypatch.setattr(main, "shutdown", OneIteration())
-    monkeypatch.setattr(main, "load_config", lambda path: ({"key": "test-key"}, None))
-    with patch("openingedge.main.review") as mocked:
-        main.run_reviews()
-    mocked.assert_not_called()
-    assert store.reviews("2026-11-20")["NIFTY"]["state"] == "UNAVAILABLE"
-    assert "Breakout" in store.reviews("2026-11-20")["NIFTY"]["reason"]
+    monkeypatch.setattr(main, "ENV_FILE", env_file)
+    client = TestClient(main.app)
+    body = client.get("/api/status").json()
+    assert body["zerodha_session"] is True
+    assert "context" in body
+    assert body["reason"].startswith("Global cue display is read-only")
+    assert "automation_on" not in body
+    assert "active" not in body
+    assert "config" not in body

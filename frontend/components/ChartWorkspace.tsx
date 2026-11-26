@@ -12,10 +12,9 @@ import {
 import { useChartIntelligence, type Candle } from '@/hooks/useChartIntelligence';
 import { useChartHistory, prefetchChartHistory } from '@/hooks/useChartHistory';
 import type { MarketData } from '@/hooks/useMarketSocket';
-import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
 import {
   CASH_INDICATORS as INDICATORS, cashIndicatorSettings, TEMPLATES, candleTime, workspaceCandles,
-  restoreIndicatorSettings, institutionalContext, isCashSession, mergeChartHistory, sessionDate, stableLiveSession, updatePeriodCandle, timeframeLabel,
+  restoreIndicatorSettings, isCashSession, mergeChartHistory, sessionDate, stableLiveSession, updatePeriodCandle, timeframeLabel,
   applyLiveTick, type ChartSymbol, type Timeframe, type IndicatorSettings, type LiveTickExtremes,
 } from '@/lib/chart-workspace';
 import {
@@ -68,13 +67,14 @@ interface ChartRuntime {
   atr: ISeriesApi<'Line'>;
 }
 
-function ChartWorkspace({ marketData, institutionalData = null }: { marketData: MarketData; institutionalData?: FIIDIISnapshot | null }) {
+function ChartWorkspace({ marketData }: { marketData: MarketData }) {
   const { chartData, isConnected } = useChartIntelligence();
   const [symbol, setSymbol] = useState<ChartSymbol>('NIFTY');
   const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'futures' | 'terminal' | 'mtf'>('chart');
   const [futuresOpened, setFuturesOpened] = useState(false);
   const [terminalOpened, setTerminalOpened] = useState(false);
   const [mtfOpened, setMtfOpened] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => {
       void import('./FuturesChart').then(module => module.warmFuturesChart())
@@ -206,7 +206,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const rejection = useMemo(() => !history.loading
     ? rejectionEngine.current.analyze(candles, history.dailyCandles, timeframe, { live, nowMs: now, early: true }) : null,
   [history.loading, candles, history.dailyCandles, timeframe, live, now]);
-  const institutional = useMemo(() => institutionalContext(institutionalData, now), [institutionalData, now]);
 
   useEffect(() => {
     if (!controlsOpen) return;
@@ -657,12 +656,17 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   return (
     <section id="observatory-trade-chart" ref={rootRef} className={`${styles.workspace} ${fullscreen ? styles.focusMode : ''}`} aria-label="Market Intelligence Observatory trade chart">
       <div className={styles.chartViewActions}>
-        <span>Swipe to pan · Pinch to zoom</span>
-        <button className={styles.button} onClick={toggleFullscreen} aria-pressed={fullscreen}>
+        <button className={styles.workspaceToggle} type="button" onClick={() => setWorkspaceOpen(value => !value)}
+          aria-expanded={workspaceOpen} aria-controls="observatory-chart-workspace">
+          <ChevronDown size={16} aria-hidden="true" data-open={workspaceOpen} />
+          <span><strong>Advanced Market Charts</strong><small>{workspaceOpen ? 'Collapse chart workspace' : 'Expand charts, indicators and signals'}</small></span>
+        </button>
+        {workspaceOpen && <button className={styles.button} onClick={toggleFullscreen} aria-pressed={fullscreen}>
           {fullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
           {fullscreen ? 'Exit full chart' : 'Full chart'}
-        </button>
+        </button>}
       </div>
+      <div id="observatory-chart-workspace" hidden={!workspaceOpen}>
       <div className={styles.viewTabs} role="tablist" aria-label="Observatory chart view">
         <button id="observatory-chart-tab" role="tab" aria-selected={workspaceTab === 'chart'} aria-controls="observatory-chart-content"
           className={styles.viewTab} onClick={() => setWorkspaceTab('chart')}>Advanced Chart</button>
@@ -813,12 +817,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
               </details>}
             </div>
           </details>
-          <details className={styles.institutionalPanel}>
-            <summary>FII / DII context <span>{institutional.available ? institutional.bias : 'Unavailable'}</span></summary>
-            <p>{institutional.label}{institutional.available ? ` · ${institutional.source}` : ''}</p>
-            {institutional.available && <p>FII {price(institutional.fii)} Cr · DII {price(institutional.dii)} Cr</p>}
-            <p>Reported market-wide daily cash flows, not live index-specific trades. Context only; excluded from intraday confidence and entries.</p>
-          </details>
           <div className={styles.panelTabs} role="tablist" aria-label="Chart controls panel">
             {(['Indicators', 'Chart Settings'] as const).map(name => <button role="tab" key={name} aria-selected={panel === name} aria-controls="chart-controls-content" onClick={() => setPanel(name)}>{name}</button>)}
           </div>
@@ -871,6 +869,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
         </aside>
       </div>
       {notice && <div className={styles.notice} role="status">{notice}</div>}
+      </div>
       </div>
     </section>
   );

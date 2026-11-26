@@ -4,21 +4,16 @@ import { useState, useEffect, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import LiveStatus from '@/components/LiveStatus';
 import Header from '@/components/Header';
-import InstitutionalWorkspace from '@/components/InstitutionalWorkspace';
 import LiveMarketIndexTabs from '@/components/LiveMarketIndexTabs';
 import IndexTabs from '@/components/IndexTabs';
+import LiquidityHunterProSection from '@/components/LiquidityHunterProSection';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
-import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
 // Dynamic imports for components that use live data - prevents SSR issues
-const AutonomiqProSection = dynamic(() => import('@/components/AutonomiqProSection'), { ssr: false });
-const QuantumEdgeIntradaySection = dynamic(() => import('@/components/QuantumEdgeIntradaySection'), { ssr: false });
 const OpeningEdgeSection = dynamic(() => import('@/components/OpeningEdgeSection'), { ssr: false });
-const SMCApexSection = dynamic(() => import('@/components/SMCApexSection'), { ssr: false });
-const AQTESection = dynamic(() => import('@/components/AQTESection'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
 
 const CRTBTSTCard = dynamic<{ symbol: string; name: string; data?: unknown }>(() => import('@/components/CRTBTSTCard'), {
@@ -86,7 +81,6 @@ export default function Home() {
     isConnected
   } = useMarketSocket();
   const { alertData } = useAIAnalysis();
-  const [institutionalData, setInstitutionalData] = useState<FIIDIISnapshot | null>(null);
 
 
   // 🔥 Clear browser cache on mount (desktop browsers cache aggressively)
@@ -260,21 +254,14 @@ export default function Home() {
       {/* Main Dashboard - Full Width */}
       <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-5">
         <div className="mx-auto flex w-full max-w-[1820px] flex-col">
-        <div style={{ order: -15 }} className="min-w-0">
-          <SMCApexSection />
+        <div style={{ order: -20 }} className="min-w-0 w-full max-w-full">
+          <LiquidityHunterProSection marketData={marketData} isConnected={isConnected} />
         </div>
         <div style={{ order: -14 }} className="min-w-0">
-          <QuantumEdgeIntradaySection marketData={marketData} isConnected={isConnected} />
           <OpeningEdgeSection />
         </div>
-        <div style={{ order: -13 }} className="min-w-0">
-          <AutonomiqProSection marketData={marketData} isConnected={isConnected} />
-        </div>
-        <div style={{ order: -12 }} className="min-w-0">
-          <AQTESection marketData={marketData} isConnected={isConnected} />
-        </div>
         <div style={{ order: -11 }} className="min-w-0">
-          <ChartWorkspace marketData={marketData} institutionalData={institutionalData} />
+          <ChartWorkspace marketData={marketData} />
         </div>
 
         {/* Live Market Indices - With Border */}
@@ -340,11 +327,6 @@ export default function Home() {
           </div>
         
           <LiveMarketIndexTabs marketData={marketData} isConnected={isConnected} alertData={alertData} />
-        </div>
-
-        {/* Shared algo and institutional-flow workspace */}
-        <div style={{ order: -9 }}>
-          <InstitutionalWorkspace marketData={marketData} isConnected={isConnected} onSnapshot={setInstitutionalData} />
         </div>
 
         <div className="min-w-0" data-testid="btst-strategy">

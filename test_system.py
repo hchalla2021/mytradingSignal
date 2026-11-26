@@ -15,8 +15,8 @@ print("="*80)
 # 1. Check market status via API
 print("\n1️⃣ CHECKING MARKET STATUS API...")
 try:
-    r = requests.get('http://localhost:8000/api/diagnostics/market-status', timeout=5).json()
-    status = r.get('market_status')
+    r = requests.get('http://localhost:8000/api/system/health/market', timeout=5).json()
+    status = r.get('phase')
     print(f"   Market Status: {status}")
     
     if status == "LIVE":
@@ -29,18 +29,13 @@ try:
 except Exception as e:
     print(f"   ❌ Error: {e}")
 
-# 2. Check market data
-print("\n2️⃣ CHECKING MARKET DATA API...")
+# 2. Check market feed
+print("\n2️⃣ CHECKING MARKET FEED API...")
 try:
-    r = requests.get('http://localhost:8000/api/market/live', timeout=5).json()
-    data = r.get('data', [])
-    if data:
-        print(f"   ✅ Got {len(data)} symbols")
-        for sym in data[:3]:
-            price = sym.get('ltp') or sym.get('price')
-            print(f"      {sym.get('index')}: ₹{price:.2f}")
-    else:
-        print(f"   ⚠️ No market data in API")
+    r = requests.get('http://localhost:8000/api/system/health/feed', timeout=5).json()
+    print(f"   Feed state: {r.get('state')}")
+    print(f"   Feed healthy: {r.get('is_healthy')}")
+    print(f"   Total ticks: {r.get('total_ticks', 0)}")
 except Exception as e:
     print(f"   ❌ API Error: {e}")
 

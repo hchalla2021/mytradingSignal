@@ -38,7 +38,7 @@ test('shared mode routes API, auth and every derived feed through the current fr
     assert.equal(api.sharedProduction, true);
     assert.equal(api.baseUrl, base);
     assert.equal(config.apiUrl, base);
-    assert.equal(api.endpoint('/api/aqte/live/start'), `${base}/api/aqte/live/start`);
+    assert.equal(api.endpoint('/api/quantumedge/status'), `${base}/api/quantumedge/status`);
     assert.equal(api.endpoint('api/app-access/login'), `${base}/api/app-access/login`);
     assert.equal(api.wsUrl, `${origin.replace(/^http/, 'ws')}/ws/market`);
     assert.equal(config.wsUrl, api.wsUrl);
@@ -48,7 +48,7 @@ test('shared mode routes API, auth and every derived feed through the current fr
 
 test('server rendering uses a relative proxy API and does not invent a WebSocket host', () => {
   const { config, api } = routing(shared);
-  assert.equal(api.endpoint('/api/aqte/live/status'), '/api/aqte/live/status');
+  assert.equal(api.endpoint('/api/quantumedge/status'), '/api/quantumedge/status');
   assert.equal(config.wsUrl, '');
 });
 

@@ -84,7 +84,4 @@ htmlcov/
 *.pid.lock
 .env.example
 
-# AUTONOMIQ PRO runtime database
-backend/data/autonomiq_pro/
 openingedge/data/
-smcapex/data/

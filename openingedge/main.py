@@ -10,11 +10,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
-
-from openingedge.ai import load_config, review
 from openingedge.context import ContextFeed
-from openingedge.execution import Execution
 from openingedge.external import fetch_fred, fetch_marketaux, fred_key, marketaux_key
 
 logger = logging.getLogger("openingedge")
@@ -52,59 +48,10 @@ class Store:
     def initialize(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.lock, closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("CREATE TABLE IF NOT EXISTS index_config (symbol TEXT PRIMARY KEY, lots INTEGER NOT NULL, risk REAL)")
-            db.execute("CREATE TABLE IF NOT EXISTS limits (id INTEGER PRIMARY KEY CHECK(id=1), daily_loss REAL)")
-            db.execute("""CREATE TABLE IF NOT EXISTS ai_reviews (
-                day TEXT NOT NULL, symbol TEXT NOT NULL, state TEXT NOT NULL,
-                action TEXT, confidence REAL, reason TEXT NOT NULL,
-                PRIMARY KEY(day, symbol))""")
             db.execute("""CREATE TABLE IF NOT EXISTS external_cues (
                 name TEXT PRIMARY KEY, attempted_at TEXT NOT NULL, payload TEXT)""")
             db.execute("""CREATE TABLE IF NOT EXISTS last_market_cues (
                 name TEXT PRIMARY KEY, observed_at TEXT NOT NULL, payload TEXT NOT NULL)""")
-            db.execute("""CREATE TABLE IF NOT EXISTS execution_trades (
-                trade_id TEXT PRIMARY KEY, day TEXT NOT NULL, payload TEXT NOT NULL,
-                net_pnl REAL, closed_at REAL)""")
-            db.execute("""CREATE TABLE IF NOT EXISTS execution_runtime (
-                id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT)""")
-            db.executemany("INSERT OR IGNORE INTO index_config VALUES (?, 1, NULL)", [(symbol,) for symbol in INDICES])
-            db.execute("INSERT OR IGNORE INTO limits VALUES (1, NULL)")
-            db.execute("INSERT OR IGNORE INTO execution_runtime VALUES (1, NULL)")
-
-    def read(self):
-        with self.lock, closing(sqlite3.connect(self.path)) as db:
-            rows = db.execute("SELECT symbol, lots, risk FROM index_config").fetchall()
-            daily = db.execute("SELECT daily_loss FROM limits WHERE id=1").fetchone()
-        return {"indices": {s: {"lots": lots, "risk": risk} for s, lots, risk in rows}, "daily_loss": daily[0]}
-
-    def save_index(self, symbol, lots, risk):
-        with self.lock, closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("UPDATE index_config SET lots=?, risk=? WHERE symbol=?", (lots, risk, symbol))
-
-    def save_daily_loss(self, value):
-        with self.lock, closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("UPDATE limits SET daily_loss=? WHERE id=1", (value,))
-
-    def claim_review(self, day, symbol):
-        with self.lock, closing(sqlite3.connect(self.path)) as db, db:
-            cursor = db.execute(
-                "INSERT OR IGNORE INTO ai_reviews VALUES (?, ?, 'PENDING', NULL, NULL, ?)",
-                (day, symbol, "Review in progress or interrupted; no retry today."),
-            )
-            return cursor.rowcount == 1
-
-    def finish_review(self, day, symbol, result):
-        with self.lock, closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("UPDATE ai_reviews SET state=?, action=?, confidence=?, reason=? WHERE day=? AND symbol=?",
-                       (result["state"], result["action"], result["confidence"], result["reason"], day, symbol))
-
-    def reviews(self, day):
-        with self.lock, closing(sqlite3.connect(self.path)) as db:
-            rows = db.execute(
-                "SELECT symbol, state, action, confidence, reason FROM ai_reviews WHERE day=?", (day,),
-            ).fetchall()
-        return {symbol: {"state": state, "action": action, "confidence": confidence, "reason": reason}
-                for symbol, state, action, confidence, reason in rows}
 
     def claim_external(self, name, now, interval):
         with self.lock, closing(sqlite3.connect(self.path)) as db, db:
@@ -160,45 +107,6 @@ class Store:
             rows = db.execute("SELECT name, observed_at, payload FROM last_market_cues").fetchall()
         return {name: (datetime.fromisoformat(observed_at), json.loads(payload))
                 for name, observed_at, payload in rows}
-
-    def load_active_trade(self):
-        with self.lock, closing(sqlite3.connect(self.path)) as db:
-            try:
-                row = db.execute("SELECT payload FROM execution_runtime WHERE id=1").fetchone()
-            except sqlite3.OperationalError:
-                return None
-        if not row or not row[0]:
-            return None
-        active = json.loads(row[0])
-        return active if active and active.get("state") not in ("CLOSED", "UNFILLED") else None
-
-    def save_active_trade(self, trade):
-        with self.lock, closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("UPDATE execution_runtime SET payload=? WHERE id=1",
-                       (json.dumps(trade) if trade else None,))
-
-    def record_execution_intent(self, trade):
-        with self.lock, closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("""INSERT OR IGNORE INTO execution_trades
-                (trade_id, day, payload, net_pnl, closed_at) VALUES (?, ?, ?, NULL, NULL)""",
-                       (trade["id"], trade["day"], json.dumps(trade)))
-
-    def finish_active_trade(self, trade):
-        with self.lock, closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("""UPDATE execution_trades SET payload=?, net_pnl=?, closed_at=?
-                          WHERE trade_id=?""",
-                       (json.dumps(trade), trade.get("net_pnl"), trade.get("closed_at"), trade["id"]))
-
-    def has_entry_today(self, day):
-        with self.lock, closing(sqlite3.connect(self.path)) as db:
-            return db.execute("SELECT 1 FROM execution_trades WHERE day=? LIMIT 1", (day,)).fetchone() is not None
-
-    def today_realized_pnl(self, day):
-        with self.lock, closing(sqlite3.connect(self.path)) as db:
-            rows = db.execute(
-                "SELECT COALESCE(net_pnl, 0) FROM execution_trades WHERE day=?", (day,)).fetchall()
-        return sum(float(row[0]) for row in rows)
-
 
 class Market:
     def __init__(self, clock=None):
@@ -297,47 +205,6 @@ class Market:
                 if not old or stamp >= old["timestamp"]:
                     self.last_quotes[symbol] = {"price": price, "previous_close": previous, "timestamp": stamp}
 
-    def setup_evidence(self, symbol):
-        now = self.clock()
-        if now.weekday() >= 5 or not time(9, 15) <= now.time() < time(15, 30):
-            return None
-        with self.lock:
-            samples = sorted(self.preopen[symbol]) if self.day == now.date() else []
-            prior = self.previous_sessions.get(symbol)
-            quote = self.quotes.get(symbol) if self.day == now.date() else None
-            if (not self.feed_enabled or self.state != "connected"
-                    or not complete_preopen(samples, now) or not prior or not quote):
-                return None
-            prior_date = datetime.fromisoformat(prior["day"]).date()
-            if not now.date() - timedelta(days=5) <= prior_date < now.date():
-                return None
-            age = (now - quote["timestamp"]).total_seconds()
-            previous_close = quote["previous_close"]
-            if (not -3 <= age <= FRESH_SECONDS or previous_close is None
-                    or not math.isfinite(previous_close) or previous_close <= 0):
-                return None
-            first, last = samples[0][1], samples[-1][1]
-            close = prior["close"]
-            direction = "BUY_CE" if last > first and last > close else (
-                "BUY_PE" if last < first and last < close else None)
-            preopen_high = max(price for _, price in samples)
-            preopen_low = min(price for _, price in samples)
-            breakout = (
-                direction == "BUY_CE" and quote["price"] > preopen_high and quote["price"] > previous_close
-            ) or (
-                direction == "BUY_PE" and quote["price"] < preopen_low and quote["price"] < previous_close
-            )
-            if not breakout:
-                return None
-            return {
-                "index": symbol, "setup": "PREOPEN_RANGE_BREAKOUT", "direction": direction,
-                "live_price": quote["price"], "live_timestamp": quote["timestamp"].isoformat(),
-                "live_previous_close": previous_close,
-                "preopen_first": first, "preopen_last": last,
-                "preopen_high": preopen_high, "preopen_low": preopen_low,
-                "sample_count": len(samples), "previous_session": dict(prior),
-            }
-
     def on_ticks(self, ticks):
         now = self.clock()
         with self.lock:
@@ -428,16 +295,6 @@ class Market:
 store = Store(DB_PATH)
 market = Market()
 shutdown = threading.Event()
-execution = None
-
-
-def get_execution():
-    global execution
-    if execution is None:
-        execution = Execution(store, market, ENV_FILE)
-    return execution
-
-
 def load_history(kite, tokens):
     now = market.clock()
     for token, symbol in tokens.items():
@@ -505,38 +362,6 @@ def run_external():
         shutdown.wait(30)
 
 
-def run_reviews():
-    while not shutdown.is_set():
-        now = market.clock()
-        if now.weekday() < 5 and time(9, 15) <= now.time() < time(15, 30):
-            try:
-                config, _ = load_config(ENV_FILE)
-                if config:
-                    for symbol in INDICES:
-                        now = market.clock()
-                        if now.weekday() >= 5 or not time(9, 15) <= now.time() < time(15, 30):
-                            break
-                        evidence = market.setup_evidence(symbol)
-                        if evidence is None:
-                            continue
-                        day = now.date().isoformat()
-                        if not store.claim_review(day, symbol):
-                            continue
-                        now = market.clock()
-                        evidence = market.setup_evidence(symbol) if now.date().isoformat() == day else None
-                        if evidence is None:
-                            store.finish_review(day, symbol, {
-                                "state": "UNAVAILABLE", "action": None, "confidence": None,
-                                "reason": "Breakout or required live market data expired before review.",
-                            })
-                            continue
-                        result = review(config, evidence)
-                        store.finish_review(day, symbol, result)
-            except sqlite3.Error:
-                logger.exception("Haiku review journal unavailable")
-        shutdown.wait(5)
-
-
 def run_feed():
     try:
         from kiteconnect import KiteConnect, KiteTicker
@@ -581,7 +406,6 @@ def run_feed():
             with market.lock:
                 if not market.feed_enabled:
                     market.state, market.error = "off", "Independent Zerodha feed is switched off."
-                    get_execution().set_broker(None)
             shutdown.wait(1)
             continue
         now = market.clock()
@@ -605,7 +429,6 @@ def run_feed():
             try:
                 kite = KiteConnect(api_key=current[0])
                 kite.set_access_token(current[1])
-                get_execution().set_broker(kite)
                 nse_rows = kite.instruments("NSE")
                 rows = nse_rows + kite.instruments("BSE")
                 tokens = market.instruments(rows)
@@ -728,8 +551,6 @@ def run_feed():
                 except Exception:
                     logger.exception("OpeningEdge option subscriptions failed")
                     market.state, market.error = "error", "Option subscription failed; reconnecting feed."
-        if market.feed_enabled and kite and market.state == "connected":
-            get_execution().tick()
         shutdown.wait(5)
     if socket:
         close_socket(socket)
@@ -738,12 +559,9 @@ def run_feed():
 @asynccontextmanager
 async def lifespan(app):
     store.initialize()
-    global execution
-    execution = Execution(store, market, ENV_FILE)
     shutdown.clear()
     worker = threading.Thread(target=run_feed, daemon=True, name="openingedge-feed")
     worker.start()
-    threading.Thread(target=run_reviews, daemon=True, name="openingedge-ai").start()
     threading.Thread(target=run_external, daemon=True, name="openingedge-external").start()
     try:
         yield
@@ -761,14 +579,8 @@ def health():
 
 @app.get("/api/status")
 def status():
-    try:
-        config = store.read()
-        reviews = store.reviews(market.clock().date().isoformat())
-    except sqlite3.Error as exc:
-        logger.exception("OpeningEdge configuration unavailable")
-        raise HTTPException(503, "Configuration store unavailable") from exc
-    ai_config, ai_error = load_config(ENV_FILE)
     market_status = market.status()
+    zerodha_session = all(credentials())
     key, key_error = fred_key(ENV_FILE)
     news_key, news_key_error = marketaux_key(ENV_FILE)
     try:
@@ -822,79 +634,8 @@ def status():
         saved["status"] = "LAST" if 0 <= age <= 7 * 86400 else "STALE"
         saved["detail"] += f" Saved observation time: {observed.isoformat()}; not live."
         market_status["context"][name] = saved
-    controller = get_execution().status()
     return {
-        **market_status, "config": config, "reviews": reviews,
-        "ai_status": "READY" if ai_config else "UNAVAILABLE", "ai_error": ai_error,
-        **controller,
-        "reason": controller["execution_error"] or controller["execution_block_reason"] or (
-            (controller["active"] or {}).get("error")
-        ) or (
-            "OpeningEdge live entries are OFF; owned positions remain protected."
-            if controller["trade_enabled"] else
-            "Live execution is locked by LIVE_TRADE_ENABLED."
-        ),
+        **market_status,
+        "zerodha_session": zerodha_session,
+        "reason": "Global cue display is read-only; no trading or AI execution is active.",
     }
-
-
-class IndexConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    lots: int = Field(ge=1, le=100, strict=True)
-    risk: float = Field(gt=0, le=10000000, allow_inf_nan=False, strict=True)
-
-
-class DailyLimit(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    daily_loss: float = Field(gt=0, le=10000000, allow_inf_nan=False, strict=True)
-
-
-class FeedControl(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    enabled: bool = Field(strict=True)
-
-
-class TradeControl(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    enabled: bool = Field(strict=True)
-    confirmation: str
-
-
-@app.put("/api/feed-control")
-def feed_control(config: FeedControl):
-    market.set_feed_enabled(config.enabled)
-    with market.lock:
-        return {"feed_enabled": market.feed_enabled, "feed_status": market.state}
-
-
-@app.put("/api/trade-control")
-def trade_control(config: TradeControl):
-    expected = ("START OPENINGEDGE LIVE TRADING" if config.enabled
-                else "STOP OPENINGEDGE NEW ENTRIES")
-    if config.confirmation != expected:
-        raise HTTPException(422, "Trade control confirmation does not match the requested state")
-    try:
-        return get_execution().set_automation(config.enabled)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.put("/api/config/{symbol}")
-def save_index(symbol: str, config: IndexConfig):
-    if symbol not in INDICES:
-        raise HTTPException(404, "Unknown index")
-    try:
-        store.save_index(symbol, config.lots, config.risk)
-        return store.read()
-    except sqlite3.Error as exc:
-        logger.exception("Failed to save OpeningEdge index configuration")
-        raise HTTPException(503, "Unable to save configuration") from exc
-
-
-@app.put("/api/daily-limit")
-def save_limit(config: DailyLimit):
-    try:
-        store.save_daily_loss(config.daily_loss)
-        return store.read()
-    except sqlite3.Error as exc:
-        logger.exception("Failed to save OpeningEdge daily limit")
-        raise HTTPException(503, "Unable to save daily limit") from exc

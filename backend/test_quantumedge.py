@@ -473,6 +473,7 @@ class QuantumEdgeControlTests(unittest.TestCase):
         self.live.save = mock.Mock()
 
     def test_index_slots_and_daily_budget_include_open_quantumedge_risk(self):
+        self.live.state["quantumedge"]["daily_loss_limit"] = 1500
         self.live.state["active"] = {
             "id": "QEI1111111111111", "owner": "QUANTUMEDGE", "symbol": "NIFTY", "risk": 500,
         }
@@ -516,7 +517,19 @@ class QuantumEdgeControlTests(unittest.TestCase):
         self.assertFalse(status["indices"]["NIFTY"]["enabled"])
         self.assertEqual(status["indices"]["NIFTY"]["lots"], 2)
         self.assertTrue(status["indices"]["BANKNIFTY"]["enabled"])
-        self.assertEqual(status["indices"]["SENSEX"]["risk_per_lot"], 500)
+        self.assertEqual(status["indices"]["SENSEX"]["risk_per_lot"], 2000)
+
+    def test_limit_controls_persist_selected_risk_and_daily_budget(self):
+        self.live.state["quantumedge"]["daily_loss_limit"] = 1500
+        status = self.live.set_quantumedge_limits("NIFTY", 2750.5, 4200)
+        self.assertEqual(status["indices"]["NIFTY"]["risk_per_lot"], 2750.5)
+        self.assertEqual(status["daily_loss_limit"], 4200)
+        self.assertEqual(self.live.state["quantumedge"]["daily_loss_limit"], 4200)
+        self.assertEqual(self.live.state["quantumedge"]["indices"]["NIFTY"]["risk_per_lot"], 2750.5)
+
+        self.live.state["quantumedge"]["enabled"] = True
+        with self.assertRaisesRegex(Exception, "Turn QuantumEdge OFF"):
+            self.live.set_quantumedge_limits("NIFTY", 3000, 5000)
 
     def test_quantumedge_advisory_keeps_twelve_engine_evidence_shadow_only(self):
         future = mock.Mock(token=7)
@@ -596,14 +609,17 @@ class QuantumEdgeControlTests(unittest.TestCase):
             with self.assertRaisesRegex(Exception, "non-local callback/origin"):
                 self.live.config_guard()
 
-    def test_master_toggle_blocks_unsafe_local_deployment(self):
-        self.live.config_guard = mock.Mock()
+    def test_quantumedge_preflight_cannot_bypass_global_live_environment_flag(self):
+        self.live.settings = mock.Mock(return_value=mock.Mock(
+            aqte_live_enabled=False, force_outbound_ipv4=True,
+            aqte_live_static_ip="159.65.147.167",
+            frontend_url="http://localhost:3000",
+            cors_origins="http://localhost:3000", redirect_url="http://localhost:8000/api/auth/callback",
+            debug=False,
+        ))
         with mock.patch.dict(os.environ, {"LIVE_TRADE_ENABLED": "false"}):
-            with mock.patch("config.get_settings", return_value=mock.Mock(
-                    aqte_live_enabled=False)):
-                with self.assertRaisesRegex(Exception, "LIVE_TRADE_ENABLED=true"):
-                    self.live.set_quantumedge_approval(True)
-        self.assertFalse(self.live.state["quantumedge"]["enabled"])
+            with self.assertRaisesRegex(Exception, "LIVE_TRADE_ENABLED"):
+                self.live.preflight()
 
     def test_square_off_only_accepts_quantumedge_owned_trade(self):
         original_request_exit = self.live.request_exit
@@ -765,6 +781,7 @@ class QuantumEdgeControlTests(unittest.TestCase):
         from services.auth_state_machine import AuthStateManager
 
         live = self.live
+        live.state["quantumedge"]["daily_loss_limit"] = 1500
         live.state["quantumedge"]["enabled"] = True
         live.state["quantumedge"]["indices"]["BANKNIFTY"]["risk_per_lot"] = 3000
         live.state["armed_day"] = "2026-03-10"

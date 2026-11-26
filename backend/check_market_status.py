@@ -4,7 +4,6 @@
 from datetime import datetime
 import pytz
 import requests
-import json
 
 # Check time
 ist = pytz.timezone('Asia/Kolkata')
@@ -23,35 +22,29 @@ else:
 
 print(f'🕐 Expected Market Status: {expected_status}')
 
-# Check API
+# Check market and feed APIs
 try:
-    print('\n📡 Checking Backend API...')
-    r = requests.get('http://localhost:8000/api/market/live', timeout=5)
+    print('\n📡 Checking Market Status...')
+    r = requests.get('http://localhost:8000/api/system/health/market', timeout=5)
     if r.status_code == 200:
         data = r.json()
-        print(f'✅ API Response Status: {data.get("status")}')
-        
-        indices = data.get('data', [])
-        if indices:
-            print(f'\n📊 Market Indices Data:')
-            for idx in indices[:3]:
-                print(f'   {idx["index"]}: ₹{idx["ltp"]:.2f} ({idx["change"]:+.2f}%)')
-        else:
-            print('❌ No market indices data!')
+        print(f'✅ API Response Status: {data.get("phase")}')
+        print(f'   Trading hours: {data.get("is_trading_hours")}')
     else:
         print(f'❌ API Error: {r.status_code}')
 except Exception as e:
     print(f'❌ API Error: {e}')
 
-# Check cache
+# Check feed
 try:
-    print('\n🔍 Checking Cache Data...')
-    r = requests.get('http://localhost:8000/api/diagnostics/cache-status', timeout=5)
+    print('\n🔍 Checking Feed Connection...')
+    r = requests.get('http://localhost:8000/api/system/health/feed', timeout=5)
     if r.status_code == 200:
         data = r.json()
-        print(f'Cache Status: {data.get("status")}')
-        symbols = data.get('cached_symbols', [])
-        if symbols:
-            print(f'Cached Symbols ({len(symbols)}): {", ".join(symbols[:3])}')
+        print(f'Feed State: {data.get("state")}')
+        print(f'Feed Healthy: {data.get("is_healthy")}')
+        print(f'Total Ticks: {data.get("total_ticks", 0)}')
+    else:
+        print(f'Feed check error: HTTP {r.status_code}')
 except Exception as e:
-    print(f'Cache check error: {e}')
+    print(f'Feed check error: {e}')

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import requests
-r = requests.get('http://localhost:8000/api/market/live', timeout=5).json()
-print(f"Status: {r.get('status')}")
-for idx in r.get('data', [])[:3]:
-    print(f"{idx['index']}: ₹{idx['ltp']:.2f} ({idx['change']:+.2f}%)")
+market = requests.get('http://localhost:8000/api/system/health/market', timeout=5)
+feed = requests.get('http://localhost:8000/api/system/health/feed', timeout=5)
+market.raise_for_status()
+feed.raise_for_status()
+print(f"Market: {market.json().get('phase')}")
+print(f"Feed: {feed.json().get('state')}")
+print(f"Healthy: {feed.json().get('is_healthy')}")

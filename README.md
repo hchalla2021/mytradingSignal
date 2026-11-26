@@ -2,31 +2,7 @@
 
 Real-time trading dashboard for NIFTY, BANKNIFTY, and SENSEX with Zerodha Kite API integration.
 
-**AQTE - Adaptive Quantitative Trading Engine** adds compact NIFTY / BANK NIFTY /
-SENSEX section above the charts. Its backend-only, explainable rule baseline uses fresh option
-quotes, conservative limit entries, risk checks and a durable journal. There is no paper or
-simulated trading: every order is a real Zerodha order placed by the Real Trade controller, which
-supports explicitly armed, one-lot broker orders with static-IP preflight, fill reconciliation and
-protective stops; live enablement and validation flags default to false. Its header automation switch defaults
-OFF; ON authorizes automatic qualifying entries after daily arming, without per-order approval.
-OFF blocks new entries while existing broker protection, trailing stops and exits continue.
-The compact Auto Trade pill shows backend-confirmed state; unavailable status never
-masquerades as OFF. Book All / Exit Now confirm and close only the selected AQTE trade,
-separately from the account-wide emergency stop. The one-lot limit remains: percentage
-booking and extra staged targets are explicitly unavailable, not simulated.
-It does not claim validated ML predictions: by default the live quality gate blocks every
-entry, and only the owner opt-in `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` lets fully aligned
-rule setups place real one-lot orders.
-See [AQTE architecture,
-APIs, storage, validation and staged rollout](docs/AQTE.md).
-
-**SMC Apex AI** is an independent dashboard and service with its own market
-feed, candle memory, AI approvals, configurable risk and broker-order journal.
-Other strategy signals are not inputs. Live entry resets OFF on restart;
-OFF retains owned protective exits. Displayed depth is not a true footprint.
-See [SMC Apex architecture and safety limits](docs/SMC_APEX_AI.md).
-
-**QuantumEdge IntraDay** uses completed-candle Python rules and Claude Haiku
+**Liquidity Hunter Pro** uses completed-candle Python rules and Claude Haiku
 before submitting a qualifying order through the shared Zerodha controller.
 The positions and realized P&L in this panel are QuantumEdge-only. A completed
 manual Kite trade does not count toward QuantumEdge limits or block a new

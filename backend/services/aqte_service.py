@@ -565,8 +565,6 @@ class AQTEService:
                 selected = {t: c for t, c in self.engine.contracts.items() if t in pinned}
             from services.aqte_live import get_live_service
             selected.update(get_live_service().pins())
-            from services.autonomiq_pro.orchestrator import get_orchestrator
-            selected.update(get_orchestrator().quote_pins(self.catalog))
             for symbol in SYMBOLS:
                 price = spots.get(symbol) or (prices or {}).get(symbol)
                 if not price:

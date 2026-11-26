@@ -233,8 +233,10 @@ class AQTELiveService:
                       "quantedge": {"enabled": False, "lots": 1},
                       "quantumedge": {
                           "enabled": False,
+                          "daily_loss_limit": 5000,
+                          "limits_defaults_version": 1,
                           "indices": {
-                              symbol: {"enabled": True, "lots": 1, "risk_per_lot": 500}
+                              symbol: {"enabled": True, "lots": 1, "risk_per_lot": 2000}
                               for symbol in SYMBOLS
                           },
                       },
@@ -361,21 +363,38 @@ class AQTELiveService:
         self.state["quantedge"]["enabled"] = False
         quantumedge = self.state.setdefault("quantumedge", {
             "enabled": False,
-            "indices": {symbol: {"enabled": True, "lots": 1, "risk_per_lot": 500}
+            "daily_loss_limit": 5000,
+            "limits_defaults_version": 1,
+            "indices": {symbol: {"enabled": True, "lots": 1, "risk_per_lot": 2000}
                         for symbol in SYMBOLS},
         })
+        quantumedge.setdefault("daily_loss_limit", 5000)
+        if quantumedge.setdefault("limits_defaults_version", 0) < 1:
+            if quantumedge["daily_loss_limit"] == QUANTUMEDGE_DAILY_LOSS_LIMIT:
+                quantumedge["daily_loss_limit"] = 5000
+            for index in quantumedge.get("indices", {}).values():
+                if isinstance(index, dict) and index.get("risk_per_lot") == 500:
+                    index["risk_per_lot"] = 2000
+            quantumedge["limits_defaults_version"] = 1
+        if (isinstance(quantumedge["daily_loss_limit"], bool)
+                or not isinstance(quantumedge["daily_loss_limit"], (int, float))
+                or not math.isfinite(quantumedge["daily_loss_limit"])
+                or not 0 < quantumedge["daily_loss_limit"] <= 10_000_000):
+            raise LiveBlocked("Invalid QuantumEdge IntraDay daily loss limit; journal requires repair")
         quantumedge.setdefault("indices", {})
         for symbol in SYMBOLS:
             quantumedge["indices"].setdefault(
-                symbol, {"enabled": True, "lots": 1, "risk_per_lot": 500})
+                symbol, {"enabled": True, "lots": 1, "risk_per_lot": 2000})
         quantumedge["enabled"] = False
         if any(
             not isinstance(quantumedge["indices"].get(symbol), dict)
             or type(quantumedge["indices"][symbol].get("enabled")) is not bool
             or type(quantumedge["indices"][symbol].get("lots")) is not int
             or not 1 <= quantumedge["indices"][symbol]["lots"] <= 5
-            or type(quantumedge["indices"][symbol].get("risk_per_lot")) is not int
-            or not 100 <= quantumedge["indices"][symbol]["risk_per_lot"] <= 10_000
+            or isinstance(quantumedge["indices"][symbol].get("risk_per_lot"), bool)
+            or not isinstance(quantumedge["indices"][symbol].get("risk_per_lot"), (int, float))
+            or not math.isfinite(quantumedge["indices"][symbol]["risk_per_lot"])
+            or not 0 < quantumedge["indices"][symbol]["risk_per_lot"] <= 10_000_000
             for symbol in SYMBOLS
         ):
             raise LiveBlocked("Invalid QuantumEdge IntraDay index configuration; journal requires repair")
@@ -1558,6 +1577,7 @@ class AQTELiveService:
             logger.exception("QuantEdge Pro entry scan disarmed; AQTE execution remains separate")
 
     def quantumedge_daily_budget(self, now: float) -> float:
+        daily_limit = self.state["quantumedge"]["daily_loss_limit"]
         pnl = sum(trade["net_pnl"] for trade in self.state["trades"]
                   if trade.get("owner") == "QUANTUMEDGE" and day(trade["entry_at"]) == day(now))
         reserved = 0.0
@@ -1571,12 +1591,13 @@ class AQTELiveService:
             quantity = int(trade.get("filled") or trade.get("quantity") or 0)
             if entry > stop > 0 and quantity > 0:
                 reserved += (entry - stop) * quantity + self.costs(entry, quantity) + self.costs(stop, quantity)
-        return max(0, QUANTUMEDGE_DAILY_LOSS_LIMIT + pnl - reserved)
+        return max(0, daily_limit + pnl - reserved)
 
     def quantumedge_loss_budget_reason(self, risk):
         budget = self.quantumedge_daily_budget(time.time())
         if not budget:
-            return f"QuantumEdge IntraDay daily loss limit reached (INR {QUANTUMEDGE_DAILY_LOSS_LIMIT})"
+            return (f"QuantumEdge IntraDay daily loss limit reached "
+                    f"(INR {self.state['quantumedge']['daily_loss_limit']})")
         if risk >= budget:
             return (f"Planned risk ₹{risk:,.2f} would breach the QuantumEdge-only daily loss limit "
                     f"(remaining budget ₹{budget:,.2f})")
@@ -2008,13 +2029,13 @@ class AQTELiveService:
                 "generated_at": now, "ready": self.ready, "enabled": cfg["enabled"],
                 "armed": self.state["armed_day"] == day(now) and not self.state["killed"],
                 "indices": copy.deepcopy(cfg["indices"]),
-                "signals": signals, "ai": self.quantumedge.status(),
+                "signals": signals,                 "ai": {**self.quantumedge.status(), "enabled": cfg["enabled"]},
                 "active": active,
                 "positions": [position for position in positions if int(position.get("filled") or 0)
                               > int(position.get("exited") or 0)],
                 "trades": trades, "daily_trades": len(entries),
                 "daily_pnl": round(sum(trade["net_pnl"] for trade in trades), 2),
-                "daily_loss_limit": QUANTUMEDGE_DAILY_LOSS_LIMIT, "max_trades": 5,
+                "daily_loss_limit": self.state["quantumedge"]["daily_loss_limit"], "max_trades": 5,
                 "zerodha_connected": zerodha_connected,
                 "zerodha_authenticated": auth_connected,
                 "market_feed_connected": market_feed_connected,
@@ -2022,11 +2043,8 @@ class AQTELiveService:
                 "market_phase": market_phase,
                 "market_detail": market_detail,
                 "entry_window": market_phase == "NORMAL",
-                "deployment_mode": "production" if os.getenv("LIVE_TRADE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"} else "local",
-                "local_live_allowed": os.getenv(
-                    "LIVE_TRADE_ENABLED", "false").strip().lower() in {
-                        "1", "true", "yes", "on",
-                    },
+                "deployment_mode": "switch-controlled",
+                "local_live_allowed": True,
                 "error": cfg.get("error"),
             }
 
@@ -2036,8 +2054,9 @@ class AQTELiveService:
                 raise LiveBlocked("Invalid QuantumEdge index control")
             if type(lots) is not int or not 1 <= lots <= 5:
                 raise LiveBlocked("QuantumEdge lots must be 1 through 5")
-            if type(risk_per_lot) is not int or not 100 <= risk_per_lot <= 10_000:
-                raise LiveBlocked("QuantumEdge risk per lot must be INR 100 through 10000")
+            if (isinstance(risk_per_lot, bool) or not isinstance(risk_per_lot, (int, float))
+                    or not math.isfinite(risk_per_lot) or not 0 < risk_per_lot <= 10_000_000):
+                raise LiveBlocked("QuantumEdge risk per trade must be a positive amount up to INR 10000000")
             if self.state["quantumedge"]["enabled"] or self.state.get("active"):
                 raise LiveBlocked("Turn QuantumEdge OFF and wait for any active trade before changing risk")
             self.state["quantumedge"]["indices"][symbol] = {
@@ -2047,6 +2066,25 @@ class AQTELiveService:
                       risk_per_lot=risk_per_lot)
             return self.quantumedge_status()
 
+    def set_quantumedge_limits(self, symbol, risk_per_lot, daily_loss_limit):
+        with self.lock:
+            if symbol not in SYMBOLS:
+                raise LiveBlocked("Invalid QuantumEdge index")
+            if (isinstance(risk_per_lot, bool) or not isinstance(risk_per_lot, (int, float))
+                    or not math.isfinite(risk_per_lot)
+                    or isinstance(daily_loss_limit, bool) or not isinstance(daily_loss_limit, (int, float))
+                    or not math.isfinite(daily_loss_limit)
+                    or not 0 < risk_per_lot <= 10_000_000
+                    or not 0 < daily_loss_limit <= 10_000_000):
+                raise LiveBlocked("QuantumEdge limits must be positive amounts up to INR 10000000")
+            if self.state["quantumedge"]["enabled"] or self.quantumedge_positions():
+                raise LiveBlocked("Turn QuantumEdge OFF and close owned positions before changing limits")
+            self.state["quantumedge"]["indices"][symbol]["risk_per_lot"] = risk_per_lot
+            self.state["quantumedge"]["daily_loss_limit"] = daily_loss_limit
+            self.save("QUANTUMEDGE_LIMITS_CONFIG", symbol=symbol, risk_per_lot=risk_per_lot,
+                      daily_loss_limit=daily_loss_limit)
+            return self.quantumedge_status()
+
     def set_quantumedge_approval(self, enabled):
         with self.lock:
             if type(enabled) is not bool:
@@ -2054,9 +2092,6 @@ class AQTELiveService:
             if not self.ready:
                 raise LiveBlocked("QuantumEdge live journal unavailable")
             if enabled:
-                from config import get_settings
-                if not get_settings().aqte_live_enabled:
-                    raise LiveBlocked("Set LIVE_TRADE_ENABLED=true in the global backend environment")
                 if self.state["killed"] or self.state.get("flatten_pending"):
                     raise LiveBlocked("Resolve emergency stop before enabling QuantumEdge")
             self.state["quantumedge"]["enabled"] = enabled
@@ -3066,7 +3101,7 @@ class AQTELiveService:
             if reason:
                 raise EntrySkipped(reason)
             control = ({"trail_start_r": 1.0, "daily_loss": 1500} if owner == "QUANTEDGE"
-                       else {"trail_start_r": 1.0, "daily_loss": QUANTUMEDGE_DAILY_LOSS_LIMIT} if owner == "QUANTUMEDGE"
+                       else {"trail_start_r": 1.0, "daily_loss": self.state["quantumedge"]["daily_loss_limit"]} if owner == "QUANTUMEDGE"
                        else {"trail_start_r": EXPIRYEDGE_TRAIL_START_R, "daily_loss": self.settings().aqte_live_daily_loss}
                        if owner == "EXPIRYEDGE"                        else {
                            "trail_start_r": 1.0, "trail_gap_r": EXPIRYEDGE_AI_TRAIL_GAP_R,
@@ -3425,7 +3460,89 @@ class AQTELiveService:
             active["protection_confirmed"] = bool(
                 protection and protection["status"] == "TRIGGER PENDING" and protection["order_type"] == "SL")
             exited = int(protection["filled_quantity"]) if protection else 0
-            # Owner trades in the same contract may add quantity; less than AQTE's remainder means its lots were sold.
+            # A zero Kite position is authoritative proof that the owner closed the position.
+            # Cancel only our owned protective order, then remove the stale active journal.
+            if quantity == 0 and filled > exited:
+                if (protection is not None and protection["status"] not in TERMINAL
+                        and not active.get("manual_close_cancel_requested")):
+                    active["manual_close_cancel_requested"] = True
+                    self.mutation("MANUAL_CLOSE_STOP_CANCEL", broker, active, "cancel_order",
+                                  variety="regular", order_id=active["protect_id"])
+                    self.save("MANUAL_CLOSE_RECONCILING", trade_id=active["id"])
+                    return
+                if active.get("manual_close_cancel_requested") and protection is not None \
+                        and protection["status"] not in TERMINAL:
+                    active["state"] = "MANUAL_CLOSE_PENDING"
+                    self.save("MANUAL_CLOSE_PENDING", trade_id=active["id"])
+                    return
+                manual_fills = []
+                for order in orders:
+                    if not (
+                        order.get("exchange") == active["contract"]["exchange"]
+                        and order.get("tradingsymbol") == active["contract"]["trading_symbol"]
+                        and order.get("product") == "MIS"
+                        and order.get("transaction_type") == "SELL"
+                        and order.get("tag") != active["id"] + "S"
+                        and order.get("status") in TERMINAL
+                        and int(order.get("filled_quantity") or 0) > 0
+                    ):
+                        continue
+                    stamp = order.get("order_timestamp")
+                    if isinstance(stamp, str):
+                        try:
+                            stamp = datetime.fromisoformat(stamp)
+                            stamp = stamp.replace(tzinfo=IST).timestamp() if stamp.tzinfo is None else stamp.timestamp()
+                        except ValueError:
+                            stamp = None
+                    elif isinstance(stamp, datetime):
+                        stamp = (stamp.replace(tzinfo=IST) if stamp.tzinfo is None else stamp).timestamp()
+                    else:
+                        stamp = None
+                    if stamp is not None and stamp >= active["entry_at"]:
+                        manual_fills.append(order)
+                manual_quantity = 0
+                manual_value = 0.0
+                for order in manual_fills:
+                    qty = int(order.get("filled_quantity") or 0)
+                    price = float(order.get("average_price") or 0)
+                    if price > 0 and math.isfinite(price):
+                        manual_quantity += qty
+                        manual_value += qty * price
+                required = max(0, filled - exited)
+                manual_exit_price = manual_value / manual_quantity if manual_quantity >= required > 0 else None
+                protected_price = float(protection.get("average_price") or 0) if protection else 0
+                protected_value = exited * protected_price if exited and protected_price > 0 and math.isfinite(protected_price) else 0
+                exit_proceeds = protected_value
+                exit_quantity = exited
+                if manual_exit_price is not None:
+                    exit_proceeds += required * manual_exit_price
+                    exit_quantity += required
+                exit_price = exit_proceeds / exit_quantity if exit_quantity == filled > 0 else None
+                if exit_price is None:
+                    broker_row = next((row for row in matches
+                                       if int(row.get("quantity") or 0) == 0), None)
+                    if broker_row:
+                        sold = int(broker_row.get("sell_quantity") or 0)
+                        price = float(broker_row.get("sell_price") or 0)
+                        if sold >= required > 0 and price > 0 and math.isfinite(price):
+                            exit_price = price
+                trade_id = active["id"]
+                if exit_price is not None:
+                    trade = {**active, "exit_at": time.time(), "exit_price": exit_price,
+                             "exit_reason": "MANUAL_KITE_EXIT",
+                             "exit_quantity": filled,
+                             "net_pnl": round((exit_price - active["entry_price"]) * filled
+                                              - self.costs(active["entry_price"], filled)
+                                              - self.costs(exit_price, filled), 2)}
+                    self.state["trades"].append(trade)
+                    self.state["active"] = None
+                    self.save("LIVE_CLOSED", trade=trade)
+                else:
+                    self.state["active"] = None
+                    self.save("MANUAL_EXIT_RECONCILED_UNVERIFIED", trade_id=trade_id,
+                              reason="Kite net position is zero; exit price unavailable")
+                return
+            # A reduced but non-zero position is ambiguous and fails closed.
             if quantity < filled - exited:
                 raise LiveBlocked("Live quantity differs from AQTE fills; possible manual intervention. Manage in Kite.")
             active["exited"] = exited
@@ -4037,12 +4154,7 @@ class AQTELiveService:
                         await asyncio.to_thread(self.measured, "execution.reconcile", self.reconcile)
                         next_reconcile = time.monotonic() + 2
                     await asyncio.to_thread(self.prepare_session)
-                    await asyncio.to_thread(self.auto_activate)
-                    await asyncio.to_thread(self.measured, "quantedge.scan", self.scan_quantedge)
                     await asyncio.to_thread(self.measured, "quantumedge.scan", self.scan_quantumedge)
-                    await asyncio.to_thread(self.measured, "expiryedge.scan", self.scan_expiryedge)
-                    await asyncio.to_thread(self.measured, "expiryedge_ai.scan", self.scan_expiryedge_ai)
-                    await asyncio.to_thread(self.measured, "execution.scan", self.scan_entries)
             except Exception as exc:
                 logger.exception("AQTE live reconciliation requires attention; inspect broker terminal")
                 await asyncio.to_thread(self.fault_stop, f"{type(exc).__name__}: {exc}")

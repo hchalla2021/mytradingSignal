@@ -165,9 +165,7 @@ class QuantumEdgeIntradayService:
 
     @staticmethod
     def enabled() -> bool:
-        return (os.getenv("AI_ENABLED") or "true").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
+        return True
 
     @staticmethod
     def model() -> str:

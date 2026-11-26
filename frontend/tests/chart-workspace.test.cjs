@@ -70,6 +70,13 @@ test('chart does not mistake a cached closed-session snapshot for the current ma
   assert.ok(!component.includes("!sessionOpen || source === 'MARKET_CLOSED'"));
 });
 
+test('advanced chart workspace is collapsed by default with an accessible toggle', () => {
+  const component = readFileSync(path.join(__dirname, '..', 'components', 'ChartWorkspace.tsx'), 'utf8');
+  assert.match(component, /const \[workspaceOpen, setWorkspaceOpen\] = useState\(false\)/);
+  assert.match(component, /aria-expanded=\{workspaceOpen\}/);
+  assert.match(component, /hidden=\{!workspaceOpen\}/);
+});
+
 test('higher-timeframe controls have explicit labels and never masquerade as intraday bars', () => {
   assert.equal(timeframeLabel('D'), '1D');
   assert.equal(timeframeLabel('W'), '1W');

@@ -18,6 +18,16 @@
 }
 .chartViewActions { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; color: var(--muted); }
 .chartViewActions .button { min-height: 44px; }
+.workspaceToggle {
+  display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 52px; flex: 1;
+  padding: 7px 10px; text-align: left; color: #dce6f0; background: transparent; border: 0;
+}
+.workspaceToggle > svg { flex: 0 0 auto; transition: transform .2s; }
+.workspaceToggle > svg[data-open="true"] { transform: rotate(180deg); }
+.workspaceToggle span { min-width: 0; }
+.workspaceToggle strong, .workspaceToggle small { display: block; }
+.workspaceToggle strong { font-size: 15px; }
+.workspaceToggle small { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .compactDetails { min-width: 0; border-bottom: 1px solid var(--border); }
 .compactDetails > summary { padding: 10px; min-height: 44px; cursor: pointer; color: #a6c7d7; overflow-wrap: anywhere; }
 .compactDetails > p { padding: 8px 10px; line-height: 1.6; }

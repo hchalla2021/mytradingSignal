@@ -2,7 +2,6 @@
 """Final comprehensive system check"""
 
 import requests
-import json
 from datetime import datetime
 import pytz
 
@@ -28,41 +27,35 @@ try:
 except Exception as e:
     print(f"   ❌ Backend: {e}")
 
-# 2. Check market data API
-print("\n2️⃣ MARKET DATA API (/api/market/live)")
+# 2. Check feed connection
+print("\n2️⃣ MARKET FEED CONNECTION")
 print("-" * 80)
 try:
-    r = requests.get('http://localhost:8000/api/market/live', timeout=5)
+    r = requests.get('http://localhost:8000/api/system/health/feed', timeout=5)
     if r.status_code == 200:
         data = r.json()
-        print(f"   ✅ API: RESPONDING")
-        print(f"   Status: {data.get('status')}")
-        
-        indices = data.get('data', [])
-        print(f"\n   📊 Indices Data:")
-        for idx in indices[:3]:
-            print(f"      • {idx['index']}: ₹{idx['ltp']:.2f} ({idx['change']:+.2f}%)")
-        
-        if len(indices) == 0:
-            print(f"      ❌ NO DATA!")
+        print(f"   ✅ Feed endpoint: RESPONDING")
+        print(f"   State: {data.get('state')}")
+        print(f"   Healthy: {data.get('is_healthy')}")
+        print(f"   Reconnect required: {data.get('requires_reconnect')}")
+        print(f"   Total ticks: {data.get('total_ticks', 0)}")
     else:
-        print(f"   ❌ API Error: {r.status_code}")
+        print(f"   ❌ Feed Error: {r.status_code}")
 except Exception as e:
-    print(f"   ❌ API Error: {e}")
+    print(f"   ❌ Feed Error: {e}")
 
 # 3. Check market status
 print("\n3️⃣ MARKET STATUS ENDPOINT")
 print("-" * 80)
 try:
-    r = requests.get('http://localhost:8000/api/diagnostics/market-status', timeout=5)
+    r = requests.get('http://localhost:8000/api/system/health/market', timeout=5)
     if r.status_code == 200:
         data = r.json()
-        status = data.get('market_status')
+        status = data.get('phase')
         print(f"   ✅ Status: {status}")
         
         if status == 'CLOSED':
-            print(f"   ⚠️  MARKET IS SHOWING AS CLOSED!")
-            print(f"   This is the problem - frontend will show 'MARKET CLOSED'")
+            print(f"   ℹ️  Market is currently closed; no live ticks are expected")
         elif status == 'LIVE':
             print(f"   ✅ Market is LIVE - Should show prices in UI")
     else:
@@ -70,18 +63,17 @@ try:
 except Exception as e:
     print(f"   ❌ Error: {e}")
 
-# 4. Check cache status
-print("\n4️⃣ CACHE STATUS")
+# 4. Check aggregate health
+print("\n4️⃣ SYSTEM HEALTH SUMMARY")
 print("-" * 80)
 try:
-    r = requests.get('http://localhost:8000/api/diagnostics/cache-status', timeout=5)
+    r = requests.get('http://localhost:8000/api/system/health/summary', timeout=5)
     if r.status_code == 200:
         data = r.json()
-        print(f"   ✅ Cache: {data.get('status')}")
-        symbols = data.get('cached_symbols', [])
-        print(f"   Symbols cached: {len(symbols)}")
-        if symbols:
-            print(f"   Sample: {', '.join(symbols[:3])}")
+        print(f"   ✅ Overall healthy: {data.get('healthy')}")
+        print(f"   Auth valid: {data.get('auth_valid')}")
+        print(f"   Feed healthy: {data.get('feed_healthy')}")
+        print(f"   Action required: {data.get('requires_action')}")
     else:
         print(f"   ❌ Error: {r.status_code}")
 except Exception as e:
@@ -106,7 +98,7 @@ print("="*80)
 print("""
 If you see this:
 ✅ ALL GREEN - Hard refresh browser (Ctrl+Shift+R) and wait 10 seconds
-❌ Market showing CLOSED - There's an issue with market status calculation
+ℹ️ Market CLOSED - No live ticks are expected outside trading hours
 ❌ Backend OFFLINE - Check terminal running backend server
 ❌ Frontend NOT FOUND - Check terminal running 'npm run dev'
 """)

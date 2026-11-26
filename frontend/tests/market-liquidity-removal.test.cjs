@@ -14,13 +14,10 @@ test('dashboard no longer mounts or loads the standalone Market Liquidity sectio
   assert.equal(existsSync(path.join(frontend, 'hooks', 'useLiquiditySocket.ts')), false);
 });
 
-test('independent liquidity views and the Observatory backend dependency remain intact', () => {
+test('independent liquidity view remains intact without the removed Observatory backend', () => {
   assert.match(read('lib', 'trade-status', 'plugins.tsx'), /components\/MarketLiquidityIntelligence/);
   assert.ok(existsSync(path.join(frontend, 'components', 'MarketLiquidityIntelligence.tsx')));
-  assert.match(
-    read('..', 'backend', 'services', 'observatory_service.py'),
-    /from services\.liquidity_service import get_liquidity_service/,
-  );
+  assert.equal(existsSync(path.join(frontend, '..', 'backend', 'services', 'observatory_service.py')), false);
   assert.ok(existsSync(path.join(frontend, '..', 'backend', 'services', 'liquidity_service.py')));
 });
 
