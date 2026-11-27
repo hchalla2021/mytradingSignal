@@ -1036,6 +1036,26 @@ class ReplayTests(unittest.TestCase):
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_worker_publishes_only_accepted_option_ticks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = AQTEService(Path(directory) / "aqte.sqlite3")
+            received = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            listener = service.subscribe_option_quotes(
+                {30}, lambda item: loop.call_soon_threadsafe(received.put_nowait, item))
+            await service.start()
+            try:
+                now = time.time()
+                service.queue.put(tick("option", at=now, price=102))
+                service.queue.put(tick("option", at=now, price=102))
+                result = await asyncio.wait_for(received.get(), 2)
+                self.assertEqual(result.price, 102)
+                await asyncio.sleep(0.1)
+                self.assertTrue(received.empty())
+            finally:
+                service.unsubscribe_option_quotes(listener)
+                await service.stop()
+
     async def test_old_queued_quotes_are_recorded_but_not_executed(self):
         with tempfile.TemporaryDirectory() as directory:
             service = AQTEService(Path(directory) / "aqte.sqlite3")

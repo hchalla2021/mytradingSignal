@@ -8,6 +8,11 @@ The positions and realized P&L in this panel are QuantumEdge-only. A completed
 manual Kite trade does not count toward QuantumEdge limits or block a new
 signal. Open manual exposure or working orders exclude only that contract
 from selection; broker cash and margin checks still apply.
+Liquidity Hunter Pro streams fresh option quotes for its owned open positions
+over an authenticated connection; its index cards use the market WebSocket.
+Status and trading controls still refresh separately. If the quote stream
+disconnects, the panel reports the error, retries, and uses status quotes;
+quote updates depend on the Zerodha feed and are not guaranteed tick-for-tick.
 QuantumEdge IntraDay can hold one position per index, up to three total;
 other automated strategy lanes remain mutually exclusive with QuantumEdge.
 Open QuantumEdge risk is reserved against its existing daily loss budget.
@@ -50,7 +55,11 @@ reports it while the broker stop remains active. A stop cannot guarantee that
 it will not be hit or that a trade will be profitable.
 The separate smart trailing mode is opt-in with
 `QUANTUMEDGE_SMART_TRAILING_STOP=true` and applies only to new QuantumEdge
-positions opened while enabled. It keeps the initial broker stop, moves to
+positions opened while enabled. To also activate it on existing QuantumEdge
+positions at backend startup, explicitly set
+`QUANTUMEDGE_SMART_TRAILING_EXISTING=true` alongside it. Existing stops, peak
+prices and the 1R activation threshold are retained; broker reconciliation
+still verifies the protective order before any modification. It keeps the initial broker stop, moves to
 estimated fee-adjusted breakeven after +1R, then allows a further half-R
 breakeven phase before using nine contiguous, fresh one-minute option candles
 to calculate ATR and a confirmed three-candle premium swing low. It combines
@@ -61,6 +70,10 @@ stale or discontinuous, the existing R-multiple trailing logic remains the
 fallback. The controller still modifies the same protective sell order and
 respects Kite's order modification limit. This mode does not guarantee a fill
 at the stop price or profit; gaps, slippage and reversals can still cause losses.
+Liquidity Hunter shows the initial stop separately from the latest broker-confirmed
+stop, and identifies whether smart or R-multiple trailing applies. Trailing
+starts based on the option bid, not the displayed last traded price; a pending
+stop modification is not shown as confirmed.
 Python computes the estimated INR loss at the stop and net profit at the
 target for the full quantity. Claude receives the gross amounts and
 estimated costs for each leg, rather than recalculating risk from the

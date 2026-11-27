@@ -1,3 +1,4 @@
+import asyncio
 import json
 import hashlib
 import os
@@ -14,7 +15,8 @@ import pytz
 import httpx
 
 from services.aqte_live import AQTELiveService, QUANTUMEDGE_TAG
-from services.aqte_engine import AQTEEngine, Candle, Contract
+from services.aqte_engine import AQTEEngine, Candle, Contract, Tick
+from services.aqte_service import AQTEService
 from services.quantumedge_intraday import (
     QuantumEdgeIntradayService,
     _institutional_setup,
@@ -23,6 +25,61 @@ from services.quantumedge_intraday import (
 from services.quantumedge_strategies import previous_spot_levels, select_setup
 from services.aqte_ml import TARGET
 from services.quantumedge_ml import FEATURE_NAMES, SCHEMA, THRESHOLD, QuantumEdgeML
+
+
+class QuantumEdgeQuoteStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_requires_the_existing_owner_controls(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.quantumedge import router
+
+        app = FastAPI()
+        app.include_router(router)
+        with TestClient(app) as client:
+            response = client.get("/api/quantumedge/quotes?token=7")
+        self.assertEqual(response.status_code, 403)
+
+    async def test_stream_only_sends_subscribed_fresh_quotes_and_unsubscribes(self):
+        from routers.quantumedge import quantumedge_quotes
+
+        market = AQTEService(path="unused-test.sqlite3")
+        live = mock.Mock(lock=mock.MagicMock())
+        live.quantumedge_positions.return_value = [{
+            "contract": {"token": 7}, "filled": 65, "exited": 0,
+        }]
+        live.service.return_value = market
+        with mock.patch("routers.quantumedge.get_live_service", return_value=live):
+            response = await quantumedge_quotes(token=[7])
+        stream = response.body_iterator
+        pending = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0)
+        now = time.time()
+        market.publish_option_quote(Tick("NIFTY", "option", 8, 999, now, now))
+        market.publish_option_quote(Tick("NIFTY", "option", 7, 101, now - 10, now - 10))
+        market.publish_option_quote(Tick("NIFTY", "option", 7, 102, now, now))
+        event = await asyncio.wait_for(pending, 1)
+        payload = json.loads(event.removeprefix("data: ").strip())
+        self.assertEqual((payload["token"], payload["price"]), (7, 102))
+        self.assertGreater(payload["valid_for_ms"], 0)
+        next_time = time.time()
+        market.publish_option_quote(Tick("NIFTY", "option", 7, 103, next_time, next_time))
+        next_event = await asyncio.wait_for(anext(stream), 1)
+        self.assertEqual(json.loads(next_event.removeprefix("data: ").strip())["price"], 103)
+        await stream.aclose()
+        self.assertFalse(market.quote_listeners)
+
+    async def test_stream_rejects_non_owned_or_closed_position(self):
+        from fastapi import HTTPException
+        from routers.quantumedge import quantumedge_quotes
+
+        live = mock.Mock(lock=mock.MagicMock())
+        live.quantumedge_positions.return_value = [
+            {"contract": {"token": 7}, "filled": 65, "exited": 65},
+        ]
+        with mock.patch("routers.quantumedge.get_live_service", return_value=live):
+            with self.assertRaises(HTTPException) as error:
+                await quantumedge_quotes(token=[7])
+        self.assertEqual(error.exception.status_code, 403)
 
 
 class QuantumEdgeAIReviewTests(unittest.TestCase):
@@ -815,7 +872,7 @@ class QuantumEdgeControlTests(unittest.TestCase):
             "contract": {"token": 7, "lot_size": 65, "trading_symbol": "NIFTYTESTCE"},
             "entry_price": 100, "filled": 65, "exited": 0, "entry_at": 123,
         }
-        tick = mock.Mock(price=102)
+        tick = mock.Mock(price=102, received=456)
         self.live.market.lock = mock.MagicMock()
         self.live.market.engine.options = {7: tick}
         self.live.market.engine.fresh.return_value = True
@@ -824,6 +881,7 @@ class QuantumEdgeControlTests(unittest.TestCase):
 
         self.assertEqual(active["ltp"], 102)
         self.assertEqual(active["unrealized"], 130)
+        self.assertEqual(active["ltp_received_at"], 456)
         self.assertEqual(active["entry_at"], 123)
 
     def test_ai_approval_is_rejected_if_live_candidate_changes(self):

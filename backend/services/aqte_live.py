@@ -446,8 +446,18 @@ class AQTELiveService:
             # Removing an entry gate must not activate a previously saved ON request.
             self.state["automation_wanted"] = False
             logger.warning("AQTE paper-approval gate removed; Auto Trade is OFF pending fresh approval")
+        activated = []
+        if (self.quantumedge.smart_trailing_stop_enabled() and
+                os.getenv("QUANTUMEDGE_SMART_TRAILING_EXISTING", "false").strip().lower() in
+                {"1", "true", "yes", "on"}):
+            for position in quantumedge_positions:
+                if not position.get("trailing_mode"):
+                    position["trailing_mode"] = "SMART_ATR_STRUCTURE"
+                    position["trailing_status"] = "ACTIVATION_PENDING"
+                    activated.append(position["id"])
         self.save("RESTART_DISARMED", automation_wanted=self.state["automation_wanted"],
-                  daily_controls_migrated=migrated, automation_approval_migrated=approval_migrated)
+                  daily_controls_migrated=migrated, automation_approval_migrated=approval_migrated,
+                  smart_trailing_activated=activated)
         self.ready = True
 
     def _publish_live_event(self, kind, payload, execution):
@@ -1889,6 +1899,7 @@ class AQTELiveService:
         open_quantity = max(0, int(active.get("filled", 0)) - int(active.get("exited", 0)))
         entry_price = float(active.get("entry_price") or 0)
         result["ltp"] = ltp
+        result["ltp_received_at"] = tick.received if ltp is not None else None
         result["unrealized"] = (
             round((ltp - entry_price) * open_quantity, 2)
             if ltp is not None and open_quantity > 0 and entry_price > 0 else None

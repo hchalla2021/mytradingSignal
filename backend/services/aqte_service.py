@@ -11,6 +11,7 @@ import sqlite3
 import threading
 import time
 from collections import deque
+from collections.abc import Callable, Iterable
 from dataclasses import asdict
 from contextlib import contextmanager, suppress
 from datetime import datetime
@@ -114,6 +115,8 @@ class AQTEService:
         self.vix_day = None
         self.backfill_after = 0.0
         self.lock = threading.RLock()
+        self.quote_listeners_lock = threading.Lock()
+        self.quote_listeners: set[tuple[frozenset[int], Callable[[Tick], None]]] = set()
         self.queue = queue.Queue(maxsize=20_000)
         self.stop_event = threading.Event()
         self.worker = None
@@ -272,6 +275,8 @@ class AQTEService:
                                     with self.metrics.measure("tick.processing"):
                                         accepted = self.engine.ingest(tick)
                                     if accepted:
+                                        if tick.kind == "option":
+                                            self.publish_option_quote(tick)
                                         with self.health_lock:
                                             gap = self.gaps.get(tick.token)
                                             if gap and tick.kind == "future" and gap.get("resume_after") is not None and (
@@ -496,6 +501,28 @@ class AQTEService:
             if type(token) is int and token > 0:
                 self.mark_gap(symbol, kind, token, time.time(), "Malformed market packet", received=time.time())
             self.metrics.increment("malformed_ticks")
+
+    def subscribe_option_quotes(
+        self, tokens: Iterable[int], callback: Callable[[Tick], None]
+    ) -> tuple[frozenset[int], Callable[[Tick], None]]:
+        listener = (frozenset(tokens), callback)
+        with self.quote_listeners_lock:
+            self.quote_listeners.add(listener)
+        return listener
+
+    def unsubscribe_option_quotes(self, listener: tuple[frozenset[int], Callable[[Tick], None]]) -> None:
+        with self.quote_listeners_lock:
+            self.quote_listeners.discard(listener)
+
+    def publish_option_quote(self, tick: Tick) -> None:
+        with self.quote_listeners_lock:
+            listeners = tuple(self.quote_listeners)
+        for tokens, callback in listeners:
+            if tick.token in tokens:
+                try:
+                    callback(tick)
+                except Exception:
+                    logger.exception("Option quote listener failed")
 
     def option_tick(self, raw):
         # Contract maps are replaced atomically, never mutated by the worker.

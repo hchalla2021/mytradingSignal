@@ -1500,6 +1500,50 @@ class LiveTests(unittest.TestCase):
         self.assertTrue(self.live.state["active"]["trailing_active"])
         self.assertEqual(self.broker.modify_order.call_count, 1, "A breakeven trail must not cause a premature exit")
 
+    def test_smart_trailing_existing_trade_requires_both_flags_and_preserves_protection(self):
+        self.protect()
+        active = self.live.state["active"]
+        active.update(owner="QUANTUMEDGE", peak=100, trail_start_r=1.0)
+        original_stop, original_protect = active["stop"], active["protect_id"]
+        self.live.save("TEST_SNAPSHOT")
+        self.live.release_owner()
+        with patch.dict(os.environ, {"QUANTUMEDGE_SMART_TRAILING_STOP": "true"}):
+            restored = self.new_service()
+            restored.initialize()
+            self.assertNotIn("trailing_mode", restored.state["active"])
+            restored.release_owner()
+        with patch.dict(os.environ, {
+            "QUANTUMEDGE_SMART_TRAILING_STOP": "true",
+            "QUANTUMEDGE_SMART_TRAILING_EXISTING": "true",
+        }):
+            restored = self.new_service()
+            restored.initialize()
+            active = restored.state["active"]
+            self.assertEqual(active["trailing_mode"], "SMART_ATR_STRUCTURE")
+            self.assertEqual(active["trailing_status"], "ACTIVATION_PENDING")
+            self.assertEqual((active["stop"], active["protect_id"]), (original_stop, original_protect))
+            self.assertEqual((active["peak"], active["trail_start_r"]), (100, 1.0))
+            self.assertFalse(restored.state["quantumedge"]["enabled"])
+            self.broker.modify_order.assert_not_called()
+            restored.reconcile()
+            self.assertEqual(active["trailing_status"], "WAITING_FOR_1R")
+            self.broker.modify_order.assert_not_called()
+            restored.release_owner()
+
+    def test_smart_trailing_existing_flag_does_not_change_other_owners(self):
+        self.protect()
+        self.live.save("TEST_SNAPSHOT")
+        self.live.release_owner()
+        with patch.dict(os.environ, {
+            "QUANTUMEDGE_SMART_TRAILING_STOP": "true",
+            "QUANTUMEDGE_SMART_TRAILING_EXISTING": "true",
+        }):
+            restored = self.new_service()
+            restored.initialize()
+            self.assertNotIn("trailing_mode", restored.state["active"])
+            self.broker.modify_order.assert_not_called()
+            restored.release_owner()
+
     def test_quantumedge_smart_trailing_uses_breakeven_then_fresh_atr_and_structure(self):
         active = {
             "entry_price": 100, "initial_stop": 80, "entry_at": NOW - 600,

@@ -14,8 +14,11 @@ const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 type SymbolName = typeof SYMBOLS[number];
 type Trade = {
   id: string; symbol: SymbolName; state: string; entry_price: number; quantity: number;
-  filled: number; stop: number; initial_stop?: number; target: number; ltp?: number | null;
-  unrealized?: number | null; net_pnl?: number; contract: { trading_symbol: string; lot_size?: number };
+  filled: number; exited?: number; stop: number; initial_stop?: number; target: number; ltp?: number | null;
+  ltp_received_at?: number | null; unrealized?: number | null; net_pnl?: number;
+  protection_confirmed?: boolean; trailing_active?: boolean; trailing_mode?: string;
+  trailing_status?: string; trail_start_r?: number; modify?: object | null; error?: string | null;
+  contract: { token: number; trading_symbol: string; lot_size?: number };
   execution_context?: { confidence?: number | null };
 };
 type Signal = {
@@ -51,6 +54,105 @@ const signedMoney = (value: number | null | undefined) =>
   value == null || !Number.isFinite(value) ? '--' : `${value >= 0 ? '+' : ''}₹${money(value)}`;
 const points = (value: number | null | undefined) =>
   value != null && Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${money(value)}` : '--';
+const performanceClass = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) || value === 0
+    ? styles.neutral : value > 0 ? styles.positive : styles.negative;
+
+function trailingMessage(trade: Trade | null): string {
+  if (!trade) return 'No position to protect';
+  if (!trade.protection_confirmed || trade.state !== 'PROTECTED') return 'Protection unconfirmed - check Kite';
+  if (trade.error) return `Trailing paused: ${trade.error}`;
+  if (trade.modify) return 'Stop update pending Kite confirmation';
+
+  const smart = trade.trailing_mode === 'SMART_ATR_STRUCTURE';
+  const mode = smart && trade.trailing_status === 'R_MULTIPLE_FALLBACK'
+    ? 'Smart trail: R-multiple fallback' : smart ? 'Smart trail' : 'R-multiple trail (smart off)';
+  if (trade.trailing_status === 'SMART_TRAIL_CROSSED') return 'Smart trail crossed - check Kite';
+  if (trade.trailing_active) return `${mode}: stop trailed`;
+  if (smart && trade.trailing_status === 'BREAKEVEN') return 'Smart trail: breakeven candidate not yet confirmed';
+  if (smart && trade.trailing_status === 'SMART_ATR_STRUCTURE') return 'Smart trail: ATR candidate not yet confirmed';
+  const initialStop = trade.initial_stop;
+  const start = trade.trail_start_r ?? 1;
+  if (initialStop != null && Number.isFinite(initialStop) && Number.isFinite(trade.entry_price) &&
+      trade.entry_price > initialStop && Number.isFinite(start) && start > 0) {
+    const threshold = trade.entry_price + (trade.entry_price - initialStop) * start;
+    return `${mode}: starts at bid ₹${money(threshold)}`;
+  }
+  return `${mode}: awaiting trigger`;
+}
+
+type LiveQuote = { token: number; price: number; received_at: number; validUntil: number };
+
+function usePositionQuotes(tokens: string) {
+  const [quotes, setQuotes] = useState<Record<number, LiveQuote>>({});
+  const [streamError, setStreamError] = useState('');
+
+  useEffect(() => {
+    setQuotes({});
+    setStreamError('');
+    if (!tokens) return;
+    const controller = new AbortController();
+    let retry: ReturnType<typeof setTimeout> | undefined;
+
+    const connect = async () => {
+      try {
+        const params = new URLSearchParams();
+        tokens.split(',').forEach(token => params.append('token', token));
+        const response = await fetch(API_CONFIG.endpoint(`/api/quantumedge/quotes?${params}`), {
+          credentials: 'include',
+          cache: 'no-store',
+          headers: { 'X-Device-Id': getOrCreateVisitorId(), 'X-AQTE-Intent': 'manual-live-control' },
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) throw new Error(`Quote stream unavailable (${response.status}).`);
+        setStreamError('');
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!controller.signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done) throw new Error('Quote stream disconnected.');
+          buffer += decoder.decode(value, { stream: true });
+          let boundary: number;
+          while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+            const event = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            if (!event.startsWith('data: ')) continue;
+            const quote = JSON.parse(event.slice(6)) as {
+              token: number; price: number; received_at: number; valid_for_ms: number;
+            };
+            if (!Number.isFinite(quote.token) || !Number.isFinite(quote.price) || quote.price <= 0 ||
+                !Number.isFinite(quote.received_at) || !Number.isFinite(quote.valid_for_ms)) {
+              throw new Error('Invalid live quote received.');
+            }
+            const next = { ...quote, validUntil: Date.now() + Math.max(0, quote.valid_for_ms) };
+            setQuotes(previous => previous[quote.token]?.received_at > quote.received_at
+              ? previous : { ...previous, [quote.token]: next });
+          }
+        }
+      } catch (reason) {
+        if (controller.signal.aborted) return;
+        setQuotes({});
+        setStreamError(reason instanceof Error ? reason.message : 'Quote stream unavailable.');
+        retry = setTimeout(() => void connect(), 1000);
+      }
+    };
+    void connect();
+    return () => { controller.abort(); if (retry) clearTimeout(retry); };
+  }, [tokens]);
+  return { quotes, streamError };
+}
+
+function withLiveQuote(trade: Trade, quote: LiveQuote | undefined, now: number): Trade {
+  if (!quote || quote.received_at < (trade.ltp_received_at ?? 0)) return trade;
+  if (quote.validUntil <= now) return { ...trade, ltp: null, unrealized: null };
+  const openQuantity = Math.max(0, trade.filled - (trade.exited ?? 0));
+  return {
+    ...trade, ltp: quote.price,
+    unrealized: openQuantity > 0 && trade.entry_price > 0
+      ? Math.round((quote.price - trade.entry_price) * openQuantity * 100) / 100 : null,
+  };
+}
 
 async function request<T>(path: 'status' | 'approval' | 'limits', body?: object): Promise<T> {
   const response = await fetch(API_CONFIG.endpoint(`/api/quantumedge/${path}`), {
@@ -190,7 +292,13 @@ export default function LiquidityHunterProSection({ marketData, isConnected }: {
     ai: snapshot?.ai.last_result[selectedSymbol],
   }), [selectedSymbol, snapshot]);
 
-  const active = snapshot?.active ?? null;
+  const quoteTokens = (snapshot?.positions ?? []).map(position => position.contract.token)
+    .filter(Number.isFinite).sort((a, b) => a - b).join(',');
+  const { quotes, streamError } = usePositionQuotes(quoteTokens);
+  const quoteNow = Math.max(clock, Date.now());
+  const active = snapshot?.active ? withLiveQuote(snapshot.active, quotes[snapshot.active.contract.token], quoteNow) : null;
+  const positions = (snapshot?.positions ?? []).map(position =>
+    withLiveQuote(position, quotes[position.contract.token], quoteNow));
   const trade = active?.symbol === selected.symbol ? active : null;
   const signal = selected.signal;
   const selectedTick = marketData?.[selected.symbol];
@@ -238,6 +346,7 @@ export default function LiquidityHunterProSection({ marketData, isConnected }: {
     </header>
 
     {error && <div role="alert" className={styles.error}>{error}</div>}
+    {streamError && <div role="alert" className={styles.error}>Live position quotes: {streamError} Retrying; showing status quotes.</div>}
 
     <div className={styles.summaryGrid}>
       <section className={styles.engineCard}>
@@ -248,9 +357,9 @@ export default function LiquidityHunterProSection({ marketData, isConnected }: {
             <li key={label}><CheckCircle2 />{label}</li>)}
         </ul>
       </section>
-      <Metric icon={<TrendingUp />} label="Today's P&L" value={signedMoney(snapshot?.daily_pnl)} note="Realized today" />
-      <Metric icon={<CircleDollarSign />} label="Realized P&L" value={signedMoney(snapshot?.daily_pnl)} note={`${snapshot?.daily_trades ?? 0} trades`} />
-      <Metric icon={<Activity />} label="Unrealized P&L" value={signedMoney(active?.unrealized)} note={active ? `${active.symbol} live` : 'No open position'} />
+      <Metric icon={<TrendingUp />} label="Today's P&L" value={signedMoney(snapshot?.daily_pnl)} note="Realized today" valueClassName={performanceClass(snapshot?.daily_pnl)} />
+      <Metric icon={<CircleDollarSign />} label="Realized P&L" value={signedMoney(snapshot?.daily_pnl)} note={`${snapshot?.daily_trades ?? 0} trades`} valueClassName={performanceClass(snapshot?.daily_pnl)} />
+      <Metric icon={<Activity />} label="Unrealized P&L" value={signedMoney(active?.unrealized)} note={active ? `${active.symbol} live` : 'No open position'} valueClassName={performanceClass(active?.unrealized)} />
       <Metric icon={<Target />} label="Win Rate" value={snapshot?.trades.length ? `${Math.round(snapshot.trades.filter(item => Number(item.net_pnl ?? 0) > 0).length / snapshot.trades.length * 100)}%` : '--'}
         note={snapshot?.trades.length ? `${snapshot.trades.length} session trades` : 'Awaiting completed trades'} />
     </div>
@@ -270,9 +379,10 @@ export default function LiquidityHunterProSection({ marketData, isConnected }: {
 
           <div className={styles.executionGrid}>
             <Value label="Entry price" value={entry == null ? '--' : `₹${money(entry)}`} />
-            <Value label="Live LTP" value={ltp == null ? '--' : `₹${money(ltp)}`} />
-            <Value label="Smart stop loss" value={trade ? `₹${money(trade.stop)}` : '--'} tone="danger" />
-            <Value label="Trailing stop" value={trade ? `₹${money(trade.initial_stop ?? trade.stop)}` : '--'} tone="amber" />
+            <Value label="Live LTP" value={ltp == null ? '--' : `₹${money(ltp)}`} valueClassName={performanceClass(profitPoints)} />
+            <Value label="Initial stop loss" value={trade?.initial_stop == null ? '--' : `₹${money(trade.initial_stop)}`} tone="danger" />
+            <Value label="Trailing stop" value={trade?.protection_confirmed && trade.state === 'PROTECTED'
+              ? `₹${money(trade.stop)}` : '--'} tone="amber" />
             <Value label="Target" value={trade ? `₹${money(trade.target)}` : signal?.entry?.target ? `₹${money(signal.entry.target)}` : '--'} />
           </div>
 
@@ -289,10 +399,10 @@ export default function LiquidityHunterProSection({ marketData, isConnected }: {
               ? String(Math.round(trade.quantity / trade.contract.lot_size))
               : String(snapshot?.indices[selected.symbol]?.lots ?? '--')} />
             <Mini label="Risk / Trade" value={risk == null ? '--' : `₹${money(risk)}`} />
-            <Mini label="Current P&L" value={signedMoney(profit)} positive />
-            <Mini label="Profit (Points)" value={points(profitPoints)} positive />
-            <Mini label="Profit (%)" value={profitPercent == null ? '--' : `${profitPercent >= 0 ? '+' : ''}${money(profitPercent)}%`} positive />
-            <div className={styles.trailingState}><ShieldCheck /><span>{trade ? 'Trailing protection active' : 'No position to protect'}</span></div>
+            <Mini label="Current P&L" value={signedMoney(profit)} valueClassName={performanceClass(profit)} />
+            <Mini label="Profit (Points)" value={points(profitPoints)} valueClassName={performanceClass(profitPoints)} />
+            <Mini label="Profit (%)" value={profitPercent == null ? '--' : `${profitPercent >= 0 ? '+' : ''}${money(profitPercent)}%`} valueClassName={performanceClass(profitPercent)} />
+            <div className={styles.trailingState}><ShieldCheck /><span>{trailingMessage(trade)}</span></div>
           </div>
         </article>
 
@@ -319,11 +429,16 @@ export default function LiquidityHunterProSection({ marketData, isConnected }: {
             <span className={styles.realData}>REAL JOURNAL DATA</span></div>
           <div className={styles.tableWrap}>
             <table><thead><tr><th>Instrument</th><th>Side</th><th>Qty</th><th>Entry</th><th>LTP</th><th>SL</th><th>P&amp;L</th><th>Status</th></tr></thead>
-              <tbody>{snapshot?.positions.length ? snapshot.positions.map(position =>
+              <tbody>{positions.length ? positions.map(position =>
                 <tr key={position.id}><td>{position.contract.trading_symbol}</td><td>BUY</td><td>{position.quantity}</td>
-                  <td>{money(position.entry_price)}</td><td>{money(position.ltp)}</td><td>{money(position.stop)}</td>
-                  <td className={(position.unrealized ?? 0) >= 0 ? styles.positive : styles.negative}>{signedMoney(position.unrealized)}</td>
-                  <td><span className={styles.livePosition}>LIVE · PROTECTED</span></td></tr>)
+                  <td>{money(position.entry_price)}</td><td className={performanceClass(
+                    position.ltp == null ? null : position.ltp - position.entry_price
+                  )}>{money(position.ltp)}</td><td>{position.protection_confirmed && position.state === 'PROTECTED'
+                    ? money(position.stop) : '--'}</td>
+                  <td className={performanceClass(position.unrealized)}>{signedMoney(position.unrealized)}</td>
+                  <td><span className={position.protection_confirmed && position.state === 'PROTECTED'
+                    ? styles.livePosition : styles.negative}>{position.state === 'PROTECTED' && !position.protection_confirmed
+                      ? 'PROTECTION UNCONFIRMED' : position.state.replaceAll('_', ' ')}</span></td></tr>)
                 : <tr><td colSpan={8} className={styles.emptyRow}>No owned open positions. Rules and AI data remain visible.</td></tr>}
               </tbody>
             </table>
@@ -392,14 +507,14 @@ export default function LiquidityHunterProSection({ marketData, isConnected }: {
   </section>;
 }
 
-function Metric({ icon, label, value, note }: { icon: React.ReactNode; label: string; value: string; note: string }) {
-  return <article className={styles.metric}><span>{icon}</span><div><small>{label}</small><b>{value}</b><em>{note}</em></div></article>;
+function Metric({ icon, label, value, note, valueClassName }: { icon: React.ReactNode; label: string; value: string; note: string; valueClassName?: string }) {
+  return <article className={styles.metric}><span>{icon}</span><div><small>{label}</small><b className={valueClassName}>{value}</b><em>{note}</em></div></article>;
 }
 
-function Value({ label, value, tone }: { label: string; value: string; tone?: 'danger' | 'amber' }) {
-  return <div className={`${styles.value} ${tone ? styles[tone] : ''}`}><small>{label}</small><b>{value}</b></div>;
+function Value({ label, value, tone, valueClassName }: { label: string; value: string; tone?: 'danger' | 'amber'; valueClassName?: string }) {
+  return <div className={`${styles.value} ${tone ? styles[tone] : ''}`}><small>{label}</small><b className={valueClassName}>{value}</b></div>;
 }
 
-function Mini({ label, value, positive }: { label: string; value: string; positive?: boolean }) {
-  return <div className={styles.mini}><small>{label}</small><b className={positive ? styles.positive : ''}>{value}</b></div>;
+function Mini({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
+  return <div className={styles.mini}><small>{label}</small><b className={valueClassName}>{value}</b></div>;
 }

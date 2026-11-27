@@ -124,6 +124,7 @@
 .indexCard em { color: #9ca3af; }
 .positive { color: #4ade80 !important; }
 .negative { color: #fb7185 !important; }
+.neutral { color: #f8fafc !important; }
 
 .bookCard, .sideCard { border: 1px solid #26344b; border-radius: 11px; background: #0a1220; }
 .bookCard { overflow: hidden; }
